@@ -1,0 +1,16 @@
+{
+    "$schema": "https://gofastmcp.com/public/schemas/fastmcp.json/v1.json",
+    "name": "mcp-kubecost",
+    "source": {
+        "path": "./src/mcp_kubecost/server.py"
+    },
+    "environment": {
+        "dependencies": []
+    },
+    "deployment": {
+        "transport": "http",
+        "host": "0.0.0.0",
+        "port": 3030,
+        "env": {}
+    }
+}

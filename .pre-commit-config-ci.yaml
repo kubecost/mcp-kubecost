@@ -1,0 +1,46 @@
+# this is the job run by the auto-fix ci workflow
+# you can run it locally with:
+# pre-commit run --config .pre-commit-config-ci.yaml --all-files
+# note that all scripts are local, avoiding 3rd party vulnerabilities
+repos:
+- repo: local
+  hooks:
+  - id: check-secrets
+    name: check for committed secrets
+    entry: python3 scripts/pre_commit_hooks/check_secrets.py
+    language: system
+    stages:
+    - pre-commit
+    - pre-push
+    types:
+    - text
+    args:
+    - "--ignore-yaml-keys=authSecret"
+    - "--exclude-files=uv.lock"
+  - id: trailing-whitespace
+    name: check trailing whitespace
+    entry: python3 scripts/pre_commit_hooks/check_trailing_whitespace.py
+    language: system
+    types:
+    - text
+  - id: end-of-file-fixer
+    name: check end of file
+    entry: python3 scripts/pre_commit_hooks/end_of_file_fixer.py
+    language: system
+  - id: check-yaml
+    name: check yaml
+    entry: python3 scripts/pre_commit_hooks/check_yaml.py
+    language: system
+    args:
+    - --allow-multiple-documents
+    exclude: ^(argocd/secrets-chart|.*/templates/.*)
+
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.15.12
+  hooks:
+    - id: ruff-check
+      args:
+      - --fix
+      exclude: ^deploy/collector/helm/
+    - id: ruff-format
+      exclude: ^deploy/collector/helm/

@@ -1,0 +1,51 @@
+[project]
+name = "mcp-kubecost"
+version = "0.1.0"
+description = "FinOps-first MCP server for Kubecost analytics."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "fastmcp>=3.4.0,<4",
+  "httpx>=0.28.1",
+  "python-dotenv>=1.2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+  "isort",
+  "pytest",
+  "pytest-asyncio",
+  "ruff",
+]
+
+[build-system]
+requires = ["hatchling>=1.24.0"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+mcp-kubecost = "mcp_kubecost.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_kubecost"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.isort]
+line_length = 120
+src_paths = ["src", "tests"]

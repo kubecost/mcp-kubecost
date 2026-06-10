@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-kubecost
+  labels:
+    app: mcp-kubecost
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: mcp-kubecost
+  template:
+    metadata:
+      labels:
+        app: mcp-kubecost
+    spec:
+      securityContext:
+        runAsUser: 1001
+        runAsGroup: 1001
+        runAsNonRoot: true
+      containers:
+        - name: mcp-kubecost
+          image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:0.1.6
+          imagePullPolicy: IfNotPresent
+          env:
+          - name: MCP_KUBECOST_BASE_URL
+            value: "https://mcp.demo.kubecost.cloud"
+          ports:
+            - containerPort: 3030
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "1Gi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL

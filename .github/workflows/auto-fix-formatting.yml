@@ -1,0 +1,98 @@
+name: auto-fix formatting
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  auto-fix:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}        # checks out the PR branch, not the merge commit
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      # - name: Install dependencies
+      #   run: uv sync --dev
+
+      - name: Run pre-commit fixers
+        id: precommit
+        run: uvx pre-commit run --config .pre-commit-config-ci.yaml --all-files || true   # don't fail if fixes were made
+
+      - name: Commit fixes if any
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --quiet && echo "No changes" && exit 0
+          # Exclude .github/workflows to avoid needing workflows permission
+          git add -A -- ':!.github/workflows'
+          git diff --cached --quiet && echo "No changes to commit (workflow files excluded)" && exit 0
+          git commit -m "ci: auto-fix formatting"
+          git push
+
+        continue-on-error: true
+
+      - name: Parse and annotate failures
+        if: steps.precommit.outcome == 'failure'
+        run: |
+          echo "## 🚨 Secret Scanner Findings" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Parse the output for secret findings
+          if grep -q "⚠️  Potential secrets found" precommit-output.log; then
+            echo "### Files with potential secrets:" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Extract findings and create annotations
+            current_file=""
+            while IFS= read -r line; do
+              # Match file headers: "⚠️  Potential secrets found in <file>:"
+              if [[ "$line" =~ ⚠️[[:space:]]+Potential[[:space:]]secrets[[:space:]]found[[:space:]]in[[:space:]](.+): ]]; then
+                current_file="${BASH_REMATCH[1]}"
+                echo "#### \`$current_file\`" >> $GITHUB_STEP_SUMMARY
+                echo "" >> $GITHUB_STEP_SUMMARY
+              # Match finding lines: "  Line <num> (<type>): <content>"
+              elif [[ "$line" =~ [[:space:]]+Line[[:space:]]([0-9]+)[[:space:]]\(([^)]+)\):[[:space:]](.+) ]]; then
+                line_num="${BASH_REMATCH[1]}"
+                secret_type="${BASH_REMATCH[2]}"
+                content="${BASH_REMATCH[3]}"
+
+                # Create GitHub annotation
+                echo "::error file=${current_file},line=${line_num},title=Potential ${secret_type}::${content}"
+
+                # Add to summary
+                echo "- **Line ${line_num}** (${secret_type}): \`${content:0:80}\`" >> $GITHUB_STEP_SUMMARY
+              fi
+            done < precommit-output.log
+
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "---" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### 📝 How to fix:" >> $GITHUB_STEP_SUMMARY
+            echo "1. Review each finding in the **Files Changed** tab (annotations appear inline)" >> $GITHUB_STEP_SUMMARY
+            echo "2. Remove actual secrets and use environment variables or secret management" >> $GITHUB_STEP_SUMMARY
+            echo "3. For false positives, update \`.pre-commit-config.yaml\` with \`--ignore-yaml-keys\`" >> $GITHUB_STEP_SUMMARY
+            echo "4. Re-run checks locally: \`uvx pre-commit run check-secrets --all-files\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Pre-commit checks failed. See logs above for details." >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [View full workflow run](https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail workflow if secrets found
+        if: steps.precommit.outcome == 'failure'
+        run: |
+          echo "::error::Pre-commit checks failed. Review the annotations and workflow summary for details."
+          exit 1

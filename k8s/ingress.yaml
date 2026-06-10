@@ -1,0 +1,30 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-http
+  name: kubecost-mcp-server
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: mcp.demo.kubecost.cloud
+    http:
+      paths:
+      - backend:
+          service:
+            name: mcp-kubecost
+            port:
+              number: 3030
+        path: /
+        pathType: Prefix
+      - backend:
+          service:
+            name: bob-pod
+            port:
+              number: 8888
+        path: /bob-prompt
+        pathType: Prefix
+  tls:
+  - hosts:
+    - mcp.demo.kubecost.cloud
+    secretName: kubecost-mcp-server-tls
