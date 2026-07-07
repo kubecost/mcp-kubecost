@@ -18,7 +18,7 @@ from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from mcp_kubecost.config.settings import get_settings
 from mcp_kubecost.skills import register_all_skills
-from mcp_kubecost.tools.kubecost_tools import register_kubecost_csv_tools
+from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
 from mcp_kubecost.utils import OUTPUT_DIR
 
 
@@ -39,7 +39,7 @@ def create_server(server_name) -> FastMCP:
     )
 
     # Register all toolsets
-    register_kubecost_csv_tools(mcp)
+    register_kubecost_tools(mcp)
 
     # Register skills (MCP prompts — IDE-agnostic workflow guidance)
     register_all_skills(mcp)
@@ -54,6 +54,8 @@ def _build_headers(api_token: str | None) -> dict[str, str]:
 
 # When using the fastmcp cli, all project wide initialization must be outside the main() function.
 load_dotenv(".env")  # reads variables from a .env file and sets them in os.environ
+logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+logging.getLogger("mcp_kubecost").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 settings = get_settings()

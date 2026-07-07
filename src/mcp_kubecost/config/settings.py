@@ -23,6 +23,7 @@ class Settings:
     http_host: str
     http_port: int
     show_banner: bool
+    log_level: str
 
 
 def _get_required_env(name: str) -> str:
@@ -52,7 +53,7 @@ def _get_float_env(name: str, default: float) -> float:
 def get_settings() -> Settings:
     """Load and cache settings from environment."""
     # Default to Kubecost Kubecost API if not specified
-    kubecost_base_url = os.getenv("KUBECOST_BASE_URL", "https://actions.demo.kubecost.cloud").strip().rstrip("/")
+    kubecost_base_url = os.getenv("KUBECOST_BASE_URL", "https://demo.kubecost.xyz").strip().rstrip("/")
 
     return Settings(
         kubecost_base_url=kubecost_base_url,
@@ -67,4 +68,5 @@ def get_settings() -> Settings:
         http_host=os.getenv("MCP_HTTP_HOST", "127.0.0.1").strip(),
         http_port=_get_int_env("MCP_HTTP_PORT", 8000),
         show_banner=False,
+        log_level=(os.getenv("FASTMCP_LOG_LEVEL") or os.getenv("FASTMCP_LOG_LEVEL", "INFO")).upper(),
     )
