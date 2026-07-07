@@ -177,7 +177,7 @@ def _handle_call_failure(exc: Exception, path: str) -> NoReturn:
             ErrorCode.CONFIGURATION_ERROR,
             str(exc),
             retryable=False,
-            suggested_action=("Set CLOUDABILITY_API_KEY or CLOUDABILITY_OPEN_TOKEN in the environment."),
+            suggested_action=("Set KUBECOST_API_KEY or KUBECOST_OPEN_TOKEN in the environment."),
         )
     logger.exception("Unexpected error calling Kubecost API path %s", path)
     raise_tool_error(
