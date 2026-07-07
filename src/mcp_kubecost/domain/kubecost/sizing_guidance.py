@@ -4,13 +4,26 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+
+def _float_field(row: dict, key: str) -> float:
+    """Safely coerce a row field to float, returning 0.0 on any failure.
+
+    Duplicated from kubecost_tools._float_field intentionally — the domain
+    layer must not import from the tools layer.
+    """
+    try:
+        return float(row.get(key, 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 PresetName = Literal["conservative", "balanced", "aggressive"]
 
 # Display and analysis thresholds
 CPU_SPIKE_THRESHOLD = 3.0  # Max/Avg ratio indicating significant CPU burst behavior
 HEAVILY_OVERPROVISIONED_CPU_THRESHOLD = 0.2  # 20% efficiency
 HEAVILY_OVERPROVISIONED_RAM_THRESHOLD = 0.3  # 30% efficiency
-MIN_AVG_CPU_FOR_SPIKE_DETECTION = 0.01  # Ignore containers with negligible CPU
+MIN_AVG_CPU_FOR_SPIKE_DETECTION = 0.01  # Ignore containers with negligible CPU; must be > 0 — used as a division guard
 MAX_UNDERSIZED_DISPLAY = 5
 MAX_SPIKEY_CONTAINERS_CHECK = 10
 MAX_SPIKEY_CONTAINERS_DISPLAY = 3
@@ -149,17 +162,13 @@ CONTAINER_SIZING_REFERENCE = """\
 """
 
 FIELD_DESCRIPTIONS = {
-    "window": (
-        "Observation window for usage metrics. 14 to 30 days captures weekly cycles; "
-        "15d minimum for meaningful quantile calculations."
-    ),
+    "window": ("Observation window for usage metrics. 15d minimum for meaningful quantile calculations."),
     "algorithm_cpu": (
         "CPU sizing algorithm. 'quantileOfAverages' (default) smooths daily noise — "
         "best for CPU requests (P90 to P95 target). 'max' almost never appropriate for requests."
     ),
     "algorithm_ram": (
-        "RAM sizing algorithm. 'quantileOfMaxes' (default) captures peak memory — "
-        "safer against OOM kills. Memory failure mode is not tolerable."
+        "RAM sizing algorithm. 'quantileOfMaxes' (default) captures peak memory — safer against OOM kills."
     ),
     "q_cpu": (
         "CPU quantile (0 to 1). P90=0.90, P95=0.95. Target P90 to P95 for requests; "
@@ -213,6 +222,7 @@ def resolve_sizing_params(
         "min_monthly_savings": min_monthly_savings,
     }
     for key, value in overrides.items():
+        # Use `is not None` — False and 0.0 are valid overrides and must not be skipped
         if value is not None:
             params[key] = value
     if preset:
@@ -248,8 +258,6 @@ def build_result_interpretation(
     filtered_rows: list[dict] | None = None,
 ) -> str:
     """Build dynamic result interpretation block for savings tool output."""
-    from mcp_kubecost.domain.kubecost.kubecost_csv import _float_field
-
     display_rows = filtered_rows if filtered_rows is not None else all_rows
     lines: list[str] = [
         "---",
@@ -291,7 +299,10 @@ def build_result_interpretation(
     for row in display_rows[:MAX_SPIKEY_CONTAINERS_CHECK]:
         avg_cpu = _float_field(row, "AvgUsage_cpu")
         max_cpu = _float_field(row, "MaxUsage_cpu")
-        if avg_cpu > MIN_AVG_CPU_FOR_SPIKE_DETECTION and max_cpu / avg_cpu >= CPU_SPIKE_THRESHOLD:
+        if (
+            avg_cpu > MIN_AVG_CPU_FOR_SPIKE_DETECTION  # guards the division below; constant must stay > 0
+            and max_cpu / avg_cpu >= CPU_SPIKE_THRESHOLD
+        ):
             name = row.get("containerName", "unknown")
             spikey.append(name)
     if spikey:

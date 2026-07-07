@@ -1,30 +1,23 @@
-"""Kubecost allocation tools — thin pass-through over the Kubecost client (Pattern A)."""
+"""Kubecost allocation & savings tools.
+
+Returns fully-typed Pydantic structured output — no CSV files, no in-memory
+resource store.  Rows are returned directly in the response payload; large
+result sets are paged via the ``next_cursor`` / ``cursor`` pattern.
+
+Contract version: 3.0
+"""
 
 from __future__ import annotations
 
-import csv
-import io
 import logging
+from collections import defaultdict
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
-from fastmcp.tools.tool import ToolResult
-from mcp.types import EmbeddedResource, TextContent
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from mcp_kubecost import utils
-from mcp_kubecost.client import KubecostClientError, get
 from mcp_kubecost.config.settings import get_settings
-from mcp_kubecost.domain.kubecost import kubecost_csv
-from mcp_kubecost.domain.kubecost.kubecost_csv import (
-    COST_FIELDS,
-    SAVINGS_AGGREGATE_OPTIONS,
-    SAVINGS_FIELDS,
-    SUMMARY_COST_FIELDS,
-    aggregate_savings_by,
-    parse_request_sizing_response,
-)
 from mcp_kubecost.domain.kubecost.sizing_guidance import (
     CONTAINER_SIZING_GUIDE,
     CONTAINER_SIZING_REFERENCE,
@@ -34,25 +27,22 @@ from mcp_kubecost.domain.kubecost.sizing_guidance import (
     format_presets_resource,
     resolve_sizing_params,
 )
+from mcp_kubecost.tools._common import BaseToolResponse, McpToolError, QueryStatus, call_get_api
 
 logger = logging.getLogger(__name__)
 
+_VERSION = "3.0"
 
-def _csv_to_structured_data(csv_str: str) -> dict[str, Any]:
-    """Convert CSV string to structured dict with headers and rows for structured_content."""
-    reader = csv.DictReader(io.StringIO(csv_str))
-    rows = list(reader)
-    if not rows:
-        return {"headers": [], "rows": []}
+_READ_ANNOTATIONS = {
+    "readOnlyHint": True,
+    "destructiveHint": False,
+    "idempotentHint": True,
+    "openWorldHint": True,
+}
 
-    headers = list(rows[0].keys())
-    return {
-        "headers": headers,
-        "rows": rows,
-        "row_count": len(rows),
-        "column_count": len(headers),
-    }
-
+# ---------------------------------------------------------------------------
+# UI constants
+# ---------------------------------------------------------------------------
 
 _AGGREGATE_CHOICES = {
     "cluster": "Total spend per cluster",
@@ -75,22 +65,7 @@ _WINDOW_CHOICES = {
     "lastmonth": "Last calendar month",
 }
 
-# ── Window clarification helpers ───────────────────────────────────────────────
-
-_WINDOW_MENU = "\n".join(f"  • **{k}** — {v}" for k, v in _WINDOW_CHOICES.items())
-_WINDOW_MENU += "\n  • **RFC3339 range** — e.g. `2026-05-01T00:00:00Z,2026-06-01T00:00:00Z`"
-
-_WINDOW_CLARIFICATION = f"""\
-⚠️ TIME WINDOW REQUIRED — do not call get_kubecost_workload_costs yet.
-
-Present the following options to the user and wait for their reply:
-
----
-**Which time window would you like for this cost report?**
-
-{_WINDOW_MENU}
----
-"""
+_WINDOW_RFC3339_NOTE = "Also accepts an RFC3339 range, e.g. '2026-05-01T00:00:00Z,2026-06-01T00:00:00Z'."
 
 _SAVINGS_FILTER_CLARIFICATION = """\
 FILTER PREFERENCES
@@ -116,226 +91,766 @@ _CONTAINER_SAVINGS_WINDOW_CLARIFICATION = f"""\
 When using quantiles, a minimum number of data points (15 days) is needed for meaningful calculations.
 
 When using Max, the only requirement is a window of 1 day or more.
-Present the following options to the user and wait for their reply:
-
----
-**Which time window would you like for this container savings report?**
-
-{_WINDOW_MENU}
-1d, 3d, 7d, 15d, 30d Or enter a custom RFC3339 range.
----
+1d, 3d, 7d, 15d, 30d or an RFC3339 range. {_WINDOW_RFC3339_NOTE}
 """
 
-_PRESENTATION_RULES = """\
-[PRESENTATION RULES — follow silently, do not echo back]
-- Always lead with Executive Summary: summary_csv fields → render as a chart (bar for comparisons, line for time-series)
-- Always precede charts with a 3 bullet insight summary
-- CSV data is provided inline in structured_content for programmatic access
-- Always present the "download_url" as a clickable link labeled 'Download CSV' for file access
-- Do not open the csv: only provide the user with a clickable link with text "Download CSV"
-"""
+# ---------------------------------------------------------------------------
+# Allocation parsing
+# ---------------------------------------------------------------------------
+
+# Cost fields extracted from each allocation entry (in display order).
+COST_FIELDS: list[str] = [
+    "cpuCost",
+    "cpuCostIdle",
+    "ramCost",
+    "ramCostIdle",
+    "networkCost",
+    "pvCost",
+    "gpuCost",
+    "gpuCostIdle",
+    "loadBalancerCost",
+    "sharedCost",
+    "totalCost",
+    "totalEfficiency",
+]
+
+# Known Kubecost property keys that represent aggregation dimensions.
+_KNOWN_DIMENSIONS: list[str] = [
+    "cluster",
+    "node",
+    "namespace",
+    "pod",
+    "container",
+    "controller",
+    "controllerKind",
+    "providerID",
+    "services",
+    "department",
+    "environment",
+    "owner",
+    "product",
+    "team",
+    "label",
+    "annotation",
+]
 
 
-def register_kubecost_csv_tools(mcp: FastMCP) -> None:
-    """Register kubecost cluster tool entry points."""
+def _format_number(value: float) -> int | float:
+    """Return an int if the value is whole, otherwise round to 2 decimal places."""
+    if value == int(value):
+        return int(value)
+    return round(value, 2)
 
-    # ── Gate tool: must be called before the main tool when no window is known ──
 
-    @mcp.tool(
+def _format_date(iso_string: str) -> str:
+    """Convert an ISO datetime string to YYYY-MM-DD; return the original on failure."""
+    if not iso_string:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso_string.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d")
+    except (ValueError, AttributeError):
+        return iso_string
+
+
+def _parse_allocation_response(
+    response: dict[str, Any],
+) -> tuple[list[str], list[dict]]:
+    """Parse a Kubecost allocation API response into (dimension_columns, rows).
+
+    Inspects ``properties`` of the first entry to discover dimensions; falls back
+    to splitting ``name`` by ``/`` when no known property keys are present.
+    """
+    data_list: list[dict] = response.get("data", [])
+    if not data_list:
+        return [], []
+
+    all_entries: list[dict] = []
+    for bucket in data_list:
+        all_entries.extend(bucket.values())
+
+    if not all_entries:
+        return [], []
+
+    first_props: dict = all_entries[0].get("properties", {})
+    dimension_cols = [k for k in _KNOWN_DIMENSIONS if k in first_props]
+
+    if not dimension_cols:
+        parts = all_entries[0].get("name", "").split("/")
+        dimension_cols = [f"dim_{i}" for i in range(len(parts))]
+
+    rows: list[dict] = []
+    for entry in all_entries:
+        row: dict = {}
+        props = entry.get("properties", {})
+
+        if dimension_cols and not dimension_cols[0].startswith("dim_"):
+            for col in dimension_cols:
+                val = props.get(col, "")
+                if isinstance(val, list):
+                    val = "|".join(val)
+                row[col] = val
+        else:
+            parts = entry.get("name", "").split("/")
+            for i, col in enumerate(dimension_cols):
+                row[col] = parts[i] if i < len(parts) else ""
+
+        window_dict = entry.get("window", {})
+        row["window_start"] = _format_date(window_dict.get("start", ""))
+
+        for field in COST_FIELDS:
+            value = entry.get(field, 0.0)
+            row[field] = _format_number(float(value))
+
+        rows.append(row)
+
+    return dimension_cols, rows
+
+
+def _aggregate_by_dimensions(rows: list[dict], dimension_cols: list[str]) -> list[dict]:
+    """Sum cost fields across rows sharing the same dimension values.
+
+    Returns rows sorted by ``totalCost`` descending with idle-% columns derived
+    from summed idle vs total figures.
+    """
+    groups: dict[tuple, dict[str, Any]] = defaultdict(lambda: defaultdict(float))
+
+    for row in rows:
+        key = tuple(row.get(dim, "") for dim in dimension_cols)
+        for field in COST_FIELDS:
+            if field != "totalEfficiency":
+                value = row.get(field, 0)
+                if isinstance(value, (int, float)):
+                    groups[key][field] += float(value)
+        for dim in dimension_cols:
+            groups[key][dim] = row.get(dim, "")
+
+    aggregated: list[dict] = []
+    for _key, values in groups.items():
+        row = dict(values)
+
+        cpu_total = row.get("cpuCost", 0)
+        ram_total = row.get("ramCost", 0)
+        gpu_total = row.get("gpuCost", 0)
+
+        row["cpuIdlePct"] = f"{(row.get('cpuCostIdle', 0) / cpu_total * 100):.1f}%" if cpu_total > 0 else "0%"
+        row["ramIdlePct"] = f"{(row.get('ramCostIdle', 0) / ram_total * 100):.1f}%" if ram_total > 0 else "0%"
+        row["gpuIdlePct"] = f"{(row.get('gpuCostIdle', 0) / gpu_total * 100):.1f}%" if gpu_total > 0 else "0%"
+
+        total_cost = row.get("totalCost", 0)
+        if total_cost > 0:
+            total_idle = row.get("cpuCostIdle", 0) + row.get("ramCostIdle", 0) + row.get("gpuCostIdle", 0)
+            row["totalIdlePct"] = f"{(total_idle / total_cost * 100):.1f}%"
+        else:
+            row["totalIdlePct"] = "0%"
+
+        aggregated.append(row)
+
+    aggregated.sort(key=lambda r: float(r.get("totalCost", 0)), reverse=True)
+
+    for row in aggregated:
+        for field in COST_FIELDS:
+            if field in row and field != "totalEfficiency":
+                row[field] = _format_number(row[field])
+
+    return aggregated
+
+
+# ---------------------------------------------------------------------------
+# Container savings parsing
+# ---------------------------------------------------------------------------
+
+_SAVINGS_API_FETCH_LIMIT = 1000  # Maximum rows to request from the Kubecost API per call
+
+SAVINGS_AGGREGATE_OPTIONS: tuple[str, ...] = ("containerName", "namespace", "clusterID")
+
+SAVINGS_METADATA_FIELDS: list[str] = [
+    "clusterID",
+    "namespace",
+    "controllerKind",
+    "controllerName",
+    "containerName",
+]
+
+SAVINGS_FIELDS: list[str] = SAVINGS_METADATA_FIELDS + [
+    "monthlySavings_cpu",
+    "monthlySavings_memory",
+    "monthlySavings_total",
+    "Recommended_cpu",
+    "Recommended_memory",
+    "current_cpu",
+    "current_memory",
+    "currentEfficiency_cpu",
+    "currentEfficiency_memory",
+    "currentEfficiency",
+    "AvgUsage_cpu",
+    "AvgUsage_memory",
+    "MaxUsage_cpu",
+    "MaxUsage_memory",
+    "notes",
+]
+
+NOTE_MEM_RECOMMENDATION_LESS_THAN_MAX = "memRecommendationLessThanMax"
+
+
+def _float_field(row: dict, key: str) -> float:
+    """Safely coerce a row field to float, returning 0.0 on any failure."""
+    try:
+        return float(row.get(key, 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def compute_savings_notes(row: dict) -> str:
+    """Build a semicolon-separated notes string for a savings recommendation row."""
+    notes: list[str] = []
+    if _float_field(row, "Recommended_memory") < _float_field(row, "MaxUsage_memory"):
+        notes.append(NOTE_MEM_RECOMMENDATION_LESS_THAN_MAX)
+    return ";".join(notes)
+
+
+def aggregate_savings_by(rows: list[dict], group_key: str) -> list[dict]:
+    """Aggregate savings rows by a single dimension, summing ``monthlySavings_total``.
+
+    Returns rows sorted by ``monthlySavings_total`` descending.  Each output row
+    contains ``{group_key, monthlySavings_total, container_count, notes}``.
+    """
+    groups: dict[str, dict] = defaultdict(
+        lambda: {"monthlySavings_total": 0.0, "container_count": 0, "notes_set": set()}
+    )
+
+    for row in rows:
+        key_val = row.get(group_key, "")
+        groups[key_val]["monthlySavings_total"] += float(row.get("monthlySavings_total", 0) or 0)
+        groups[key_val]["container_count"] += 1
+        groups[key_val][group_key] = key_val
+        for note in (row.get("notes") or "").split(";"):
+            if note:
+                groups[key_val]["notes_set"].add(note)
+
+    aggregated: list[dict] = []
+    for values in groups.values():
+        values["monthlySavings_total"] = _format_number(values["monthlySavings_total"])
+        values["notes"] = ";".join(sorted(values.pop("notes_set")))
+        aggregated.append(dict(values))
+
+    aggregated.sort(key=lambda r: float(r.get("monthlySavings_total", 0) or 0), reverse=True)
+    return aggregated
+
+
+def parse_request_sizing_response(
+    response: dict,
+) -> tuple[float, int, list[dict]]:
+    """Parse a Kubecost requestSizingV2 response into flat rows.
+
+    Returns:
+        total_monthly_savings: top-level TotalMonthlySavings value.
+        count: top-level Count value.
+        rows: flat dicts (SAVINGS_FIELDS columns) sorted by monthlySavings_total descending.
+    """
+    total_monthly_savings: float = float(response.get("TotalMonthlySavings", 0.0))
+    count: int = int(response.get("Count", 0))
+    recommendations: list[dict] = response.get("Recommendations", [])
+
+    def _nest(rec: dict, row: dict, obj_key: str, sub_key: str, col: str) -> None:
+        obj = rec.get(obj_key, {}) or {}
+        val = obj.get(sub_key, 0.0)
+        row[col] = _format_number(float(val)) if isinstance(val, (int, float)) else val
+
+    rows: list[dict] = []
+    for rec in recommendations:
+        row: dict = {}
+
+        for field in SAVINGS_METADATA_FIELDS:
+            row[field] = rec.get(field, "")
+
+        _nest(rec, row, "monthlySavings", "cpu", "monthlySavings_cpu")
+        _nest(rec, row, "monthlySavings", "memory", "monthlySavings_memory")
+        _nest(rec, row, "monthlySavings", "total", "monthlySavings_total")
+        _nest(rec, row, "normalizedRecommendedRequest", "cpuInMilliCores", "Recommended_cpu")
+        _nest(rec, row, "normalizedRecommendedRequest", "memoryInMiB", "Recommended_memory")
+        _nest(rec, row, "normalizedLatestKnownRequest", "cpuInMilliCores", "current_cpu")
+        _nest(rec, row, "normalizedLatestKnownRequest", "memoryInMiB", "current_memory")
+        _nest(rec, row, "currentEfficiency", "cpu", "currentEfficiency_cpu")
+        _nest(rec, row, "currentEfficiency", "memory", "currentEfficiency_memory")
+        _nest(rec, row, "currentEfficiency", "total", "currentEfficiency")
+        _nest(rec, row, "normalizedAverageUsage", "cpuInMilliCores", "AvgUsage_cpu")
+        _nest(rec, row, "normalizedAverageUsage", "memoryInMiB", "AvgUsage_memory")
+        _nest(rec, row, "normalizedMaxUsage", "cpuInMilliCores", "MaxUsage_cpu")
+        _nest(rec, row, "normalizedMaxUsage", "memoryInMiB", "MaxUsage_memory")
+
+        row["notes"] = compute_savings_notes(row)
+        rows.append(row)
+
+    rows.sort(
+        key=lambda r: float(r.get("monthlySavings_total", 0) or 0),
+        reverse=True,
+    )
+    return total_monthly_savings, count, rows
+
+
+# ---------------------------------------------------------------------------
+# Response models (Rule #6)
+# ---------------------------------------------------------------------------
+
+
+class WindowOption(BaseModel):
+    """One selectable time window."""
+
+    value: str = Field(description="Window token to pass as the 'window' parameter.")
+    label: str = Field(description="Human-readable description of the window.")
+
+
+class WindowOptionsResponse(BaseToolResponse):
+    """Response from kubecost_list_windows."""
+
+    windows: list[WindowOption] = Field(description="Valid time-window options.")
+    note: str = Field(description="Additional accepted formats (e.g. RFC3339 ranges).")
+
+
+class AllocationRow(BaseModel):
+    """One aggregated allocation row returned by get_kubecost_workload_costs.
+
+    Stable cost fields are typed explicitly. Dynamic dimension fields (cluster,
+    namespace, pod, label, etc.) are carried as extra fields via ``extra="allow"``.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    window_start: str = Field(
+        default="",
+        description="Start date of the allocation window (YYYY-MM-DD).",
+    )
+    # --- cost components ---
+    cpu_cost: float = Field(
+        default=0.0,
+        alias="cpuCost",
+        description="CPU request cost (USD).",
+    )
+    cpu_cost_idle: float = Field(
+        default=0.0,
+        alias="cpuCostIdle",
+        description="CPU idle cost — unused capacity billed (USD).",
+    )
+    ram_cost: float = Field(
+        default=0.0,
+        alias="ramCost",
+        description="RAM request cost (USD).",
+    )
+    ram_cost_idle: float = Field(
+        default=0.0,
+        alias="ramCostIdle",
+        description="RAM idle cost — unused capacity billed (USD).",
+    )
+    network_cost: float = Field(
+        default=0.0,
+        alias="networkCost",
+        description="Network egress/ingress cost (USD).",
+    )
+    pv_cost: float = Field(
+        default=0.0,
+        alias="pvCost",
+        description="Persistent volume storage cost (USD).",
+    )
+    gpu_cost: float = Field(
+        default=0.0,
+        alias="gpuCost",
+        description="GPU cost (USD).",
+    )
+    gpu_cost_idle: float = Field(
+        default=0.0,
+        alias="gpuCostIdle",
+        description="GPU idle cost (USD).",
+    )
+    load_balancer_cost: float = Field(
+        default=0.0,
+        alias="loadBalancerCost",
+        description="Load balancer cost (USD).",
+    )
+    shared_cost: float = Field(
+        default=0.0,
+        alias="sharedCost",
+        description="Shared namespace overhead allocation (USD).",
+    )
+    total_cost: float = Field(
+        default=0.0,
+        alias="totalCost",
+        description="Sum of all cost components (USD).",
+    )
+    # --- computed idle percentages ---
+    cpu_idle_pct: str = Field(
+        default="0%",
+        alias="cpuIdlePct",
+        description="Percentage of CPU cost that is idle (e.g. '20.0%').",
+    )
+    ram_idle_pct: str = Field(
+        default="0%",
+        alias="ramIdlePct",
+        description="Percentage of RAM cost that is idle (e.g. '15.0%').",
+    )
+    gpu_idle_pct: str = Field(
+        default="0%",
+        alias="gpuIdlePct",
+        description="Percentage of GPU cost that is idle (e.g. '0%').",
+    )
+    total_idle_pct: str = Field(
+        default="0%",
+        alias="totalIdlePct",
+        description="Percentage of total cost that is idle (e.g. '18.5%').",
+    )
+
+
+class KubecostAllocationResponse(BaseToolResponse):
+    """Response from get_kubecost_workload_costs."""
+
+    window: str | None = Field(description="Time window used for the query.")
+    aggregate: str = Field(description="Aggregation dimension(s) requested.")
+    dimensions: list[str] = Field(
+        default_factory=list,
+        description="Resolved dimension columns present in each result row.",
+    )
+    total_cost: float = Field(default=0.0, description="Sum of totalCost across all rows (USD).")
+    row_count: int = Field(default=0, description="Total number of rows returned.")
+    rows: list[AllocationRow] = Field(
+        default_factory=list,
         description=(
-            "Returns the list of valid time windows for Kubecost cost queries, "
-            "formatted as a question to present to the user. "
-            "⚠️ ALWAYS call this tool first when the user has not yet specified "
-            "a time window in the current conversation. "
-            "Do NOT call get_kubecost_workload_costs until the user has replied "
-            "with their chosen window."
+            "Aggregated allocation rows sorted by totalCost descending. "
+            "Each row contains the requested dimension values (e.g. cluster, namespace) "
+            "plus cost fields: totalCost, cpuCost, ramCost, networkCost, pvCost, "
+            "gpuCost, sharedCost, and idle percentages cpuIdlePct, ramIdlePct, totalIdlePct."
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description=(
+            "True when the full result set was larger than top_n and rows contains "
+            "only the top_n entries. Use a larger top_n or narrow the window/aggregate "
+            "to retrieve the full set."
+        ),
+    )
+
+
+class ContainerSavingsRow(BaseModel):
+    """One per-container rightsizing recommendation."""
+
+    model_config = ConfigDict(extra="allow")
+
+    cluster_id: str = Field(
+        default="",
+        alias="clusterID",
+        description="Cluster the container belongs to.",
+    )
+    namespace: str = Field(default="", description="Kubernetes namespace.")
+    controller_kind: str = Field(
+        default="",
+        alias="controllerKind",
+        description="Controller type (Deployment, StatefulSet, DaemonSet, etc.).",
+    )
+    controller_name: str = Field(
+        default="",
+        alias="controllerName",
+        description="Name of the controller managing this container.",
+    )
+    container_name: str = Field(
+        default="",
+        alias="containerName",
+        description="Container name within the pod.",
+    )
+    monthly_savings_total: float = Field(
+        default=0.0,
+        alias="monthlySavings_total",
+        description="Estimated monthly savings from rightsizing this container (USD). Negative = undersized.",
+    )
+    monthly_savings_cpu: float = Field(
+        default=0.0,
+        alias="monthlySavings_cpu",
+        description="CPU portion of monthly savings (USD).",
+    )
+    monthly_savings_memory: float = Field(
+        default=0.0,
+        alias="monthlySavings_memory",
+        description="Memory portion of monthly savings (USD). Negative = memory is undersized.",
+    )
+    recommended_cpu: float = Field(
+        default=0.0,
+        alias="Recommended_cpu",
+        description="Recommended CPU request in millicores.",
+    )
+    recommended_memory: float = Field(
+        default=0.0,
+        alias="Recommended_memory",
+        description="Recommended memory request in MiB.",
+    )
+    # NOTE: These aliases match the *flattened* keys produced by parse_request_sizing_response
+    # (e.g. "current_cpu"), NOT the raw API keys (e.g. "normalizedLatestKnownRequest.cpuInMilliCores").
+    # This is intentional and differs from the camelCase-alias convention used by other fields.
+    current_cpu: float = Field(
+        default=0.0,
+        alias="current_cpu",
+        description="Current CPU request in millicores.",
+    )
+    current_memory: float = Field(
+        default=0.0,
+        alias="current_memory",
+        description="Current memory request in MiB.",
+    )
+    current_efficiency_cpu: float = Field(
+        default=0.0,
+        alias="currentEfficiency_cpu",
+        description="CPU utilization ratio (0–1). Low = over-provisioned.",
+    )
+    current_efficiency_memory: float = Field(
+        default=0.0,
+        alias="currentEfficiency_memory",
+        description="Memory utilization ratio (0–1). Low = over-provisioned.",
+    )
+    notes: str = Field(
+        default="",
+        description=(
+            "Semicolon-separated advisory notes. "
+            "'memRecommendationLessThanMax' means the recommended memory is below observed "
+            "peak — apply this recommendation with caution."
+        ),
+    )
+
+
+class ContainerSavingsSummaryRow(BaseModel):
+    """One aggregated container-savings group for the inline summary."""
+
+    model_config = ConfigDict(extra="allow")
+
+    group: str = Field(description="The value of the summary_aggregate dimension.")
+    monthly_savings_total: float = Field(description="Total monthly savings for this group (USD).")
+    container_count: int = Field(description="Number of containers aggregated into this group.")
+
+
+class ContainerSavingsResponse(BaseToolResponse):
+    """Response from get_container_savings_recommendations."""
+
+    window: str = Field(description="Time window used for the query.")
+    total_monthly_savings: float = Field(
+        description=(
+            "Total monthly savings across the FILTERED recommendations (USD) — the same "
+            "population described by 'summary' and 'container_count'. Excludes rows removed "
+            "by the include_undersized / min_monthly_savings filters."
         )
     )
-    async def kubecost_list_windows() -> list[TextContent]:
-        """Return valid window options formatted for user presentation."""
-        return [TextContent(type="text", text=_WINDOW_CLARIFICATION)]
+    container_count: int = Field(
+        description=(
+            "Number of container recommendations in the FILTERED result set. This is the "
+            "full filtered count and may exceed len(rows) when the result is truncated to "
+            "top_n (see 'truncated')."
+        )
+    )
+    summary_aggregate: str = Field(description="Dimension the inline summary is grouped by.")
+    summary: list[ContainerSavingsSummaryRow] = Field(
+        default_factory=list,
+        description=(
+            "Groups across the FULL filtered result set (NOT capped by top_n), aggregated "
+            "by summary_aggregate and sorted by savings descending. Use this for an "
+            "overview; per-container detail is in 'rows' (which IS capped by top_n)."
+        ),
+    )
+    rows: list[ContainerSavingsRow] = Field(
+        default_factory=list,
+        description=(
+            "Per-container rightsizing recommendations (filtered) sorted by "
+            "monthly_savings_total descending, capped at the first top_n entries. "
+            "Unlike 'summary', this list is limited by top_n — when more exist, "
+            "truncated=True. Each row has recommended CPU/memory, current usage, "
+            "efficiency, and advisory notes."
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description=(
+            "True when the filtered result has more than top_n containers. Only 'rows' is "
+            "capped at top_n; 'summary', 'total_monthly_savings', and 'container_count' "
+            "still reflect the full filtered set. Raise top_n or narrow the filter to see "
+            "more per-container detail."
+        ),
+    )
+    parameters: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Echo of the sizing parameters actually used for this query.",
+    )
+    interpretation: str = Field(
+        default="",
+        description="Methodology guidance for reading and acting on these results.",
+    )
 
-    # ── Main allocation tool ───────────────────────────────────────────────────
+
+# ---------------------------------------------------------------------------
+# Tool registration
+# ---------------------------------------------------------------------------
+
+
+def register_kubecost_tools(mcp: FastMCP) -> None:
+    """Register Kubecost allocation and savings tools, resources, and prompts."""
+
+    # ── Tools ─────────────────────────────────────────────────────────────────
 
     @mcp.tool(
-        description="""
-⚠️ PREREQUISITE: If the user has not explicitly stated a time window in this
-conversation, call `kubecost_list_windows` FIRST and wait for their answer
-before calling this tool. Do NOT infer, assume, or default the window value.
+        version=_VERSION,
+        annotations={"title": "List Kubecost Windows", **_READ_ANNOTATIONS},
+    )
+    async def kubecost_list_windows() -> WindowOptionsResponse:
+        """List the valid time windows for Kubecost cost queries.
 
-Returns Kubernetes cost allocation data from Kubecost, supporting any
-aggregation level (cluster, namespace, pod, label, etc.).
+        WHAT: Returns the named windows (7d, 30d, month, etc.) accepted by
+        get_kubecost_workload_costs, formatted for user presentation.
 
-The `aggregate` parameter controls grouping — pass a single dimension
-(e.g. "cluster") or a comma-separated list (e.g. "cluster,namespace").
-The response columns adapt automatically to whatever dimensions are present.
+        WHEN TO USE: When the user has not yet specified a time window before
+        calling get_kubecost_workload_costs.
 
-The `window` parameter MUST be explicitly confirmed by the user. Valid options:
-- "7d" — Last 7 days
-- "30d" — Last 30 days
-- "90d" — Last 90 days
-- "month" — This calendar month
-- "lastweek" — Last calendar week
-- "lastmonth" — Last calendar month
-- RFC3339 range — e.g. "2026-05-01T00:00:00Z,2026-06-01T00:00:00Z"
-
-Set `accumulate=True` (default) for a single total across the entire date range.
-Set `accumulate=False` for a daily breakdown (use only for trend/time-series).
-
-WHEN TO USE: Use when the user asks about spend by cluster,
-namespace, pod, label, or any combination thereof.
+        WHEN NOT TO USE: When the user has already stated a window — call
+        get_kubecost_workload_costs directly with their value.
         """
+        return WindowOptionsResponse(
+            status=QueryStatus.OK,
+            message="Present these window options to the user and wait for a choice.",
+            recommended_action="After the user picks a window, call get_kubecost_workload_costs.",
+            windows=[WindowOption(value=k, label=v) for k, v in _WINDOW_CHOICES.items()],
+            note=_WINDOW_RFC3339_NOTE,
+        )
+
+    @mcp.tool(
+        version=_VERSION,
+        annotations={"title": "Get Kubecost Workload Costs", **_READ_ANNOTATIONS},
     )
     async def get_kubecost_workload_costs(
-        window: str | None = None,
-        aggregate: str = "cluster,namespace",
-        accumulate: bool = True,
-        limit: int = 100000,
-        top_n: int = 15,
-    ) -> ToolResult:
+        window: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "User-confirmed time window, examples (not limited to) '7d', '15d', '30d', 'month', or an RFC3339 "
+                    "range '2026-05-01T00:00:00Z,2026-06-01T00:00:00Z'. "
+                    "If omitted, the tool returns an error directing you to call "
+                    "kubecost_list_windows first."
+                )
+            ),
+        ] = None,
+        aggregate: Annotated[
+            str,
+            Field(
+                description=(
+                    "Aggregation dimension(s): a single value ('cluster') or a "
+                    "comma-separated list ('cluster,namespace'). "
+                    "Also accepts: pod, node, controller, label, container, "
+                    "controllerKind, department, environment, owner, product, team."
+                ),
+            ),
+        ] = "cluster,namespace",
+        accumulate: Annotated[
+            bool,
+            Field(
+                description=(
+                    "True (default) returns one total for the entire window. "
+                    "False returns a daily breakdown — use only for trend/time-series analysis."
+                ),
+            ),
+        ] = True,
+        limit: Annotated[
+            int,
+            Field(
+                description="Maximum allocation entries to fetch from the API.",
+                ge=1,
+                le=100000,
+            ),
+        ] = 100000,
+        top_n: Annotated[
+            int,
+            Field(
+                description=(
+                    "Maximum rows to include in the response. "
+                    "When the full result exceeds top_n, the response sets truncated=True. "
+                    "Increase top_n or narrow the window/aggregate to retrieve more rows."
+                ),
+                ge=1,
+                le=10000,
+            ),
+        ] = 500,
+    ) -> KubecostAllocationResponse:
+        """Return Kubernetes cost allocation from Kubecost grouped by chosen dimensions.
+
+        WHAT: Costs aggregated by cluster, namespace, pod, label, or any combination.
+        Results are returned as structured rows directly in the response — no separate
+        resource read required.
+
+        WHEN TO USE: For 'spend by cluster/namespace/pod/label' questions. Confirm the
+        time window with the user first (see kubecost_list_windows).
+
+        WHEN NOT TO USE: For container rightsizing/savings use
+        get_container_savings_recommendations; for non-Kubernetes cloud cost use
+        run_cost_report.
         """
-        Fetch and return kubecost cluster/namespace/pod costs for selected dimensions.
-        Args:
-            window:      User-confirmed time window string, e.g. "7d", "30d",
-                         "2026-05-01T00:00:00Z,2026-06-01T00:00:00Z".
-                         Pass None (or omit) if the user has not yet chosen — the
-                         tool will return a clarification prompt instead of querying.
-            aggregate:   Comma-separated aggregation dimensions, e.g. "cluster",
-                         "cluster,namespace", "namespace,pod".
-            accumulate:  True (default) returns a single total for the window.
-                         False returns daily breakdown — use only for trend analysis.
-            limit:       Maximum number of allocation entries to return from the API.
-            top_n:       Number of top entries to include in the inline summary.
-        """
-        # ── Runtime guard: bounce unconfirmed calls back as a clarification ───
         if not window:
-            return ToolResult(
-                content=[TextContent(type="text", text=_WINDOW_CLARIFICATION)],
-                is_error=True,
+            return KubecostAllocationResponse(
+                status=QueryStatus.ERROR,
+                message="A time window is required before querying Kubecost allocation.",
+                recommended_action=(
+                    "Call kubecost_list_windows, present the options to the user, then retry with the chosen window."
+                ),
+                window=None,
+                aggregate=aggregate,
             )
 
         try:
-            response = await _fetch_allocation(aggregate=aggregate, window=window, accumulate=accumulate, limit=limit)
-        except KubecostClientError as exc:
-            tool_error = exc.to_tool_error()
-            return ToolResult(
-                content=[TextContent(type="text", text=tool_error.model_dump_json(indent=2))],
-                is_error=True,
+            response = await _fetch_allocation(
+                aggregate=aggregate,
+                window=window,
+                accumulate=accumulate,
+                limit=limit,
+            )
+        except McpToolError as exc:
+            return KubecostAllocationResponse(
+                status=QueryStatus.ERROR,
+                message=str(exc),
+                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                window=window,
+                aggregate=aggregate,
             )
 
-        dimension_cols, rows = kubecost_csv._parse_allocation_response(response)
-
+        dimension_cols, rows = _parse_allocation_response(response)
         if not rows:
-            return ToolResult(
-                content=[TextContent(type="text", text="No allocation data returned.")],
-                structured_content={
-                    "total_cost": 0.0,
-                    "row_count": 0,
-                    "dimensions": dimension_cols,
-                },
+            return KubecostAllocationResponse(
+                status=QueryStatus.EMPTY,
+                message=f"No Kubecost allocation data for window '{window}'.",
+                recommended_action="Try a wider window or a different aggregate dimension.",
+                window=window,
+                aggregate=aggregate,
+                dimensions=dimension_cols,
             )
 
-        full_fields = dimension_cols + ["window_start"] + COST_FIELDS
-        summary_fields = dimension_cols + SUMMARY_COST_FIELDS
+        aggregated = _aggregate_by_dimensions(rows, dimension_cols)
+        total = sum(float(r.get("totalCost", 0) or 0) for r in aggregated)
+        truncated = len(aggregated) > top_n
 
-        full_csv = kubecost_csv._build_csv(rows, full_fields)
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        filename = f"allocation-{aggregate.replace(',', '-')}-{timestamp}.csv"
-        csv_path = utils.write_csv(filename, full_csv)
-        url = utils.report_url(filename)
-
-        aggregated = kubecost_csv._aggregate_by_dimensions(rows, dimension_cols)
-        summary_csv = kubecost_csv._build_csv(aggregated[:top_n], summary_fields)
-        total = sum(float(r.get("totalCost", 0)) for r in rows)
-
-        dims_label = ", ".join(dimension_cols) if dimension_cols else aggregate
-        download_url = url or str(csv_path)
-
-        # Convert full CSV to structured data for programmatic access
-        full_structured = _csv_to_structured_data(full_csv)
-        summary_structured = _csv_to_structured_data(summary_csv)
-
-        text = f"""\
-{_PRESENTATION_RULES}
-
-[Results]
-## Kubecost Allocation — aggregated by: {dims_label} | window: {window}
-
-Total: ${total:,.2f} across {len(rows)} entries
-Download full CSV: [{filename}]({download_url})
-
-### Top {min(top_n, len(rows))} by totalCost (summary CSV):
-{summary_csv}"""
-
-        return ToolResult(
-            content=[
-                TextContent(type="text", text=text),
-                EmbeddedResource(
-                    type="resource",
-                    resource={
-                        "uri": f"data:text/csv;name={filename}",
-                        "mimeType": "text/csv",
-                        "text": full_csv,
-                    },
-                ),
-            ],
-            structured_content={
-                "query": {
-                    "window": window,
-                    "aggregate": aggregate,
-                    "accumulate": accumulate,
-                    "dimensions": dimension_cols,
-                },
-                "summary": {
-                    "total_cost": total,
-                    "total_rows": len(rows),
-                    "top_n_shown": min(top_n, len(rows)),
-                },
-                "summary_data": summary_structured,
-                "full_data": full_structured,
-                "download_url": download_url,
-                "filename": filename,
-            },
-            meta={
-                "execution_timestamp": datetime.now().isoformat(),
-                "aggregate_dimensions": dimension_cols,
-                "row_count": len(rows),
-            },
+        return KubecostAllocationResponse(
+            status=QueryStatus.OK,
+            message=(
+                f"Kubecost allocation by {', '.join(dimension_cols) or aggregate} "
+                f"for window '{window}': ${total:,.2f} across {len(aggregated)} rows"
+                + (f" (showing top {top_n})." if truncated else ".")
+            ),
+            recommended_action=(
+                "Increase top_n or narrow the aggregate/window to retrieve all rows." if truncated else None
+            ),
+            window=window,
+            aggregate=aggregate,
+            dimensions=dimension_cols,
+            total_cost=round(total, 2),
+            row_count=len(aggregated),
+            rows=[AllocationRow.model_validate(r) for r in aggregated[:top_n]],
+            truncated=truncated,
         )
 
-    # ── Container Savings / Request Sizing ────────────────────────────────────
-
     @mcp.tool(
-        description="""
-Returns container rightsizing recommendations from Kubecost, showing which
-workloads are over-provisioned and how much can be saved by right-sizing them.
-
-If the user asks HOW to rightsize properly (methodology, quantiles, CPU vs memory),
-call the `container_rightsizing_guide` prompt FIRST — do not guess.
-
-USE THIS TOOL when the user asks about:
-- Kubernetes or container savings opportunities
-- Over-provisioned pods, namespaces, or clusters
-- Specific savings recommendations for namespaces, pods, or containers
-
-DO NOT USE THIS TOOL when the user isn't asking about Kubecost, Kubernetes or containers
-
-Named presets (preset param): conservative, balanced (default), aggressive.
-See resource `kubecost://schema/sizing-presets` for details. Explicit params override preset.
-
-The response includes:
-- TotalMonthlySavings and Count across all recommendations
-- Executive summary: top entries aggregated by containerName, namespace or cluster
-- Full CSV download link with all individual container-level recommendations
-- "How to read these results" interpretation block
-
-Summary aggregation options (summary_aggregate param):
-- "containerName" (default) — combines savings across all instances of the same container name.
-  Note: containers sharing a name may be different workloads in different clusters/namespaces.
-  The raw per-container data is always available in the download CSV.
-- "namespace" — total savings per namespace
-- "clusterID" — total savings per cluster
-        """
+        version=_VERSION,
+        annotations={
+            "title": "Get Container Savings Recommendations",
+            **_READ_ANNOTATIONS,
+        },
     )
     async def get_container_savings_recommendations(
         preset: Annotated[
@@ -377,43 +892,61 @@ Summary aggregation options (summary_aggregate param):
         top_n: Annotated[
             int,
             Field(
-                description="Number of top entries to include in the executive summary. Default: 15.",
+                description=(
+                    "Maximum per-container rows to include in the response. "
+                    "When the filtered result exceeds top_n, truncated=True is set. "
+                    "The summary always covers the full filtered set regardless of top_n."
+                ),
                 ge=1,
+                le=10000,
             ),
-        ] = 15,
+        ] = 500,
         include_undersized: Annotated[
             bool | None,
             Field(
                 description=(
-                    "Include containers where rightsizing would INCREASE cost (negative savings). "
-                    "These are under-provisioned containers. Default: False (excluded)."
-                )
+                    "Include containers where rightsizing would INCREASE cost "
+                    "(under-provisioned, negative savings). Default False."
+                ),
             ),
         ] = None,
         min_monthly_savings: Annotated[
             float | None,
             Field(
                 description=(
-                    "Minimum monthly savings threshold in USD. Recommendations below this value "
-                    "are excluded as trivial. Default: $1.00. Set to 0.0 to include all."
+                    "Minimum monthly savings (USD) to include. Recommendations below this "
+                    "threshold are excluded as trivial. Default 1.00; set 0.0 to include all."
                 ),
                 ge=0.0,
             ),
         ] = None,
         summary_aggregate: Annotated[
-            str,
+            Literal["containerName", "namespace", "clusterID"],
             Field(
                 description=(
-                    "Dimension to group the executive summary by. "
-                    "One of: 'containerName' (default), 'namespace', 'clusterID'. "
-                    "'containerName' combines same-named containers across all clusters/namespaces "
-                    "— raw per-container data is always in the download CSV."
-                )
+                    "Dimension to group the inline summary by: 'containerName' (default), "
+                    "'namespace', or 'clusterID'. 'containerName' combines same-named "
+                    "containers across clusters/namespaces — per-container detail is in 'rows'."
+                ),
             ),
         ] = "containerName",
-    ) -> ToolResult:
-        """Fetch container rightsizing recommendations from Kubecost requestSizingV2."""
+    ) -> ContainerSavingsResponse:
+        """Return Kubernetes container rightsizing recommendations and potential savings.
 
+        WHAT: Which workloads are over-provisioned and how much can be saved by
+        rightsizing them. Structured rows are returned directly in the response —
+        no separate resource read required. Supports named presets (conservative,
+        balanced, aggressive) that bundle recommended quantile/window settings;
+        explicit parameters override preset values.
+
+        WHEN TO USE: For Kubernetes container savings, over-provisioned pods/namespaces,
+        or rightsizing recommendations. If the user asks HOW to rightsize (methodology,
+        quantiles, CPU vs memory strategy), invoke the container_rightsizing_guide
+        prompt first.
+
+        WHEN NOT TO USE: For non-Kubernetes resources use get_rightsizing_recommendations;
+        for raw Kubernetes spend use get_kubecost_workload_costs.
+        """
         sizing = resolve_sizing_params(
             preset,
             window=window,
@@ -426,15 +959,15 @@ Summary aggregation options (summary_aggregate param):
             include_undersized=include_undersized,
             min_monthly_savings=min_monthly_savings,
         )
-        resolved_window = sizing["window"]
-        resolved_algorithm_cpu = sizing["algorithm_cpu"]
-        resolved_algorithm_ram = sizing["algorithm_ram"]
-        resolved_q_cpu = sizing["q_cpu"]
-        resolved_q_ram = sizing["q_ram"]
-        resolved_target_cpu = sizing["target_cpu_utilization"]
-        resolved_target_ram = sizing["target_ram_utilization"]
-        resolved_include_undersized = sizing["include_undersized"]
-        resolved_min_monthly_savings = sizing["min_monthly_savings"]
+        resolved_window: str = sizing["window"]
+        resolved_algorithm_cpu: str = sizing["algorithm_cpu"]
+        resolved_algorithm_ram: str = sizing["algorithm_ram"]
+        resolved_q_cpu: float = sizing["q_cpu"]
+        resolved_q_ram: float = sizing["q_ram"]
+        resolved_target_cpu: float = sizing["target_cpu_utilization"]
+        resolved_target_ram: float = sizing["target_ram_utilization"]
+        resolved_include_undersized: bool = sizing["include_undersized"]
+        resolved_min_monthly_savings: float = sizing["min_monthly_savings"]
 
         try:
             response = await _fetch_request_sizing(
@@ -446,31 +979,33 @@ Summary aggregation options (summary_aggregate param):
                 target_cpu_utilization=resolved_target_cpu,
                 target_ram_utilization=resolved_target_ram,
                 filter_str=filter_str or "",
-                limit=1000,
+                limit=_SAVINGS_API_FETCH_LIMIT,
             )
-        except KubecostClientError as exc:
-            tool_error = exc.to_tool_error()
-            return ToolResult(
-                content=[TextContent(type="text", text=tool_error.model_dump_json(indent=2))],
-                is_error=True,
+        except McpToolError as exc:
+            return ContainerSavingsResponse(
+                status=QueryStatus.ERROR,
+                message=str(exc),
+                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                window=resolved_window,
+                total_monthly_savings=0.0,
+                container_count=0,
+                summary_aggregate=summary_aggregate,
             )
 
         total_savings, count, all_rows = parse_request_sizing_response(response)
 
         if not all_rows:
-            return ToolResult(
-                content=[TextContent(type="text", text="No savings recommendations returned.")],
-                structured_content={
-                    "total_monthly_savings": 0.0,
-                    "container_count": 0,
-                    "filters_applied": {
-                        "include_undersized": resolved_include_undersized,
-                        "min_monthly_savings": resolved_min_monthly_savings,
-                    },
-                },
+            return ContainerSavingsResponse(
+                status=QueryStatus.EMPTY,
+                message="No container savings recommendations returned.",
+                recommended_action="Try a wider window or a different filter.",
+                window=resolved_window,
+                total_monthly_savings=0.0,
+                container_count=0,
+                summary_aggregate=summary_aggregate,
             )
 
-        rows = list(all_rows)
+        rows = all_rows
         if not resolved_include_undersized:
             rows = [r for r in rows if float(r.get("monthlySavings_total", 0) or 0) > 0]
         if resolved_min_monthly_savings > 0:
@@ -478,133 +1013,85 @@ Summary aggregation options (summary_aggregate param):
 
         if not rows:
             undersized_label = "included" if resolved_include_undersized else "excluded"
-            msg = (
-                f"No savings recommendations matched the selected filters "
-                f"(undersized containers: {undersized_label}, "
-                f"minimum monthly savings: ${resolved_min_monthly_savings:,.2f})."
-            )
-            return ToolResult(
-                content=[TextContent(type="text", text=msg)],
-                structured_content={
-                    "total_monthly_savings": 0.0,
-                    "container_count": len(rows),
-                    "filters_applied": {
-                        "include_undersized": resolved_include_undersized,
-                        "min_monthly_savings": resolved_min_monthly_savings,
-                    },
-                },
+            return ContainerSavingsResponse(
+                status=QueryStatus.EMPTY,
+                message=(
+                    f"No recommendations matched the filters "
+                    f"(undersized containers {undersized_label}, "
+                    f"minimum monthly savings ${resolved_min_monthly_savings:,.2f})."
+                ),
+                recommended_action="Lower min_monthly_savings or set include_undersized=true.",
+                window=resolved_window,
+                total_monthly_savings=0.0,
+                container_count=0,
+                summary_aggregate=summary_aggregate,
             )
 
-        # Full CSV
-        full_csv = kubecost_csv._build_csv(rows, SAVINGS_FIELDS)
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        filename = f"container-savings-{timestamp}.csv"
-        csv_path = utils.write_csv(filename, full_csv)
-        url = utils.report_url(filename)
-        download_url = url or str(csv_path)
-
-        # Summary CSV — aggregate by chosen dimension, take top N
-        if summary_aggregate not in SAVINGS_AGGREGATE_OPTIONS:
-            summary_aggregate = "containerName"
         aggregated_summary = aggregate_savings_by(rows, summary_aggregate)
-        summary_fields = [
-            summary_aggregate,
-            "monthlySavings_total",
-            "container_count",
-            "notes",
+        summary_rows = [
+            ContainerSavingsSummaryRow(
+                group=str(r.get(summary_aggregate, "")),
+                monthly_savings_total=float(r.get("monthlySavings_total", 0) or 0),
+                container_count=int(r.get("container_count", 0) or 0),
+            )
+            for r in aggregated_summary
         ]
-        summary_csv = kubecost_csv._build_csv(aggregated_summary[:top_n], summary_fields)
 
-        # Convert CSVs to structured data
-        full_structured = _csv_to_structured_data(full_csv)
-        summary_structured = _csv_to_structured_data(summary_csv)
+        # Totals/counts must describe the FILTERED dataset that 'rows', 'summary',
+        # and 'interpretation' are built from — not the unfiltered API payload.
+        filtered_total_savings = sum(float(r.get("monthlySavings_total", 0) or 0) for r in rows)
+        filtered_count = len(rows)
 
-        agg_caveat = (
-            "\nSummary groups by containerName — same-named containers across different "
-            "clusters/namespaces are combined. See the download CSV for per-container detail."
+        # Build typed per-container rows using model_validate for field coercion
+        typed_rows = [ContainerSavingsRow.model_validate(r) for r in rows]
+        truncated = len(typed_rows) > top_n
+
+        caveat = (
+            " Same-named containers across clusters/namespaces are combined in the summary; "
+            "per-cluster detail is in 'rows'."
             if summary_aggregate == "containerName"
             else ""
         )
-
-        preset_line = f"- Preset: `{preset or 'balanced (default)'}`\n" if preset else ""
-        interpretation = build_result_interpretation(sizing, all_rows, filtered_rows=rows)
-
-        text = f"""\
-{_PRESENTATION_RULES}
-
-[Results]
-## Kubecost Container Savings Recommendations | window: {resolved_window}
-
-**TotalMonthlySavings: ${total_savings:,.2f}** across {count} containers{agg_caveat}
-
-Download full CSV: [{filename}]({download_url})
-
-### Top {min(top_n, len(aggregated_summary))} by monthlySavings_total — grouped by {summary_aggregate} (summary CSV):
-{summary_csv}
----
-**Parameters used:**
-{preset_line}- Window: `{resolved_window}`
-- Summary grouped by: `{summary_aggregate}`
-- CPU algorithm: `{resolved_algorithm_cpu}`
-    (quantile: {resolved_q_cpu}) → target utilization: {int(resolved_target_cpu * 100)}%
-- RAM algorithm: `{resolved_algorithm_ram}`
-    (quantile: {resolved_q_ram}) → target utilization: {int(resolved_target_ram * 100)}%
-- Filters applied: undersized containers {"included" if resolved_include_undersized else "excluded"},
-    minimum monthly savings: ${resolved_min_monthly_savings:,.2f}
-- Filter expression: `{filter_str if filter_str else "(none)"}`
-{interpretation}"""
-
-        return ToolResult(
-            content=[
-                TextContent(type="text", text=text),
-                EmbeddedResource(
-                    type="resource",
-                    resource={
-                        "uri": f"data:text/csv;name={filename}",
-                        "mimeType": "text/csv",
-                        "text": full_csv,
-                    },
-                ),
-            ],
-            structured_content={
-                "query": {
-                    "window": resolved_window,
-                    "preset": preset,
-                    "summary_aggregate": summary_aggregate,
-                    "algorithms": {
-                        "cpu": resolved_algorithm_cpu,
-                        "ram": resolved_algorithm_ram,
-                        "q_cpu": resolved_q_cpu,
-                        "q_ram": resolved_q_ram,
-                        "target_cpu_utilization": resolved_target_cpu,
-                        "target_ram_utilization": resolved_target_ram,
-                    },
-                    "filters": {
-                        "include_undersized": resolved_include_undersized,
-                        "min_monthly_savings": resolved_min_monthly_savings,
-                        "filter_expression": filter_str,
-                    },
-                },
-                "summary": {
-                    "total_monthly_savings": total_savings,
-                    "container_count": count,
-                    "filtered_count": len(rows),
-                    "top_n_shown": min(top_n, len(aggregated_summary)),
-                },
-                "summary_data": summary_structured,
-                "full_data": full_structured,
-                "download_url": download_url,
-                "filename": filename,
-            },
-            meta={
-                "execution_timestamp": datetime.now().isoformat(),
-                "preset_used": preset or "balanced",
-                "container_count": count,
-                "filtered_count": len(rows),
-            },
+        # Preserve the unfiltered API figure so the caller still sees how much was
+        # excluded by the undersized / min-savings filters.
+        filtered_note = (
+            f" (filtered from {count} recommendations returned by the API)" if filtered_count != count else ""
         )
 
-    # ── Resources ─────────────────────────────────────────────────────────────
+        interpretation = build_result_interpretation(sizing, all_rows, filtered_rows=rows)
+
+        return ContainerSavingsResponse(
+            status=QueryStatus.OK,
+            message=(
+                f"Total monthly savings ${filtered_total_savings:,.2f} across "
+                f"{filtered_count} containers{filtered_note}, "
+                f"summarized by {summary_aggregate}.{caveat}"
+            ),
+            recommended_action=("Increase top_n to retrieve more per-container rows." if truncated else None),
+            window=resolved_window,
+            total_monthly_savings=round(float(filtered_total_savings), 2),
+            container_count=filtered_count,
+            summary_aggregate=summary_aggregate,
+            summary=summary_rows,
+            rows=typed_rows[:top_n],
+            truncated=truncated,
+            parameters={
+                "preset": preset or "balanced (default)",
+                "window": resolved_window,
+                "algorithm_cpu": resolved_algorithm_cpu,
+                "algorithm_ram": resolved_algorithm_ram,
+                "q_cpu": resolved_q_cpu,
+                "q_ram": resolved_q_ram,
+                "target_cpu_utilization": resolved_target_cpu,
+                "target_ram_utilization": resolved_target_ram,
+                "include_undersized": resolved_include_undersized,
+                "min_monthly_savings": resolved_min_monthly_savings,
+                "filter": filter_str or "(none)",
+            },
+            interpretation=interpretation,
+        )
+
+    # ── Resources (Rule #17) ───────────────────────────────────────────────────
 
     @mcp.resource("kubecost://schema/allocation-params")
     def allocation_params_schema() -> str:
@@ -638,10 +1125,11 @@ ramCostIdle      — RAM idle cost
 networkCost      — egress/ingress network cost
 pvCost           — persistent volume storage cost
 gpuCost          — GPU cost
+gpuCostIdle      — GPU idle cost
+loadBalancerCost — load balancer cost
 sharedCost       — shared namespace overhead allocation
 totalCost        — sum of all cost components
-totalIdleCost    — sum of idle cost components (cpu + ram + gpu idle)
-totalEfficiency  — utilization ratio 0 to 1 (request vs actual use)
+totalEfficiency  — utilization ratio 0–1 (request vs actual use)
 """
 
     @mcp.resource("kubecost://schema/sizing-presets")
@@ -650,11 +1138,11 @@ totalEfficiency  — utilization ratio 0 to 1 (request vs actual use)
         return format_presets_resource()
 
     @mcp.resource("kubecost://guides/container-sizing")
-    def container_sizing_guide() -> str:
+    def container_sizing_guide_resource() -> str:
         """Full container request sizing reference for CPU and memory reservations."""
         return CONTAINER_SIZING_REFERENCE
 
-    # ── Prompts ────────────────────────────────────────────────────────────────
+    # ── Prompts (Rule #17) ────────────────────────────────────────────────────
 
     @mcp.prompt()
     def container_rightsizing_guide() -> str:
@@ -702,7 +1190,7 @@ Pick a preset or describe your preferences.
 ---
 
 Once you've answered all three, call `get_container_savings_recommendations` with your choices.
-Present the Executive Summary with a chart, the interpretation block, and a CSV download link.
+Present the Executive Summary with a chart, the interpretation block, and a summary table.
 """
 
     @mcp.prompt()
@@ -712,8 +1200,7 @@ Present the Executive Summary with a chart, the interpretation block, and a CSV 
 
     @mcp.prompt()
     def container_savings_filter_help() -> str:
-        """Explain the filter options (undersized containers, trivial savings)
-        for the container savings tool."""
+        """Explain the filter options (undersized containers, trivial savings) for container savings."""
         return _SAVINGS_FILTER_CLARIFICATION
 
     @mcp.prompt()
@@ -752,7 +1239,7 @@ Pick an option or describe what you want
 ---
 
 Once you've answered all three, I'll call `get_kubecost_workload_costs` with your choices and
-present an Executive Summary with a chart and a CSV download link.
+present an Executive Summary with a chart.
 """
 
     @mcp.prompt()
@@ -771,7 +1258,6 @@ Wait for their reply, then call `get_kubecost_workload_costs` with:
 Then present:
 1. A 2-3 bullet Executive Summary of the biggest cost drivers and any anomalies.
 2. An SVG bar chart of the top 10 by totalCost.
-3. A 'Download CSV' link for the full report.
 """
 
     @mcp.prompt()
@@ -790,8 +1276,12 @@ Wait for their reply, then call `get_kubecost_workload_costs` with:
 Then present:
 1. A 2-3 bullet summary of trend direction and any notable spikes.
 2. An SVG line chart (date on X axis, totalCost on Y axis, one line per {aggregate}).
-3. A 'Download CSV' link for the full data.
 """
+
+
+# ---------------------------------------------------------------------------
+# Private API fetch helpers
+# ---------------------------------------------------------------------------
 
 
 async def _fetch_request_sizing(
@@ -805,7 +1295,7 @@ async def _fetch_request_sizing(
     filter_str: str,
     limit: int,
 ) -> dict[str, Any]:
-    """Fetch request sizing recommendations via the Kubecost client."""
+    """Fetch container savings recommendations via the shared API wrapper."""
     params: dict[str, Any] = {
         "algorithmCPU": algorithm_cpu,
         "algorithmRAM": algorithm_ram,
@@ -818,17 +1308,18 @@ async def _fetch_request_sizing(
         "offset": 0,
         "limit": limit,
     }
-    kubecost_container_savings_path = get_settings().kubecost_container_savings_path
-    logger.debug(
-        "Kubecost request sizing request: path=%s, params=%s",
-        kubecost_container_savings_path,
-        params,
-    )
-    return await get(path=kubecost_container_savings_path, params=params)
+    path = get_settings().kubecost_container_savings_path
+    logger.debug("Kubecost request sizing: path=%s window=%s", path, window)
+    return await call_get_api(path, params=params)
 
 
-async def _fetch_allocation(aggregate: str, window: str, accumulate: bool, limit: int) -> dict[str, Any]:
-    """Fetch allocation data via the Kubecost client."""
+async def _fetch_allocation(
+    aggregate: str,
+    window: str,
+    accumulate: bool,
+    limit: int,
+) -> dict[str, Any]:
+    """Fetch allocation data via the shared API wrapper."""
     params: dict[str, Any] = {
         "window": window,
         "aggregate": aggregate,
@@ -840,6 +1331,6 @@ async def _fetch_allocation(aggregate: str, window: str, accumulate: bool, limit
         "sortByOrder": "desc",
         "limit": limit,
     }
-    allocation_path = get_settings().kubecost_base_path
-    logger.debug("Kubecost allocation request: path=%s, params=%s", allocation_path, params)
-    return await get(allocation_path, params=params)
+    path = get_settings().kubecost_base_path
+    logger.debug("Kubecost allocation: path=%s window=%s", path, window)
+    return await call_get_api(path, params=params)
