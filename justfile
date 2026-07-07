@@ -62,4 +62,4 @@ test:
     uv run pytest
 
 test-all:
-    uv run pytest -m integration
+    uv run pytest -m ""

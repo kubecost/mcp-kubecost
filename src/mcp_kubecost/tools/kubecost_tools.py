@@ -352,6 +352,11 @@ def parse_request_sizing_response(
     count: int = int(response.get("Count", 0))
     recommendations: list[dict] = response.get("Recommendations", [])
 
+    def _nest(rec: dict, row: dict, obj_key: str, sub_key: str, col: str) -> None:
+        obj = rec.get(obj_key, {}) or {}
+        val = obj.get(sub_key, 0.0)
+        row[col] = _format_number(float(val)) if isinstance(val, (int, float)) else val
+
     rows: list[dict] = []
     for rec in recommendations:
         row: dict = {}
@@ -359,25 +364,20 @@ def parse_request_sizing_response(
         for field in SAVINGS_METADATA_FIELDS:
             row[field] = rec.get(field, "")
 
-        def _nest(obj_key: str, sub_key: str, col: str) -> None:
-            obj = rec.get(obj_key, {}) or {}
-            val = obj.get(sub_key, 0.0)
-            row[col] = _format_number(float(val)) if isinstance(val, (int, float)) else val
-
-        _nest("monthlySavings", "cpu", "monthlySavings_cpu")
-        _nest("monthlySavings", "memory", "monthlySavings_memory")
-        _nest("monthlySavings", "total", "monthlySavings_total")
-        _nest("normalizedRecommendedRequest", "cpuInMilliCores", "Recommended_cpu")
-        _nest("normalizedRecommendedRequest", "memoryInMiB", "Recommended_memory")
-        _nest("normalizedLatestKnownRequest", "cpuInMilliCores", "current_cpu")
-        _nest("normalizedLatestKnownRequest", "memoryInMiB", "current_memory")
-        _nest("currentEfficiency", "cpu", "currentEfficiency_cpu")
-        _nest("currentEfficiency", "memory", "currentEfficiency_memory")
-        _nest("currentEfficiency", "total", "currentEfficiency")
-        _nest("normalizedAverageUsage", "cpuInMilliCores", "AvgUsage_cpu")
-        _nest("normalizedAverageUsage", "memoryInMiB", "AvgUsage_memory")
-        _nest("normalizedMaxUsage", "cpuInMilliCores", "MaxUsage_cpu")
-        _nest("normalizedMaxUsage", "memoryInMiB", "MaxUsage_memory")
+        _nest(rec, row, "monthlySavings", "cpu", "monthlySavings_cpu")
+        _nest(rec, row, "monthlySavings", "memory", "monthlySavings_memory")
+        _nest(rec, row, "monthlySavings", "total", "monthlySavings_total")
+        _nest(rec, row, "normalizedRecommendedRequest", "cpuInMilliCores", "Recommended_cpu")
+        _nest(rec, row, "normalizedRecommendedRequest", "memoryInMiB", "Recommended_memory")
+        _nest(rec, row, "normalizedLatestKnownRequest", "cpuInMilliCores", "current_cpu")
+        _nest(rec, row, "normalizedLatestKnownRequest", "memoryInMiB", "current_memory")
+        _nest(rec, row, "currentEfficiency", "cpu", "currentEfficiency_cpu")
+        _nest(rec, row, "currentEfficiency", "memory", "currentEfficiency_memory")
+        _nest(rec, row, "currentEfficiency", "total", "currentEfficiency")
+        _nest(rec, row, "normalizedAverageUsage", "cpuInMilliCores", "AvgUsage_cpu")
+        _nest(rec, row, "normalizedAverageUsage", "memoryInMiB", "AvgUsage_memory")
+        _nest(rec, row, "normalizedMaxUsage", "cpuInMilliCores", "MaxUsage_cpu")
+        _nest(rec, row, "normalizedMaxUsage", "memoryInMiB", "MaxUsage_memory")
 
         row["notes"] = compute_savings_notes(row)
         rows.append(row)

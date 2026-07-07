@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
-from enum import Enum
+from enum import StrEnum
 from typing import Any, NoReturn
 
 from fastmcp.exceptions import ToolError as McpToolError
@@ -56,7 +56,7 @@ _MAX_ERROR_MESSAGE_CHARS = 500
 # ---------------------------------------------------------------------------
 
 
-class QueryStatus(str, Enum):
+class QueryStatus(StrEnum):
     """Outcome of a tool query, so the LLM never has to guess from an empty list."""
 
     OK = "ok"

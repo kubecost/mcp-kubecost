@@ -34,7 +34,7 @@ packages = ["src/mcp_kubecost"]
 pythonpath = ["src", "."]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--cov=mcp_kubecost --cov-report=term-missing --cov-report=xml -m 'not integration'"
+addopts = "-m 'not integration'"
 markers = [
   "integration: requires a live Kubecost endpoint (deselected by default)",
 ]
