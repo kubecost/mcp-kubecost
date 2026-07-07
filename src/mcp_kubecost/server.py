@@ -18,7 +18,7 @@ from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from mcp_kubecost.config.settings import get_settings
 from mcp_kubecost.skills import register_all_skills
-from mcp_kubecost.tools.kubecost_tools import register_kubecost_csv_tools
+from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
 from mcp_kubecost.utils import OUTPUT_DIR
 
 
@@ -30,16 +30,17 @@ def create_server(server_name) -> FastMCP:
         name=server_name,
         version=version,
         instructions=(
-            "This is a Kubecost MCP server providing read-only access to cloud "
-            "financial management data. Use the available tools to query cost reports, "
-            "view rightsizing recommendations, check Reserved Instance utilization, "
-            "inspect business mappings, review governance policies, detect anomalies, "
-            "and manage views across your cloud accounts."
+            "This is a read-only Kubecost MCP server. "
+            "Use kubecost_list_windows to discover valid time windows, "
+            "get_kubecost_workload_costs to query cost allocation by cluster, namespace, or controller, "
+            "and get_container_savings_recommendations to retrieve container rightsizing recommendations."
         ),
+        on_duplicate="error",
+        strict_input_validation=True,
     )
 
     # Register all toolsets
-    register_kubecost_csv_tools(mcp)
+    register_kubecost_tools(mcp)
 
     # Register skills (MCP prompts — IDE-agnostic workflow guidance)
     register_all_skills(mcp)
@@ -54,6 +55,8 @@ def _build_headers(api_token: str | None) -> dict[str, str]:
 
 # When using the fastmcp cli, all project wide initialization must be outside the main() function.
 load_dotenv(".env")  # reads variables from a .env file and sets them in os.environ
+logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+logging.getLogger("mcp_kubecost").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
