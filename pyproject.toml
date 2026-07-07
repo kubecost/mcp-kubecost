@@ -15,6 +15,8 @@ dev = [
   "isort",
   "pytest",
   "pytest-asyncio",
+  "pytest-cov",
+  "pytest-httpx>=0.35",
   "ruff",
 ]
 
@@ -32,6 +34,17 @@ packages = ["src/mcp_kubecost"]
 pythonpath = ["src", "."]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "--cov=mcp_kubecost --cov-report=term-missing --cov-report=xml -m 'not integration'"
+markers = [
+  "integration: requires a live Kubecost endpoint (deselected by default)",
+]
+
+[tool.coverage.run]
+source = ["mcp_kubecost"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
 
 [tool.ruff]
 line-length = 120
