@@ -18,9 +18,15 @@ from fastmcp import FastMCP
 from pydantic import BaseModel, ConfigDict, Field
 
 from mcp_kubecost.config.settings import get_settings
-from mcp_kubecost.domain.kubecost.sizing_guidance import (CONTAINER_SIZING_GUIDE, CONTAINER_SIZING_REFERENCE,
-                                                          FIELD_DESCRIPTIONS, PresetName, build_result_interpretation,
-                                                          format_presets_resource, resolve_sizing_params)
+from mcp_kubecost.domain.kubecost.sizing_guidance import (
+    CONTAINER_SIZING_GUIDE,
+    CONTAINER_SIZING_REFERENCE,
+    FIELD_DESCRIPTIONS,
+    PresetName,
+    build_result_interpretation,
+    format_presets_resource,
+    resolve_sizing_params,
+)
 from mcp_kubecost.tools._common import BaseToolResponse, McpToolError, QueryStatus, call_get_api
 
 logger = logging.getLogger(__name__)
@@ -1151,7 +1157,7 @@ totalEfficiency  — utilization ratio 0–1 (request vs actual use)
     def explore_container_savings() -> str:
         """Start a guided container rightsizing exploration. Presents choices step-by-step."""
         preset_menu = "\n".join(
-            "  - **{name}** — {desc}".format(name=name, desc=desc)
+            f"  - **{name}** — {desc}"
             for name, desc in [
                 ("conservative", "Minimize OOM risk; includes undersized containers"),
                 ("balanced", "Default — good starting point for most clusters"),
