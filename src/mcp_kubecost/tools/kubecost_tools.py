@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from mcp_kubecost.config.settings import get_settings
@@ -33,12 +34,12 @@ logger = logging.getLogger(__name__)
 
 _VERSION = "3.0"
 
-_READ_ANNOTATIONS = {
-    "readOnlyHint": True,
-    "destructiveHint": False,
-    "idempotentHint": True,
-    "openWorldHint": True,
-}
+_READ_ONLY = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=True,
+)
 
 # ---------------------------------------------------------------------------
 # UI constants
@@ -692,7 +693,13 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         version=_VERSION,
-        annotations={"title": "List Kubecost Windows", **_READ_ANNOTATIONS},
+        annotations=ToolAnnotations(
+            title="List Kubecost Windows",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
     )
     async def kubecost_list_windows() -> WindowOptionsResponse:
         """List the valid time windows for Kubecost cost queries.
@@ -716,7 +723,13 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         version=_VERSION,
-        annotations={"title": "Get Kubecost Workload Costs", **_READ_ANNOTATIONS},
+        annotations=ToolAnnotations(
+            title="Get Kubecost Workload Costs",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
     )
     async def get_kubecost_workload_costs(
         window: Annotated[
@@ -847,10 +860,13 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         version=_VERSION,
-        annotations={
-            "title": "Get Container Savings Recommendations",
-            **_READ_ANNOTATIONS,
-        },
+        annotations=ToolAnnotations(
+            title="Get Container Savings Recommendations",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
     )
     async def get_container_savings_recommendations(
         preset: Annotated[

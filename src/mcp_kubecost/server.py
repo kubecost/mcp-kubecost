@@ -30,12 +30,13 @@ def create_server(server_name) -> FastMCP:
         name=server_name,
         version=version,
         instructions=(
-            "This is a Kubecost MCP server providing read-only access to cloud "
-            "financial management data. Use the available tools to query cost reports, "
-            "view rightsizing recommendations, check Reserved Instance utilization, "
-            "inspect business mappings, review governance policies, detect anomalies, "
-            "and manage views across your cloud accounts."
+            "This is a read-only Kubecost MCP server. "
+            "Use kubecost_list_windows to discover valid time windows, "
+            "get_kubecost_workload_costs to query cost allocation by cluster, namespace, or controller, "
+            "and get_container_savings_recommendations to retrieve container rightsizing recommendations."
         ),
+        on_duplicate="error",
+        strict_input_validation=True,
     )
 
     # Register all toolsets
