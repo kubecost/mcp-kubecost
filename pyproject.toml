@@ -12,14 +12,15 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "isort",
   "pytest",
   "pytest-asyncio",
+  "pytest-cov",
+  "pytest-httpx>=0.35",
   "ruff",
 ]
 
 [build-system]
-requires = ["hatchling>=1.24.0"]
+requires = ["hatchling>=1.30.1"]
 build-backend = "hatchling.build"
 
 [project.scripts]
@@ -32,11 +33,26 @@ packages = ["src/mcp_kubecost"]
 pythonpath = ["src", "."]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-m 'not integration'"
+markers = [
+  "integration: requires a live Kubecost endpoint (deselected by default)",
+]
+
+[tool.coverage.run]
+source = ["mcp_kubecost"]
+omit = ["*/tests/*", "*/__pycache__/*"]
+
+[tool.coverage.report]
+show_missing = true
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 src = ["src", "tests"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mcp_kubecost"]
+combine-as-imports = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -45,7 +61,3 @@ ignore = []
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
-
-[tool.isort]
-line_length = 120
-src_paths = ["src", "tests"]
