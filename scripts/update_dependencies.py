@@ -19,9 +19,7 @@ PYPROJECT = ROOT / "pyproject.toml"
 UV_LOCK = ROOT / "uv.lock"
 
 
-def run(
-    command: list[str], *, cwd: Path | None = None
-) -> subprocess.CompletedProcess[str]:
+def run(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         command,
         cwd=cwd or ROOT,
@@ -206,15 +204,11 @@ def print_direct_changes(
 
 
 def update_python() -> tuple[dict[str, str], list[tuple[str, str, str]]]:
-    console.print(
-        "[bold blue]Updating Python lockfile (uv lock --upgrade)...[/bold blue]"
-    )
+    console.print("[bold blue]Updating Python lockfile (uv lock --upgrade)...[/bold blue]")
     run(["uv", "lock", "--upgrade"])
 
     locked = parse_uv_lock()
-    console.print(
-        "[bold blue]Updating pyproject.toml version constraints...[/bold blue]"
-    )
+    console.print("[bold blue]Updating pyproject.toml version constraints...[/bold blue]")
     constraint_changes = update_pyproject_constraints(locked)
     if constraint_changes:
         run(["uv", "lock"])
@@ -224,7 +218,6 @@ def update_python() -> tuple[dict[str, str], list[tuple[str, str, str]]]:
     console.print("[bold blue]Syncing Python environment...[/bold blue]")
     run(["uv", "sync"])
     return parse_uv_lock(), constraint_changes
-
 
 
 def print_constraint_changes(changes: list[tuple[str, str, str]]) -> None:
@@ -246,12 +239,9 @@ def print_summary(
     python_after: dict[str, str],
     pyproject_constraint_changes: list[tuple[str, str, str]],
 ) -> None:
-    python_direct_changes = collect_changes(
-        python_before, python_after, direct=python_direct
-    )
+    python_direct_changes = collect_changes(python_before, python_after, direct=python_direct)
 
     python_all_changes = collect_changes(python_before, python_after)
-
 
     console.print()
     console.print(Panel.fit("Direct dependency updates", style="bold magenta"))
@@ -259,12 +249,9 @@ def print_summary(
     print_direct_changes("Python (uv.lock)", python_direct_changes)
     print_constraint_changes(pyproject_constraint_changes)
 
-
     major: list[tuple[str, str, str, str]] = []
     minor: list[tuple[str, str, str, str]] = []
-    for ecosystem, changes in (
-        ("python", python_all_changes),
-    ):
+    for ecosystem, changes in (("python", python_all_changes),):
         for name, old, new in changes["major"]:
             major.append((ecosystem, name, old, new))
         for name, old, new in changes["minor"]:
@@ -299,16 +286,11 @@ def print_summary(
         console.print("[green]No minor version bumps.[/green]")
 
     if patch_count:
-        console.print(
-            f"[dim]{patch_count} patch-only bump(s) across lockfiles "
-            "(not listed individually).[/dim]"
-        )
+        console.print(f"[dim]{patch_count} patch-only bump(s) across lockfiles (not listed individually).[/dim]")
 
     if not major and not minor and not patch_count:
         if pyproject_constraint_changes:
-            console.print(
-                "[green]Lockfiles were current; pyproject.toml constraints were refreshed.[/green]"
-            )
+            console.print("[green]Lockfiles were current; pyproject.toml constraints were refreshed.[/green]")
         else:
             console.print("[green]All dependencies were already up to date.[/green]")
 
@@ -329,7 +311,7 @@ def main() -> None:
         python_direct=python_direct,
         python_before=python_before,
         python_after=python_after,
-        pyproject_constraint_changes=pyproject_constraint_changes
+        pyproject_constraint_changes=pyproject_constraint_changes,
     )
 
 
