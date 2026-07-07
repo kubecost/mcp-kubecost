@@ -169,20 +169,20 @@ def summarize_exception(exc: Exception) -> dict[str, Any]:
 def _handle_call_failure(exc: Exception, path: str) -> NoReturn:
     if isinstance(exc, KubecostClientError):
         te = exc.to_tool_error()
-        logger.warning("Cloudability API error at %s: [%s]", path, te.code.value)
+        logger.warning("Kubecost API error at %s: [%s]", path, te.code.value)
         raise McpToolError(format_tool_error(te)) from exc
     if isinstance(exc, ValueError) and "No authentication configured" in str(exc):
-        logger.warning("Cloudability API call attempted without auth configuration")
+        logger.warning("Kubecost API call attempted without auth configuration")
         raise_tool_error(
             ErrorCode.CONFIGURATION_ERROR,
             str(exc),
             retryable=False,
             suggested_action=("Set CLOUDABILITY_API_KEY or CLOUDABILITY_OPEN_TOKEN in the environment."),
         )
-    logger.exception("Unexpected error calling Cloudability API path %s", path)
+    logger.exception("Unexpected error calling Kubecost API path %s", path)
     raise_tool_error(
         ErrorCode.DATA_UNAVAILABLE,
-        f"Unexpected error contacting the Cloudability API: {type(exc).__name__}",
+        f"Unexpected error contacting the Kubecost API: {type(exc).__name__}",
         retryable=True,
         suggested_action=(
             "Retry the request. If the failure persists, the upstream service may be returning a malformed response."
