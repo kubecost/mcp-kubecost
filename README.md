@@ -33,9 +33,9 @@ Business-first MCP server built with FastMCP 3.4+ for FinOps analytics on Kubeco
 
    **Kubecost API auth** (used by `client.py`):
 
-   - `Kubecost_BASE_URL=https://your-kubecost-host` — defaults to the demo host if unset
-   - `Kubecost_API_KEY=...` — basic auth (API key mode)
-   - Or Apptio OpenToken: `Kubecost_OPEN_TOKEN=...` and `Kubecost_ENVIRONMENT_ID=...`
+   - `KUBECOST_BASE_URL=https://your-kubecost-host` — defaults to the demo host if unset
+   - `KUBECOST_API_KEY=...` — basic auth (API key mode)
+   - Or Apptio OpenToken: `KUBECOST_OPEN_TOKEN=...` and `KUBECOST_ENVIRONMENT_ID=...`
 
    **Server config:**
 

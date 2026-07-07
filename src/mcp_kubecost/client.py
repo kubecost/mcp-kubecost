@@ -9,7 +9,7 @@ import httpx
 from mcp_kubecost.errors import ErrorCode, ToolError
 
 # Base URL can be overridden for EU/APAC regions
-DEFAULT_BASE_URL = "https://actions.demo.kubecost.cloud"
+DEFAULT_BASE_URL = "https://demo.kubecost.xyz"
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class KubecostClientError(Exception):
                 code=ErrorCode.AUTHENTICATION_FAILED,
                 message="Authentication failed. The API key or token is invalid or expired.",
                 retryable=False,
-                suggested_action="Verify that Kubecost_API_KEY or Kubecost_OPEN_TOKEN is correctly configured.",
+                suggested_action="Verify that KUBECOST_API_KEY or KUBECOST_OPEN_TOKEN is correctly configured.",
                 context={"status_code": self.status_code},
             )
         elif self.status_code == 403:
@@ -77,33 +77,34 @@ class KubecostClientError(Exception):
 
 def _get_base_url() -> str:
     """Determine the base URL from environment configuration."""
-
-    return os.environ.get("Kubecost_BASE_URL", DEFAULT_BASE_URL)
+    base_url = os.environ.get("KUBECOST_BASE_URL", DEFAULT_BASE_URL)
+    logger.debug(f"Base URL: {base_url}")
+    return base_url
 
 
 def _get_auth_headers() -> dict[str, str]:
     """Build authentication headers.
 
     Supports two auth modes:
-    1. API Key (basic auth) — set Kubecost_API_KEY
-    2. Apptio OpenToken — set Kubecost_OPEN_TOKEN and Kubecost_ENVIRONMENT_ID
+    1. API Key (basic auth) — set KUBECOST_API_KEY
+    2. Apptio OpenToken — set KUBECOST_OPEN_TOKEN and KUBECOST_ENVIRONMENT_ID
     """
     headers: dict[str, str] = {"User-Agent": "Kubecost-MCPServer/demo"}
-    open_token = os.environ.get("Kubecost_OPEN_TOKEN")
+    open_token = os.environ.get("KUBECOST_OPEN_TOKEN")
     if open_token:
         headers["apptio-opentoken"] = open_token
-        env_id = os.environ.get("Kubecost_ENVIRONMENT_ID")
+        env_id = os.environ.get("KUBECOST_ENVIRONMENT_ID")
         if env_id:
             headers["apptio-current-environment"] = env_id
-        logger.debug(f"Using Kubecost_OPEN_TOKEN authentication for environment {env_id}")
+        logger.debug(f"Using KUBECOST_OPEN_TOKEN authentication for environment {env_id}")
     return headers
 
 
 def _get_auth() -> tuple[str, str] | None:
     """Return basic auth tuple if API key is configured."""
-    api_key = os.environ.get("Kubecost_API_KEY")
+    api_key = os.environ.get("KUBECOST_API_KEY")
     if api_key:
-        logger.debug("Using Kubecost_API_KEY authentication")
+        logger.debug("Using KUBECOST_API_KEY authentication")
         return (api_key, "")
     return None
 
@@ -202,7 +203,7 @@ async def post(path: str, json: dict[str, Any] | None = None, params: dict[str, 
 
     if not auth and "apptio-opentoken" not in headers:
         raise ValueError(
-            "No authentication configured. Set Kubecost_API_KEY or Kubecost_OPEN_TOKEN environment variable."
+            "No authentication configured. Set KUBECOST_API_KEY or KUBECOST_OPEN_TOKEN environment variable."
         )
 
     async with httpx.AsyncClient(timeout=60.0) as client:

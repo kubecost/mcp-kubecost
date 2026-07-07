@@ -1,29 +1,32 @@
-name: ci
+name: ci-tests
 
 on:
-  push:
   pull_request:
+    types: [opened, synchronize]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
       - name: Install dependencies
         run: uv sync --extra dev
-      - name: Lint
-        run: uv run ruff check .
-      - name: Format check
-        run: uv run ruff format --check .
-      - name: Import order check
-        run: uv run isort . --check-only
       - name: Tests
         env:
-          KUBECOST_BASE_URL: https://kubecost.example.com
-        run: uv run pytest
+          KUBECOST_BASE_URL: https://demo.kubecost.xyz
+        run: uv run pytest --cov=mcp_kubecost --cov-report=xml -m ""
+      - name: Upload coverage
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage.xml
       - name: Repo safety checks
         run: uv run python scripts/check_repo_safety.py

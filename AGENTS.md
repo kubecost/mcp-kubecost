@@ -6,7 +6,7 @@ Development guide for AI coding agents working on this repository.
 
 FinOps MCP server that exposes read-only Kubecost cost allocation and container rightsizing data to MCP clients. Built with Python 3.12+, FastMCP 3.4+, and httpx.
 
-Entry point: [`src/mcp_kubecost/server.py`](src/mcp_kubecost/server.py) — creates the FastMCP instance, registers tools via `register_kubecost_csv_tools()`, and skills via `register_all_skills()`.
+Entry point: [`src/mcp_kubecost/server.py`](src/mcp_kubecost/server.py) — creates the FastMCP instance, registers tools
 
 Runtime FinOps guidance for MCP clients lives in tool docstrings, [`src/mcp_kubecost/skills/`](src/mcp_kubecost/skills/), and the README tone section — not here.
 
@@ -53,10 +53,10 @@ Two naming schemes exist today. Do not add a third without a dedicated unificati
 
 | Used by `client.py` (live) | Used by `settings.py` (partially unused) |
 |----------------------------|------------------------------------------|
-| `Kubecost_BASE_URL` | `KUBECOST_BASE_URL` |
-| `Kubecost_API_KEY` | `KUBECOST_API_KEY` |
-| `Kubecost_OPEN_TOKEN` | — |
-| `Kubecost_ENVIRONMENT_ID` | — |
+| `KUBECOST_BASE_URL` | `KUBECOST_BASE_URL` |
+| `KUBECOST_API_KEY` | `KUBECOST_API_KEY` |
+| `KUBECOST_OPEN_TOKEN` | — |
+| `KUBECOST_ENVIRONMENT_ID` | — |
 
 HTTP-only:
 
