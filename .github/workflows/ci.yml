@@ -23,7 +23,7 @@ jobs:
           KUBECOST_BASE_URL: https://demo.kubecost.xyz
         run: uv run pytest --cov=mcp_kubecost --cov-report=xml -m ""
       - name: Upload coverage
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         if: always()
         with:
           name: coverage-report
