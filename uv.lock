@@ -716,7 +716,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
-    { name = "pytest-httpx", marker = "extra == 'dev'", specifier = ">=0.35" },
+    { name = "pytest-httpx", marker = "extra == 'dev'", specifier = ">=0.36.2" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "ruff", marker = "extra == 'dev'" },
 ]
