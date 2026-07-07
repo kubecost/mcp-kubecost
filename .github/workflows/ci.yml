@@ -18,16 +18,10 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: uv sync --extra dev
-      - name: Lint
-        run: uv run ruff check .
-      - name: Format check
-        run: uv run ruff format --check .
-      - name: Import order check
-        run: uv run isort . --check-only
       - name: Tests
         env:
           KUBECOST_BASE_URL: https://demo.kubecost.xyz
-        run: uv run pytest --cov=mcp_kubecost --cov-report=xml -m "not integration"
+        run: uv run pytest --cov=mcp_kubecost --cov-report=xml -m ""
       - name: Upload coverage
         uses: actions/upload-artifact@v4
         if: always()

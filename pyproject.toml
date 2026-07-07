@@ -12,7 +12,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "isort",
   "pytest",
   "pytest-asyncio",
   "pytest-cov",
@@ -21,7 +20,7 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling>=1.24.0"]
+requires = ["hatchling>=1.30.0"]
 build-backend = "hatchling.build"
 
 [project.scripts]
@@ -48,8 +47,12 @@ show_missing = true
 
 [tool.ruff]
 line-length = 120
-target-version = "py311"
+target-version = "py312"
 src = ["src", "tests"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mcp_kubecost"]
+combine-as-imports = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
@@ -58,7 +61,3 @@ ignore = []
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
-
-[tool.isort]
-line_length = 120
-src_paths = ["src", "tests"]
