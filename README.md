@@ -86,8 +86,7 @@ The Docker image runs `fastmcp run fastmcp-docker.json` on port 3030. Demo ingre
 ## Quality Checks
 
 - Format: `uv run ruff format .`
-- Imports: `uv run isort .`
-- Lint: `uv run ruff check .`
+- Lint: `uv run ruff check . --fix`
 - Tests: `uv run pytest` — MCP contract and tool behavior tests in `tests/`
 
 See [README-pre-commit.md](README-pre-commit.md) for local vs CI pre-commit hook tiers.
