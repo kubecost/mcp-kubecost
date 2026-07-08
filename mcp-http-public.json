@@ -1,0 +1,8 @@
+{
+    "mcpServers": {
+        "mcp-csv": {
+            "type": "streamable-http",
+            "url": "https://mcp.demo.kubecost.cloud/mcp"
+        }
+    }
+}
