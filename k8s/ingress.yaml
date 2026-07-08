@@ -17,13 +17,6 @@ spec:
               number: 3030
         path: /
         pathType: Prefix
-      - backend:
-          service:
-            name: bob-pod
-            port:
-              number: 8888
-        path: /bob-prompt
-        pathType: Prefix
   tls:
   - hosts:
     - mcp.demo.kubecost.cloud
