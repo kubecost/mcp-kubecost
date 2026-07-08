@@ -1,0 +1,44 @@
+name: 'Check spelling'
+on:
+  pull_request:
+    types: [opened, synchronize]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  spellcheck: # run the action
+    runs-on: Kubecost-Linux-Small-x86
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Generate a token
+        id: generate-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.KC_ACTIONS_BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KC_ACTIONS_BOT_APP_PRIVATE_KEY }}
+
+      - name: Check out this repo
+        uses: actions/checkout@v7
+        with:
+          path: ./kubecost
+
+      - name: Check out actions code
+        uses: actions/checkout@v7
+        with:
+          repository: kubecost/github-actions
+          path: ./github-actions
+          ref: main
+
+      - uses: ./github-actions/cspell-action
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        with:
+          root: './kubecost'
+          config: './kubecost/.github/cspell.json'
+          verbose: true
+          incremental_files_only: true
