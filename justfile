@@ -3,14 +3,6 @@
 
 default:
     @just --list
-# Increment version by 0.0.1
-_increment_version:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    CURRENT_VERSION=$(<version.txt)
-    NEW_VERSION=$(echo $CURRENT_VERSION | awk -F. '{$NF = $NF + 1;} 1' | sed 's/ /./g')
-    echo $NEW_VERSION > version.txt
-    echo "Version incremented: $CURRENT_VERSION -> $NEW_VERSION"
 # Cross-platform sed (works on both Linux and macOS)
 _sed pattern file:
     #!/usr/bin/env bash
@@ -23,12 +15,13 @@ _sed pattern file:
 _update_version_refs:
     #!/usr/bin/env bash
     set -euo pipefail
-    VERSION=$(<./version.txt)
+    VERSION=$(uv version --project orchestrator --short)
     echo "Updating version references to $VERSION..."
 
     # Update deployment manifest image tag
     just _sed "s|image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:.*|image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:$VERSION|" k8s/deployment.yaml
     echo "Updated k8s/deployment.yaml image tag to $VERSION"
+
 docker-build-load:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -43,9 +36,9 @@ docker-build-push:
     #!/usr/bin/env bash
     set -euo pipefail
     # just test-basic
-    just _increment_version
+    uv version --bump patch
+    VERSION=$(uv version --project orchestrator --short)
     just _update_version_refs
-    VERSION=$(<./version.txt)
     REGION=us-east-1
     BASE_REGISTRY_PATH=297945954695.dkr.ecr.$REGION.amazonaws.com
     CONTAINER_IMAGE=$BASE_REGISTRY_PATH/mcp-kubecost:$VERSION
