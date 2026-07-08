@@ -28,6 +28,8 @@ jobs:
           path: ./kubecost
 
       - name: Check out actions code
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
         uses: actions/checkout@v7
         with:
           repository: kubecost/github-actions
