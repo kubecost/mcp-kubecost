@@ -30,9 +30,12 @@ spec:
           env:
           - name: MCP_KUBECOST_BASE_URL
             value: "https://mcp.demo.kubecost.cloud"
+          - name: FASTMCP_HTTP_ALLOWED_HOSTS
+            value: '["mcp.demo.kubecost.cloud"]'
           ports:
-            - containerPort: 3030
-              protocol: TCP
+          - containerPort: 3030
+            protocol: TCP
+            name: http
           resources:
             requests:
               cpu: "250m"
@@ -45,4 +48,4 @@ spec:
             readOnlyRootFilesystem: false
             capabilities:
               drop:
-                - ALL
+              - ALL

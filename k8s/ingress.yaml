@@ -16,7 +16,7 @@ spec:
             port:
               number: 3030
         path: /
-        pathType: Prefix
+        pathType: ImplementationSpecific
   tls:
   - hosts:
     - mcp.demo.kubecost.cloud
