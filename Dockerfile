@@ -22,7 +22,6 @@ COPY . /app
 # Disable development dependencies
 ENV UV_NO_DEV=1
 ENV PATH="/app/.venv/bin:${PATH}"
-ARG VERSION
 
 RUN uv sync --locked \
     && chown -R appuser:appuser /app \
