@@ -15,7 +15,7 @@ _sed pattern file:
 _update_version_refs:
     #!/usr/bin/env bash
     set -euo pipefail
-    VERSION=$(uv version --project orchestrator --short)
+    VERSION=$(uv version --short)
     echo "Updating version references to $VERSION..."
 
     # Update deployment manifest image tag
@@ -42,7 +42,7 @@ docker-build-push:
     set -euo pipefail
     # just test-basic
     uv version --bump patch
-    VERSION=$(uv version --project orchestrator --short)
+    VERSION=$(uv version --short)
     REGION=us-east-1
     BASE_REGISTRY_PATH=297945954695.dkr.ecr.$REGION.amazonaws.com
     CONTAINER_IMAGE=$BASE_REGISTRY_PATH/mcp-kubecost:$VERSION
