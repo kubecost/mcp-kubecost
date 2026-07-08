@@ -1,5 +1,10 @@
 {
     "version": "0.2",
+    "dictionaries": [
+        "en_US",
+        "softwareTerms",
+        "software-term-suggestions"
+    ],
     "language": "en",
     "words": [
         "addopts",
