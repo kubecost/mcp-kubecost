@@ -26,7 +26,6 @@ jobs:
       - name: Check out this repo
         uses: actions/checkout@v7
         with:
-          path: ./${{ github.event.repository.name }}
           fetch-depth: 0
 
       - name: Check out actions code
@@ -41,7 +40,7 @@ jobs:
 
       - uses: ./github-actions/cspell-action
         with:
-          root: './${{ github.event.repository.name }}'
-          config: './${{ github.event.repository.name }}/.github/cspell.json'
+          root: '.'
+          config: './.github/cspell.json'
           verbose: true
           incremental_files_only: true
