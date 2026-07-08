@@ -21,6 +21,7 @@ jobs:
         with:
           client-id: ${{ vars.KC_ACTIONS_BOT_APP_CLIENT_ID }}
           private-key: ${{ secrets.KC_ACTIONS_BOT_APP_PRIVATE_KEY }}
+          repositories: mcp-kubecost,github-actions
 
       - name: Check out this repo
         uses: actions/checkout@v7
