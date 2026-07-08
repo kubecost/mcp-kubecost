@@ -1,6 +1,8 @@
 {
     "version": "0.2",
     "dictionaries": [
+        "bash",
+        "docker",
         "en_US",
         "makefile",
         "python",
@@ -72,6 +74,6 @@
     ],
     "ignorePaths": [
         "**/__tests__/**",
-        ".gitignore"
+        "**/.gitignore"
     ]
 }
