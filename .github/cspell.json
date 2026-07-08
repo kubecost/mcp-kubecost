@@ -71,6 +71,7 @@
         "vimdiff",
     ],
     "ignorePaths": [
-        "**/__tests__/**"
+        "**/__tests__/**",
+        ".gitignore"
     ]
 }
