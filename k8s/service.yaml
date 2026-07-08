@@ -8,8 +8,8 @@ spec:
   selector:
     app: mcp-kubecost
   ports:
-    - name: http
-      protocol: TCP
-      port: 3030
-      targetPort: 3030
+  - name: http
+    protocol: TCP
+    port: 3030
+    targetPort: 3030
   type: ClusterIP

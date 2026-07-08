@@ -14,11 +14,9 @@ Runtime FinOps guidance for MCP clients lives in tool docstrings, [`src/mcp_kube
 
 ```bash
 uv venv .venv && uv sync --extra dev
-uv run ruff format .
-uv run isort .
-uv run ruff check .
+source .venv/bin/activate
 uv run pytest
-pre-commit run --config .pre-commit-config-ci.yaml --all-files
+uvx pre-commit run --config .pre-commit-config-ci.yaml --all-files
 ```
 
 Use the existing `.venv` when running Python commands. Run `ruff format` and `isort` after every Python edit.
