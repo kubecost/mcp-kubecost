@@ -21,12 +21,13 @@ jobs:
         with:
           client-id: ${{ vars.KC_ACTIONS_BOT_APP_CLIENT_ID }}
           private-key: ${{ secrets.KC_ACTIONS_BOT_APP_PRIVATE_KEY }}
-          repositories: mcp-kubecost,github-actions
+          repositories: ${{ github.event.repository.name }},github-actions
 
       - name: Check out this repo
         uses: actions/checkout@v7
         with:
-          path: ./kubecost
+          path: ./${{ github.event.repository.name }}
+          fetch-depth: 0
 
       - name: Check out actions code
         env:
@@ -40,7 +41,7 @@ jobs:
 
       - uses: ./github-actions/cspell-action
         with:
-          root: './kubecost'
-          config: './kubecost/.github/cspell.json'
+          root: './${{ github.event.repository.name }}'
+          config: './${{ github.event.repository.name }}/.github/cspell.json'
           verbose: true
           incremental_files_only: true
