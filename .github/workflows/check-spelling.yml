@@ -35,10 +35,9 @@ jobs:
           repository: kubecost/github-actions
           path: ./github-actions
           ref: main
+          token: ${{ steps.generate-token.outputs.token }}
 
       - uses: ./github-actions/cspell-action
-        env:
-          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
         with:
           root: './kubecost'
           config: './kubecost/.github/cspell.json'
