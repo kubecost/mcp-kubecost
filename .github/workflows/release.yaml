@@ -84,7 +84,7 @@ jobs:
       - name: Verify release tag is unused
         if: github.event_name == 'workflow_dispatch'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.id.outputs.release_tag }}
         run: |
           set -euo pipefail
@@ -129,7 +129,7 @@ jobs:
       - name: Create GitHub Release
         if: github.event_name == 'workflow_dispatch'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.id.outputs.release_tag }}
           EXTRA_NOTES: ${{ inputs.notes }}
           PRERELEASE_FLAG: ${{ inputs.prerelease && '--prerelease' || '' }}
