@@ -8,6 +8,7 @@ dependencies = [
   "fastmcp>=3.4.0,<4",
   "httpx>=0.28.1",
   "python-dotenv>=1.2.2",
+  "py-toon-format>=0.1.0",
 ]
 
 [project.optional-dependencies]

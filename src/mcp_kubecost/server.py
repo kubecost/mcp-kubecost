@@ -17,9 +17,17 @@ from starlette.requests import Request
 from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from mcp_kubecost.config.settings import get_settings
+from mcp_kubecost.middleware import ToonMiddleware
 from mcp_kubecost.skills import register_all_skills
 from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
 from mcp_kubecost.utils import OUTPUT_DIR
+
+_SERVER_INSTRUCTIONS = (
+    "This is a read-only Kubecost MCP server. "
+    "Use kubecost_list_windows to discover valid time windows, "
+    "get_kubecost_workload_costs to query cost allocation by cluster, namespace, or controller, "
+    "and get_container_savings_recommendations to retrieve container rightsizing recommendations."
+)
 
 
 def create_server(server_name) -> FastMCP:
@@ -29,12 +37,7 @@ def create_server(server_name) -> FastMCP:
     mcp = FastMCP(
         name=server_name,
         version=version,
-        instructions=(
-            "This is a read-only Kubecost MCP server. "
-            "Use kubecost_list_windows to discover valid time windows, "
-            "get_kubecost_workload_costs to query cost allocation by cluster, namespace, or controller, "
-            "and get_container_savings_recommendations to retrieve container rightsizing recommendations."
-        ),
+        instructions=_SERVER_INSTRUCTIONS,
         on_duplicate="error",
         strict_input_validation=True,
     )
@@ -44,6 +47,8 @@ def create_server(server_name) -> FastMCP:
 
     # Register skills (MCP prompts — IDE-agnostic workflow guidance)
     register_all_skills(mcp)
+
+    mcp.add_middleware(ToonMiddleware())
     return mcp
 
 
