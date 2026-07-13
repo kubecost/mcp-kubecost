@@ -68,6 +68,7 @@
         "testpaths",
         "Toolsets",
         "toolsets",
+        "toon",
         "upserts",
         "venv",
         "vimdiff",
