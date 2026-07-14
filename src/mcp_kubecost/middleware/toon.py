@@ -9,12 +9,15 @@ The middleware is transparent:
 - This middleware rewrites the JSON text blocks to TOON format
 - It falls back to JSON if TOON cannot round-trip the result losslessly
 - Errors and non-JSON content pass through unchanged
+
+Set ``TOON_ENABLED=false`` to disable TOON serialization and keep plain JSON output.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 
 import mcp.types as mt
 import py_toon_format
@@ -23,6 +26,11 @@ from fastmcp.tools.base import ToolResult
 from mcp.types import TextContent
 
 logger = logging.getLogger(__name__)
+
+
+def is_toon_enabled() -> bool:
+    """Return True unless ``TOON_ENABLED`` is explicitly set to a falsy value."""
+    return os.getenv("TOON_ENABLED", "true").strip().lower() not in {"false", "0", "no"}
 
 
 def _serialize_losslessly(data: object) -> str:
@@ -37,8 +45,8 @@ def _serialize_losslessly(data: object) -> str:
             separators=(",", ":"),
             sort_keys=True,
         )
-    except Exception:
-        logger.debug("TOON serialization failed; returning JSON", exc_info=True)
+    except (TypeError, ValueError, AttributeError) as e:
+        logger.debug("TOON serialization failed: %s; returning JSON", e)
         return json_text
 
     if decoded_json_text != json_text:

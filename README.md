@@ -41,6 +41,7 @@ Business-first MCP server built with FastMCP 3.4+ for FinOps analytics on Kubeco
 
    - `MCP_SERVER_NAME=Kubecost FinOps MCP` — display name in MCP clients
    - `MCP_KUBECOST_BASE_URL=https://your-mcp-host` — required in HTTP mode so tools generate clickable CSV download links
+   - `TOON_ENABLED=false` — disable TOON serialization and return plain JSON (default: `true`)
 
 ## Run
 
