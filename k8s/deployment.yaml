@@ -25,13 +25,15 @@ spec:
         runAsNonRoot: true
       containers:
         - name: mcp-kubecost
-          image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:0.2.4
+          image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:0.2.5
           imagePullPolicy: IfNotPresent
           env:
           - name: MCP_KUBECOST_BASE_URL
             value: "https://mcp.demo.kubecost.cloud"
           - name: FASTMCP_HTTP_ALLOWED_HOSTS
             value: '["mcp.demo.kubecost.cloud"]'
+          - name: TOON_ENABLED
+            value: "true"
           ports:
           - containerPort: 3030
             protocol: TCP
