@@ -72,6 +72,11 @@
         "upserts",
         "venv",
         "vimdiff",
+        "serialises",
+        "lookback",
+        "statefulset",
+        "daemonset",
+        "nullglob"
     ],
     "ignorePaths": [
         "**/__tests__/**",
