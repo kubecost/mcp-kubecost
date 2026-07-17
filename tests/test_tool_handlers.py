@@ -257,3 +257,78 @@ class TestGetContainerSavingsRecommendations:
         params = _sc(result)["parameters"]
         assert params["q_cpu"] == 0.9
         assert params["window"] == "15d"
+
+
+# ── get_abandoned_workloads ───────────────────────────────────────────────────
+
+ABANDONED_PATH = "/model/savings/abandonedWorkloads"
+
+
+def _abandoned_url() -> re.Pattern:
+    return re.compile(re.escape(f"{BASE_URL}{ABANDONED_PATH}"))
+
+
+class TestGetAbandonedWorkloads:
+    @pytest.mark.asyncio
+    async def test_success_response(self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response):
+        httpx_mock.add_response(
+            method="GET",
+            url=_abandoned_url(),
+            json=abandoned_workloads_api_response,
+        )
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        result = await tool.run({})
+        sc = _sc(result)
+        assert sc["status"] == "ok"
+        assert sc["workload_count"] == 2
+        assert sc["total_monthly_savings"] == pytest.approx(50.5)
+
+    @pytest.mark.asyncio
+    async def test_rows_sorted_by_savings_desc(self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response):
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        result = await tool.run({})
+        rows = _sc(result)["rows"]
+        # FastMCP serialises Pydantic models by alias
+        savings = [r["monthlySavings"] for r in rows]
+        assert savings == sorted(savings, reverse=True)
+
+    @pytest.mark.asyncio
+    async def test_empty_response_returns_empty_status(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=[])
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        result = await tool.run({})
+        assert _sc(result)["status"] == "empty"
+
+    @pytest.mark.asyncio
+    async def test_http_500_returns_error_status(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), status_code=500)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        result = await tool.run({})
+        assert _sc(result)["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_cluster_filter_echoed_in_response(
+        self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response
+    ):
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        result = await tool.run({"cluster": "my-cluster"})
+        assert _sc(result)["cluster_filter"] == "my-cluster"
+
+    @pytest.mark.asyncio
+    async def test_parameters_echoed(self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response):
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        result = await tool.run({"days": 7, "threshold": 1000})
+        sc = _sc(result)
+        assert sc["days"] == 7
+        assert sc["threshold_bytes_per_second"] == 1000
+
+    @pytest.mark.asyncio
+    async def test_truncated_flag_when_at_limit(self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response):
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        # limit=2 and response has exactly 2 rows → truncated=True
+        result = await tool.run({"limit": 2})
+        assert _sc(result)["truncated"] is True

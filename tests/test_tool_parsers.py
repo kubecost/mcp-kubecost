@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import mcp_kubecost.tools.kubecost_tools as ktools
 
 _aggregate_by_dimensions = ktools._aggregate_by_dimensions
@@ -277,3 +279,60 @@ class TestAggregateSavingsBy:
         aggregated = aggregate_savings_by(rows, "containerName")
         assert "note-a" in aggregated[0]["notes"]
         assert "note-b" in aggregated[0]["notes"]
+
+
+# ---------------------------------------------------------------------------
+# _parse_abandoned_workloads_response
+# ---------------------------------------------------------------------------
+
+_parse_abandoned_workloads_response = ktools._parse_abandoned_workloads_response
+
+
+class TestParseAbandonedWorkloadsResponse:
+    def test_empty_list_returns_empty(self):
+        assert _parse_abandoned_workloads_response([]) == []
+
+    def test_row_count_matches_input(self, abandoned_workloads_api_response):
+        rows = _parse_abandoned_workloads_response(abandoned_workloads_api_response)
+        assert len(rows) == 2
+
+    def test_sorted_by_monthly_savings_desc(self, abandoned_workloads_api_response):
+        rows = _parse_abandoned_workloads_response(abandoned_workloads_api_response)
+        assert rows[0]["monthlySavings"] >= rows[1]["monthlySavings"]
+
+    def test_metadata_fields_present(self, abandoned_workloads_api_response):
+        rows = _parse_abandoned_workloads_response(abandoned_workloads_api_response)
+        row = rows[0]  # highest savings
+        assert row["pod"] == "idle-worker-abc"
+        assert row["namespace"] == "batch"
+        assert row["clusterId"] == "cluster-one"
+
+    def test_owner_flattened(self, abandoned_workloads_api_response):
+        rows = _parse_abandoned_workloads_response(abandoned_workloads_api_response)
+        row = rows[0]
+        assert row["owner_name"] == "idle-worker"
+        assert row["owner_kind"] == "deployment"
+
+    def test_no_owner_defaults_to_empty(self, abandoned_workloads_api_response):
+        rows = _parse_abandoned_workloads_response(abandoned_workloads_api_response)
+        unmanaged = next(r for r in rows if r["pod"] == "stale-job-xyz")
+        assert unmanaged["owner_name"] == ""
+        assert unmanaged["owner_kind"] == ""
+
+    def test_allocation_flattened(self, abandoned_workloads_api_response):
+        rows = _parse_abandoned_workloads_response(abandoned_workloads_api_response)
+        row = rows[0]
+        assert row["allocated_cpu_cores"] == pytest.approx(0.5)
+        assert row["allocated_ram_bytes"] == pytest.approx(536870912.0)
+
+    def test_network_fields_present(self, abandoned_workloads_api_response):
+        rows = _parse_abandoned_workloads_response(abandoned_workloads_api_response)
+        row = rows[0]
+        assert row["ingressBytesPerSecond"] == 0.0
+        assert row["egressBytesPerSecond"] == 0.0
+
+    def test_missing_fields_default_gracefully(self):
+        rows = _parse_abandoned_workloads_response([{}])
+        assert len(rows) == 1
+        assert rows[0]["monthlySavings"] == 0.0
+        assert rows[0]["pod"] == ""

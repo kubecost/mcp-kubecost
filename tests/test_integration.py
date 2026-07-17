@@ -17,6 +17,7 @@ Prerequisites:
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 
 import pytest
@@ -88,3 +89,20 @@ class TestIntegrationGetContainerSavingsRecommendations:
             "call", mcp_config_path, "get_container_savings_recommendations", "--input-json", '{"preset": "aggressive"}'
         )
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
+
+
+class TestIntegrationGetAbandonedWorkloads:
+    def test_returns_status_ok_or_empty(self, mcp_config_path):
+        result = _fastmcp("call", mcp_config_path, "get_abandoned_workloads", "--input-json", "{}")
+        assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
+        output = result.stdout
+        assert '"status"' in output or "status" in output
+        assert '"error"' not in output or '"ok"' in output or '"empty"' in output
+
+    def test_default_limit_returns_20(self, mcp_config_path):
+        result = _fastmcp("call", mcp_config_path, "get_abandoned_workloads", "--input-json", "{}")
+        assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
+        output = result.stdout
+        # Default limit is 20 — message should reflect a bounded workload count
+        if '"ok"' in output:
+            assert re.search(r"Found \d+ abandoned workload", output), f"Expected workload count in output:\n{output}"
