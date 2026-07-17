@@ -126,3 +126,38 @@ def savings_api_response() -> dict:
             },
         ],
     }
+
+
+@pytest.fixture
+def abandoned_workloads_api_response() -> list:
+    """Minimal abandonedWorkloads API response — bare JSON array."""
+    return [
+        {
+            "pod": "idle-worker-abc",
+            "namespace": "batch",
+            "node": "ip-10-0-1-10.us-east-1.compute.internal",
+            "clusterId": "cluster-one",
+            "clusterName": "",
+            "owners": [{"name": "idle-worker", "kind": "deployment"}],
+            "ingressBytesPerSecond": 0.0,
+            "egressBytesPerSecond": 0.0,
+            "allocation": {"cpuCores": 0.5, "ramBytes": 536870912.0},
+            "requests": {"cpuCores": 0.5, "ramBytes": 536870912.0},
+            "usage": {"cpuCores": 0.001, "ramBytes": 10485760.0},
+            "monthlySavings": 42.50,
+        },
+        {
+            "pod": "stale-job-xyz",
+            "namespace": "jobs",
+            "node": "ip-10-0-1-11.us-east-1.compute.internal",
+            "clusterId": "cluster-one",
+            "clusterName": "",
+            "owners": [],
+            "ingressBytesPerSecond": 1.5,
+            "egressBytesPerSecond": 2.0,
+            "allocation": {"cpuCores": 0.1, "ramBytes": 134217728.0},
+            "requests": {"cpuCores": 0.1, "ramBytes": 134217728.0},
+            "usage": {"cpuCores": 0.0005, "ramBytes": 5242880.0},
+            "monthlySavings": 8.00,
+        },
+    ]

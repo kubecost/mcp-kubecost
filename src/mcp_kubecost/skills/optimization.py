@@ -19,6 +19,12 @@ planning Reserved Instance purchases, or reviewing RI utilization.
 - Resource `kubecost://guides/container-sizing` — Full sizing reference.
 - Resource `kubecost://schema/sizing-presets` — Preset parameter bundles.
 
+### Abandoned workload detection (Kubecost)
+- `get_abandoned_workloads` — Surfaces pods with abnormally low network traffic (both ingress and egress
+  below a configurable bytes/second threshold). These pods are running but appear idle and are candidates
+  for decommissioning. Returns estimated monthly savings per pod.
+- `explore_abandoned_workloads` prompt — Guided workflow for abandoned workload investigation.
+
 ## Common Workflows
 
 ### Kubernetes/Container rightsizing investigation
@@ -27,6 +33,13 @@ planning Reserved Instance purchases, or reviewing RI utilization.
 3. Check interpretation block for undersized memory (negative memory savings) — never downsize those
 4. Re-run with `preset="conservative"` for production-critical workloads
 5. Use `include_undersized=True` to surface containers that need MORE resources
+
+### Abandoned workload discovery
+1. Invoke `explore_abandoned_workloads` prompt to walk the user through threshold and scope choices
+2. Call `get_abandoned_workloads` with defaults first (days=2, threshold=500) to get an initial picture
+3. Sort results by `monthlySavings` — focus review on highest-cost idle pods
+4. Confirm with the owning team before decommissioning; do NOT suggest deletion without confirmation
+5. To widen the search: increase `days` (e.g. 7 or 30) or `threshold` (e.g. 1000 bytes/s)
 """
 
 

@@ -681,6 +681,83 @@ class ContainerSavingsResponse(BaseToolResponse):
     )
 
 
+class AbandonedWorkloadRow(BaseModel):
+    """One pod identified as potentially abandoned due to low network activity."""
+
+    pod: str = Field(default="", description="Pod name.")
+    namespace: str = Field(default="", description="Kubernetes namespace.")
+    node: str = Field(default="", description="Node the pod is running on.")
+    cluster_id: str = Field(
+        default="",
+        alias="clusterId",
+        description="Kubecost cluster identifier.",
+    )
+    owner_name: str = Field(
+        default="",
+        description="Controller name managing this pod (empty if unmanaged).",
+    )
+    owner_kind: str = Field(
+        default="",
+        description="Controller kind (deployment, statefulset, daemonset, etc.).",
+    )
+    ingress_bytes_per_second: float = Field(
+        default=0.0,
+        alias="ingressBytesPerSecond",
+        description="Average inbound network traffic in bytes/second over the lookback window.",
+    )
+    egress_bytes_per_second: float = Field(
+        default=0.0,
+        alias="egressBytesPerSecond",
+        description="Average outbound network traffic in bytes/second over the lookback window.",
+    )
+    allocated_cpu_cores: float = Field(
+        default=0.0,
+        description="CPU cores allocated to the pod.",
+    )
+    allocated_ram_bytes: float = Field(
+        default=0.0,
+        description="RAM bytes allocated to the pod.",
+    )
+    monthly_savings: float = Field(
+        default=0.0,
+        alias="monthlySavings",
+        description="Estimated monthly cost savings if this workload is decommissioned (USD).",
+    )
+
+
+class AbandonedWorkloadsResponse(BaseToolResponse):
+    """Response from get_abandoned_workloads."""
+
+    days: int = Field(description="Lookback window in days used for the query.")
+    threshold_bytes_per_second: int = Field(
+        description=(
+            "Network traffic threshold (bytes/second) used to identify abandoned workloads. "
+            "Pods with both ingress and egress below this value are flagged."
+        )
+    )
+    cluster_filter: str = Field(
+        default="",
+        description="Cluster filter applied. Empty string means all clusters.",
+    )
+    workload_count: int = Field(default=0, description="Number of abandoned workloads returned.")
+    total_monthly_savings: float = Field(
+        default=0.0,
+        description="Total estimated monthly savings if all returned workloads are decommissioned (USD).",
+    )
+    rows: list[AbandonedWorkloadRow] = Field(
+        default_factory=list,
+        description=(
+            "Abandoned workloads sorted by monthly_savings descending. "
+            "Each row has pod/namespace/cluster identity, network traffic rates, "
+            "and the estimated monthly cost if decommissioned."
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description="True when the API returned exactly 'limit' rows — more may exist. Raise limit to retrieve all.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
@@ -782,7 +859,17 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 ge=1,
                 le=10000,
             ),
-        ] = 500,
+        ] = 20,
+        min_total_cost: Annotated[
+            float,
+            Field(
+                description=(
+                    "Minimum totalCost (USD) to include a row. Rows below this threshold "
+                    "are excluded as trivial noise. Default $1.00; set 0.0 to include all."
+                ),
+                ge=0.0,
+            ),
+        ] = 1.0,
     ) -> KubecostAllocationResponse:
         """Return Kubernetes cost allocation from Kubecost grouped by chosen dimensions.
 
@@ -837,14 +924,46 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
         aggregated = _aggregate_by_dimensions(rows, dimension_cols)
         total = sum(float(r.get("totalCost", 0) or 0) for r in aggregated)
-        truncated = len(aggregated) > top_n
+
+        # Client-side filter: remove rows below the minimum cost threshold
+        if min_total_cost > 0:
+            filtered = [r for r in aggregated if float(r.get("totalCost", 0) or 0) >= min_total_cost]
+        else:
+            filtered = aggregated
+
+        if not filtered:
+            return KubecostAllocationResponse(
+                status=QueryStatus.EMPTY,
+                message=(
+                    f"No rows with totalCost >= ${min_total_cost:,.2f} for window '{window}'. "
+                    f"({len(aggregated)} rows totaling ${total:,.2f} were below the threshold.)"
+                ),
+                recommended_action="Lower min_total_cost or widen the window to surface more rows.",
+                window=window,
+                aggregate=aggregate,
+                dimensions=dimension_cols,
+                total_cost=round(total, 2),
+                row_count=0,
+            )
+
+        filtered_total = sum(float(r.get("totalCost", 0) or 0) for r in filtered)
+        truncated = len(filtered) > top_n
+
+        filtered_note = (
+            f" (filtered from {len(aggregated)} rows; excluded {len(aggregated) - len(filtered)} "
+            f"below ${min_total_cost:,.2f})"
+            if len(filtered) != len(aggregated)
+            else ""
+        )
 
         return KubecostAllocationResponse(
             status=QueryStatus.OK,
             message=(
                 f"Kubecost allocation by {', '.join(dimension_cols) or aggregate} "
-                f"for window '{window}': ${total:,.2f} across {len(aggregated)} rows"
-                + (f" (showing top {top_n})." if truncated else ".")
+                f"for window '{window}': ${filtered_total:,.2f} across {len(filtered)} rows"
+                + (f" (showing top {top_n})" if truncated else "")
+                + filtered_note
+                + "."
             ),
             recommended_action=(
                 "Increase top_n or narrow the aggregate/window to retrieve all rows." if truncated else None
@@ -852,9 +971,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             window=window,
             aggregate=aggregate,
             dimensions=dimension_cols,
-            total_cost=round(total, 2),
-            row_count=len(aggregated),
-            rows=[AllocationRow.model_validate(r) for r in aggregated[:top_n]],
+            total_cost=round(filtered_total, 2),
+            row_count=len(filtered),
+            rows=[AllocationRow.model_validate(r) for r in filtered[:top_n]],
             truncated=truncated,
         )
 
@@ -916,7 +1035,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 ge=1,
                 le=10000,
             ),
-        ] = 500,
+        ] = 20,
         include_undersized: Annotated[
             bool | None,
             Field(
@@ -1107,6 +1226,125 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             interpretation=interpretation,
         )
 
+    @mcp.tool(
+        version=_VERSION,
+        annotations=_READ_ONLY,
+    )
+    async def get_abandoned_workloads(
+        days: Annotated[
+            int,
+            Field(
+                description=(
+                    "Lookback window in days. Pods with average network traffic below "
+                    "'threshold' over this many days are flagged as abandoned. Default 2."
+                ),
+                ge=1,
+                le=90,
+            ),
+        ] = 2,
+        threshold: Annotated[
+            int,
+            Field(
+                description=(
+                    "Network traffic threshold in **bytes per second**. Pods whose average "
+                    "ingress AND egress both fall below this value are considered abandoned. "
+                    "Default 500 bytes/second (~43 KB/day) — effectively idle. "
+                    "Lower values surface only the most dormant pods; raise to catch "
+                    "light-traffic workloads."
+                ),
+                ge=0,
+            ),
+        ] = 500,
+        cluster: Annotated[
+            str,
+            Field(
+                description=(
+                    "Optional Kubecost cluster ID to restrict results. Leave empty (default) "
+                    "to query all clusters. Only add a cluster filter when the user has "
+                    "already expressed interest in a specific cluster."
+                ),
+            ),
+        ] = "",
+        limit: Annotated[
+            int,
+            Field(
+                description="Maximum workloads to return. Default 20.",
+                ge=1,
+                le=10000,
+            ),
+        ] = 20,
+    ) -> AbandonedWorkloadsResponse:
+        """Return pods with abnormally low network traffic — likely abandoned workloads.
+
+        WHAT: Surfaces running pods whose average network ingress AND egress are both
+        below 'threshold' bytes/second over the lookback period. These workloads are
+        still consuming compute and memory costs despite appearing idle, and are
+        candidates for decommissioning. Results include estimated monthly savings per pod.
+
+        WHEN TO USE: When investigating wasted spend from dormant or forgotten workloads,
+        or when a user asks about idle pods, unused deployments, or cleanup opportunities.
+        Do not filter by cluster unless the user has indicated a specific cluster.
+
+        WHEN NOT TO USE: For container rightsizing (over-provisioned but active workloads),
+        use get_container_savings_recommendations. For raw cost by namespace/cluster use
+        get_kubecost_workload_costs.
+        """
+        try:
+            raw = await _fetch_abandoned_workloads(
+                days=days,
+                threshold=threshold,
+                cluster=cluster,
+                limit=limit,
+            )
+        except McpToolError as exc:
+            return AbandonedWorkloadsResponse(
+                status=QueryStatus.ERROR,
+                message=str(exc),
+                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                days=days,
+                threshold_bytes_per_second=threshold,
+                cluster_filter=cluster,
+            )
+
+        rows = _parse_abandoned_workloads_response(raw)
+        if not rows:
+            return AbandonedWorkloadsResponse(
+                status=QueryStatus.EMPTY,
+                message=(
+                    f"No abandoned workloads found with threshold={threshold} bytes/s "
+                    f"over {days} day(s)" + (f" in cluster '{cluster}'" if cluster else "") + "."
+                ),
+                recommended_action=("Try lowering 'threshold' or increasing 'days' to surface more workloads."),
+                days=days,
+                threshold_bytes_per_second=threshold,
+                cluster_filter=cluster,
+            )
+
+        total_savings = round(sum(r.get("monthlySavings", 0.0) or 0.0 for r in rows), 2)
+        truncated = len(rows) >= limit
+
+        return AbandonedWorkloadsResponse(
+            status=QueryStatus.OK,
+            message=(
+                f"Found {len(rows)} abandoned workload(s) with estimated monthly savings "
+                f"of ${total_savings:,.2f}"
+                + (f" in cluster '{cluster}'" if cluster else " across all clusters")
+                + f" (threshold={threshold} bytes/s, {days} day(s))"
+                + (" — result may be truncated, increase limit for more." if truncated else ".")
+            ),
+            recommended_action=(
+                "Review the pods with the highest monthly_savings first. "
+                "Confirm the pod is truly idle before decommissioning — check with the owning team."
+            ),
+            days=days,
+            threshold_bytes_per_second=threshold,
+            cluster_filter=cluster,
+            workload_count=len(rows),
+            total_monthly_savings=total_savings,
+            rows=[AbandonedWorkloadRow.model_validate(r, from_attributes=False) for r in rows],
+            truncated=truncated,
+        )
+
     # ── Resources (Rule #17) ───────────────────────────────────────────────────
 
     @mcp.resource("kubecost://schema/allocation-params")
@@ -1294,6 +1532,41 @@ Then present:
 2. An SVG line chart (date on X axis, totalCost on Y axis, one line per {aggregate}).
 """
 
+    @mcp.prompt()
+    def explore_abandoned_workloads() -> str:
+        """Start a guided abandoned-workload investigation. Walks the user through threshold and scope choices."""
+        return """\
+Let's find abandoned Kubernetes workloads — running pods that appear idle and are costing money.
+
+---
+
+**Step 1 — Lookback window**
+How many days back should we look for low network activity?
+- **2 days** (default) — catches recently idle workloads; less noise
+- **7 days** — broader view, catches workloads idle for a week
+- **30 days** — conservative; only flags long-term dormant pods
+
+---
+
+**Step 2 — Traffic threshold**
+Pods with average network traffic (both ingress AND egress) below this value are flagged.
+- **500 bytes/second** (default) — ~43 KB/day; effectively idle
+- **1000 bytes/second** — catches very light-traffic workloads too
+- **Custom** — specify a number in bytes/second
+
+---
+
+**Step 3 — Scope**
+- **All clusters** (default) — start here to get the full picture
+- **Specific cluster** — filter to a single cluster ID if you already know which one to investigate
+
+---
+
+Once you've answered, call `get_abandoned_workloads` with your choices.
+Present a summary table sorted by monthly savings, highlight the top 3 candidates, and
+suggest next steps (confirm with owning team before decommissioning).
+"""
+
 
 # ---------------------------------------------------------------------------
 # Private API fetch helpers
@@ -1350,3 +1623,63 @@ async def _fetch_allocation(
     path = get_settings().kubecost_base_path
     logger.debug("Kubecost allocation: path=%s window=%s", path, window)
     return await call_get_api(path, params=params)
+
+
+async def _fetch_abandoned_workloads(
+    days: int,
+    threshold: int,
+    cluster: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Fetch abandoned workloads from the Kubecost savings API."""
+    params: dict[str, Any] = {
+        "days": days,
+        "threshold": threshold,
+        "offset": "",
+        "limit": limit,
+        "filter": f'cluster:"{cluster}"' if cluster else "",
+    }
+    path = get_settings().kubecost_abandoned_workloads_path
+    logger.debug("Kubecost abandoned workloads: path=%s days=%s threshold=%s", path, days, threshold)
+    result = await call_get_api(path, params=params)
+    # API returns a bare JSON array
+    if isinstance(result, list):
+        return result
+    # Defensive: handle unexpected dict wrapper
+    if isinstance(result, dict):
+        return result.get("data", result.get("workloads", []))
+    return []
+
+
+def _parse_abandoned_workloads_response(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flatten the abandonedWorkloads API response into a list of row dicts.
+
+    Each row is ready for AbandonedWorkloadRow.model_validate().  Nested objects
+    (allocation, owners) are unpacked into flat fields used by the response model.
+    Rows are sorted by monthlySavings descending.
+    """
+    rows: list[dict[str, Any]] = []
+    for item in raw:
+        # Flatten owner info — take the first owner if present
+        owners: list[dict] = item.get("owners") or []
+        first_owner = owners[0] if owners else {}
+
+        allocation: dict = item.get("allocation") or {}
+
+        row: dict[str, Any] = {
+            "pod": item.get("pod", ""),
+            "namespace": item.get("namespace", ""),
+            "node": item.get("node", ""),
+            "clusterId": item.get("clusterId", ""),
+            "owner_name": first_owner.get("name", ""),
+            "owner_kind": first_owner.get("kind", ""),
+            "ingressBytesPerSecond": float(item.get("ingressBytesPerSecond", 0.0) or 0.0),
+            "egressBytesPerSecond": float(item.get("egressBytesPerSecond", 0.0) or 0.0),
+            "allocated_cpu_cores": float(allocation.get("cpuCores", 0.0) or 0.0),
+            "allocated_ram_bytes": float(allocation.get("ramBytes", 0.0) or 0.0),
+            "monthlySavings": float(item.get("monthlySavings", 0.0) or 0.0),
+        }
+        rows.append(row)
+
+    rows.sort(key=lambda r: r.get("monthlySavings", 0.0), reverse=True)
+    return rows

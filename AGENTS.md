@@ -36,6 +36,31 @@ Use the existing `.venv` when running Python commands. Run `ruff format` and `is
 
 Current MCP surface: 3 tools (`kubecost_list_windows`, `get_kubecost_workload_costs`, `get_container_savings_recommendations`), inline prompts/resources in `kubecost_tools.py`, and 2 skills in `skills/`.
 
+## Response Limits Pattern
+
+All tools follow a consistent pattern for bounding response size and filtering noise:
+
+```
+API call (broad fetch, large limit)
+  → Client-side filter (remove trivial/noise rows)
+  → Sort by impact (totalCost or monthlySavings descending)
+  → Slice to top_n (default 20)
+  → Summary metadata covers FULL filtered set (totals, row_count, truncated flag)
+```
+
+| Tool | top_n / limit default | Client-side filter | Filter default |
+|------|-----------------------|-------------------|----------------|
+| `get_kubecost_workload_costs` | `top_n=20` | `min_total_cost` | $1.00 |
+| `get_container_savings_recommendations` | `top_n=20` | `min_monthly_savings` | $1.00 |
+| `get_abandoned_workloads` | `limit=20` | (API-side threshold) | 500 bytes/s |
+
+Design rules:
+- Default to **20 rows** in every tool response — enough for an LLM to reason over without token bloat.
+- Always expose a `top_n` or `limit` parameter so callers can request more when needed.
+- Response metadata (`total_cost`, `row_count`, `truncated`) must describe the full filtered population, not just the sliced rows.
+- When the Kubecost API has no server-side filter for a field (e.g. `totalCost`), apply the filter client-side after fetch.
+- Set `truncated=True` when rows are sliced so the caller knows more data exists.
+
 ## Code Conventions
 
 - Python 3.12+, `from __future__ import annotations`
