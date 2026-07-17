@@ -18,7 +18,7 @@ jobs:
           ref: ${{ github.head_ref }}        # checks out the PR branch, not the merge commit
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v8
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
 
