@@ -75,7 +75,8 @@
         "serialises",
         "lookback",
         "statefulset",
-        "daemonset"
+        "daemonset",
+        "nullglob"
     ],
     "ignorePaths": [
         "**/__tests__/**",
