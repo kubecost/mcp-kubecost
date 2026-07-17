@@ -27,7 +27,8 @@ _SERVER_INSTRUCTIONS = (
     "This is a read-only Kubecost MCP server. "
     "Use kubecost_list_windows to discover valid time windows, "
     "get_kubecost_workload_costs to query cost allocation by cluster, namespace, or controller, "
-    "and get_container_savings_recommendations to retrieve container rightsizing recommendations."
+    "get_container_savings_recommendations to retrieve container rightsizing recommendations, "
+    "and get_abandoned_workloads to identify idle workloads and estimate decommission savings."
 )
 
 

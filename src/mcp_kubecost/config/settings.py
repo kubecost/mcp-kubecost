@@ -16,6 +16,7 @@ class Settings:
     kubecost_base_url: str
     kubecost_base_path: str
     kubecost_container_savings_path: str
+    kubecost_abandoned_workloads_path: str
     KUBECOST_API_KEY: str | None
     request_timeout_seconds: float
     retry_count: int
@@ -61,6 +62,9 @@ def get_settings() -> Settings:
         kubecost_container_savings_path=os.getenv(
             "KUBECOST_CONTAINER_SAVINGS_PATH", "/model/savings/requestSizingV2"
         ).strip(),
+        kubecost_abandoned_workloads_path=os.getenv(
+            "KUBECOST_ABANDONED_WORKLOADS_PATH", "/model/savings/abandonedWorkloads"
+        ).strip(),
         KUBECOST_API_KEY=os.getenv("KUBECOST_API_KEY", "").strip() or None,
         request_timeout_seconds=_get_float_env("REQUEST_TIMEOUT_SECONDS", 15.0),
         retry_count=_get_int_env("REQUEST_RETRY_COUNT", 2),
@@ -68,5 +72,5 @@ def get_settings() -> Settings:
         http_host=os.getenv("MCP_HTTP_HOST", "127.0.0.1").strip(),
         http_port=_get_int_env("MCP_HTTP_PORT", 8000),
         show_banner=False,
-        log_level=(os.getenv("FASTMCP_LOG_LEVEL") or os.getenv("FASTMCP_LOG_LEVEL", "INFO")).upper(),
+        log_level=os.getenv("FASTMCP_LOG_LEVEL", "INFO").upper(),
     )
