@@ -5,6 +5,7 @@
 - [Setup](#setup)
 - [Configuration](#configuration)
 - [Run](#run)
+- [Readme Generation](#readme-generation)
 - [Testing and Quality](#testing-and-quality)
 - [Docker / Kubernetes](#docker--kubernetes)
 - [Security](#security)
@@ -70,6 +71,14 @@ uv run fastmcp run fastmcp.json
 
 ```bash
 uv run fastmcp run fastmcp-http.json
+```
+
+## Readme Generation
+
+Run this python script to generate the readme.md file based on the MCP tools and prompts.
+
+```bash
+just readme-tools 
 ```
 
 ## Testing and Quality

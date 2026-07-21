@@ -91,6 +91,11 @@ inspect:
 list:
     fastmcp list {{MCP_CONFIG}} --prompts
 
+# Regenerate README tools + prompts tables from live FastMCP list
+readme-tools:
+    uv run fastmcp list {{MCP_CONFIG}} --prompts --json 2>/dev/null \
+      | uv run scripts/generate_tools_readme.py
+
 # Call a tool with no parameters (e.g.: just call kubecost_get_infra_costs)
 call TOOL:
     fastmcp call {{MCP_CONFIG}} {{TOOL}}

@@ -3,10 +3,10 @@
 A read-only MCP server that connects your AI assistant to [Kubecost](https://www.kubecost.com/) so you can ask natural-language questions about Kubernetes cloud costs and savings — no dashboards, no SQL.
 
 - [Who This Is For](#who-this-is-for)
-- [What You Can Ask](#what-you-can-ask)
-  - [Cost visibility](#cost-visibility)
-  - [Savings opportunities](#savings-opportunities)
-- [What's Included](#whats-included)
+- [Examples of What You Can Ask](#examples-of-what-you-can-ask)
+  - [Cost Visibility](#cost-visibility)
+  - [Savings Opportunities](#savings-opportunities)
+- [Tools](#tools)
 - [Quick Start](#quick-start)
 
 ## Who This Is For
@@ -18,64 +18,53 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
 > [!NOTE]
 > As of version 1.x, the server is read-only. It never modifies your cluster or Kubecost configuration.
 
-## What You Can Ask
+## Examples of What You Can Ask
 
-### Cost visibility
+### Cost Visibility
 
-- "What are my top 10 most expensive namespaces over the last 30 days?"
+- "What are my top 10 cost drivers over the last 30 days?"
 
-- "Show me CPU and memory costs per cluster for this month."
+- "Why have my costs changed this month? Focus on the most expensive namespaces."
 
-- "Which pods are driving the most spend in the `production` namespace?"
+### Savings Opportunities
 
-- "Give me a daily cost trend broken down by namespace for the last two weeks."
+- "Where are my biggest savings opportunities?"
 
-### Savings opportunities
-
-- "Where can I save the most money in my cluster right now?"
-
-- "Which containers are over-provisioned and by how much?"
+- "What risks are there to adopting the savings recommendations?"
 
 - "Show me abandoned workloads — pods that are running but appear idle."
 
-- "Which PersistentVolumeClaims are significantly over-provisioned?"
-
-- "Are there any PersistentVolumes with no PVC binding that I can delete?"
-
-- "What would I save if I right-sized my node groups?"
-
-- "Which namespaces have resource quotas that are too loose or missing entirely?"
-
-## What's Included
+## Tools
 
 **10 tools** — all read-only, all structured for LLM consumption:
 
-| Tool | What it answers |
-|------|----------------|
-| `kubecost_list_windows` | Available time windows for cost queries |
-| `get_kubecost_workload_costs` | Spend by cluster, namespace, pod, label, or any combination |
-| `get_savings_overview` | All Kubecost savings categories ranked by estimated monthly savings |
-| `get_container_savings_recommendations` | CPU/RAM rightsizing recommendations with conservative/balanced/aggressive presets |
-| `get_abandoned_workloads` | Running pods with near-zero network traffic (idle waste) |
-| `get_pv_sizing_recommendations` | Over-provisioned PersistentVolumeClaims |
-| `get_local_disk_savings` | Underutilized node-local disks |
-| `get_unclaimed_volumes` | PersistentVolumes with no PVC binding |
-| `get_cluster_rightsizing_recommendations` | Node group scale-in and instance type change recommendations |
-| `get_resource_quota_recommendations` | Namespace ResourceQuota right-sizing |
+| Tool | Description |
+|------|-------------|
+| `kubecost_list_windows` | List the valid time windows for Kubecost cost queries. |
+| `get_kubecost_workload_costs` | Return Kubernetes cost allocation from Kubecost grouped by chosen dimensions. |
+| `get_container_savings_recommendations` | Return Kubernetes container rightsizing recommendations and potential savings. |
+| `get_abandoned_workloads` | Return pods with abnormally low network traffic — likely abandoned workloads. |
+| `get_savings_overview` | Return a ranked summary of all Kubecost savings categories. |
+| `get_pv_sizing_recommendations` | Return PersistentVolumeClaim right-sizing recommendations ranked by monthly savings. |
+| `get_local_disk_savings` | Return underutilized node-local disk savings recommendations. |
+| `get_cluster_rightsizing_recommendations` | Return node group scale-in/scale-out/instance-type recommendations for a cluster. |
+| `get_unclaimed_volumes` | Return PersistentVolumes that are provisioned but not bound to any PVC. |
+| `get_resource_quota_recommendations` | Return namespace-level ResourceQuota sizing recommendations. |
 
-**Guided prompts** — step-by-step workflows your assistant can follow:
+**10 prompts** — step-by-step workflows your assistant can follow:
 
-- `explore_costs` — Interactive cost exploration wizard
-- `top_spenders` — Top cost drivers by cluster and namespace
-- `cost_trend` — Daily cost trend analysis
-- `explore_container_savings` — Container rightsizing walkthrough
-- `container_rightsizing_guide` — Methodology guide for CPU vs memory sizing
-- `explore_abandoned_workloads` — Abandoned workload investigation workflow
-
-**Skills** — high-level guidance prompts for common FinOps workflows:
-
-- `kubecost_cost_allocation` — Kubernetes cost visibility workflows
-- `optimization` — Savings investigation and rightsizing workflows
+| Prompt | Description |
+|--------|-------------|
+| `container_rightsizing_guide` | Explain how to properly size Kubernetes container CPU and memory requests. |
+| `explore_container_savings` | Start a guided container rightsizing exploration. Presents choices step-by-step. |
+| `container_savings_window_help` | Explain the time window options for the container savings tool. |
+| `container_savings_filter_help` | Explain the filter options (undersized containers, trivial savings) for container savings. |
+| `explore_costs` | Start a guided Kubernetes cost exploration. Presents choices step-by-step. |
+| `top_spenders` | Show top cost drivers across clusters and namespaces for a given window. |
+| `cost_trend` | Show daily cost trend for a given aggregation dimension. |
+| `explore_abandoned_workloads` | Start a guided abandoned-workload investigation. Walks the user through threshold and scope choices. |
+| `optimization` | Guidance for rightsizing resources and planning Reserved Instance purchases. |
+| `kubecost_cost_allocation` | Guidance for investigating Kubernetes cluster costs and container allocation. |
 
 ## Quick Start
 

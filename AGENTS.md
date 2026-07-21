@@ -95,7 +95,7 @@ There is no `run_http()` helper — use the FastMCP config files above.
 
 ## Known Gaps
 
-- `settings.py` timeout, retry, and token fields are not wired to `client.py`
+- `settings.py` timeout and retry fields are not wired to `client.py` (base URL and API key are)
 - CI runs Python 3.11; local dev should use 3.12+ per `requires-python`
 - `server.py` `instructions` mentions capabilities (RI utilization, business mappings) not yet implemented as tools — treat as aspirational
 

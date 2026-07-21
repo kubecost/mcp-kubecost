@@ -285,8 +285,11 @@ _SAVINGS_API_FETCH_LIMIT = 1000  # Maximum rows to request from the Kubecost API
 _QUANTILE_ALGORITHMS: frozenset[str] = frozenset({"quantileofaverages", "quantileofmaxes"})
 
 
-def _cap_raw_rows(rows: list[dict[str, Any]], resource: str) -> list[dict[str, Any]]:
-    """Defensively cap an upstream row list for endpoints with no server-side limit/offset support."""
+def _cap_raw_rows(rows: list[dict[str, Any]], resource: str) -> tuple[list[dict[str, Any]], bool]:
+    """Defensively cap an upstream row list for endpoints with no server-side limit/offset support.
+
+    Returns (capped_rows, was_capped) so callers can propagate the truncation signal.
+    """
     if len(rows) > _SAVINGS_API_FETCH_LIMIT:
         logger.warning(
             "Kubecost returned %d %s rows; truncating to %d before processing.",
@@ -294,8 +297,8 @@ def _cap_raw_rows(rows: list[dict[str, Any]], resource: str) -> list[dict[str, A
             resource,
             _SAVINGS_API_FETCH_LIMIT,
         )
-        return rows[:_SAVINGS_API_FETCH_LIMIT]
-    return rows
+        return rows[:_SAVINGS_API_FETCH_LIMIT], True
+    return rows, False
 
 
 SAVINGS_AGGREGATE_OPTIONS: tuple[str, ...] = ("containerName", "namespace", "clusterID")
@@ -807,8 +810,8 @@ class ResourceMetrics(BaseModel):
 
     capacity_avg: float = Field(default=0.0, description="Average capacity (in the unit specified by the API).")
     utilization: float = Field(default=0.0, description="Utilization ratio 0-1.")
-    usage_avg: float | None = Field(default=None, description="Average usage (before state only).")
-    usage_p95: float | None = Field(default=None, description="P95 usage (before state only).")
+    usage_avg: float | None = Field(default=None, description="Average usage. None in the recommended (after) state.")
+    usage_p95: float | None = Field(default=None, description="P95 usage. None in the recommended (after) state.")
 
 
 class NodeGroupState(BaseModel):
@@ -845,6 +848,9 @@ class ClusterRightsizingResponse(BaseToolResponse):
     )
     total_savings_per_month: float = Field(default=0.0, description="Total estimated monthly savings (USD).")
     recommendation_count: int = Field(default=0, description="Number of recommendations.")
+    truncated: bool = Field(
+        default=False, description="True if upstream returned >1000 recommendations and results were capped."
+    )
     warnings: list[str] = Field(default_factory=list, description="API-level warnings (if any).")
 
 
@@ -1837,11 +1843,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             )
 
         disks: list[dict[str, Any]] = raw if isinstance(raw, list) else raw.get("unutilizedDisks", [])
-        disks = _cap_raw_rows(disks, "local disk")
+        disks, was_capped = _cap_raw_rows(disks, "local disk")
         filtered = [d for d in disks if float(d.get("savingsMonthly", 0.0) or 0.0) >= min_monthly_savings]
         filtered.sort(key=lambda d: float(d.get("savingsMonthly", 0.0) or 0.0), reverse=True)
         total_savings = round(sum(float(d.get("savingsMonthly", 0.0) or 0.0) for d in filtered), 2)
-        truncated = len(filtered) > top_n
+        truncated = was_capped or len(filtered) > top_n
         sliced = filtered[:top_n]
 
         if not sliced:
@@ -1938,7 +1944,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 window=window,
             )
 
-        recs_raw: list[dict[str, Any]] = _cap_raw_rows(raw.get("recommendations", []), "node group sizing")
+        recs_raw, was_capped = _cap_raw_rows(raw.get("recommendations", []), "node group sizing")
         total_savings = round(float(raw.get("totalSavingsPerMonth", 0.0) or 0.0), 2)
         warnings: list[str] = raw.get("warnings") or []
         window_info = raw.get("window", {})
@@ -2012,6 +2018,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             recommendations=recommendations,
             total_savings_per_month=total_savings,
             recommendation_count=len(recommendations),
+            truncated=was_capped,
             warnings=warnings,
         )
 
@@ -2059,13 +2066,13 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             )
 
         data = raw if isinstance(raw, dict) else {}
-        volumes: list[dict[str, Any]] = _cap_raw_rows(data.get("volumes", []), "unclaimed volume")
+        volumes, was_capped = _cap_raw_rows(data.get("volumes", []), "unclaimed volume")
         total_monthly_cost_api = round(float(data.get("monthlyCost", 0.0) or 0.0), 2)
 
         filtered = [v for v in volumes if float(v.get("monthlyCost", 0.0) or 0.0) >= min_monthly_cost]
         filtered.sort(key=lambda v: float(v.get("monthlyCost", 0.0) or 0.0), reverse=True)
         total_cost = round(sum(float(v.get("monthlyCost", 0.0) or 0.0) for v in filtered), 2)
-        truncated = len(filtered) > top_n
+        truncated = was_capped or len(filtered) > top_n
         sliced = filtered[:top_n]
 
         if not sliced:
@@ -2588,7 +2595,10 @@ async def _fetch_pv_sizing(window: str, overhead_percent: int) -> dict[str, Any]
     }
     path = get_settings().kubecost_pv_sizing_path
     logger.debug("Kubecost PV sizing: path=%s window=%s", path, window)
-    return await call_get_api(path, params=params)
+    result = await call_get_api(path, params=params)
+    if isinstance(result, dict) and "data" in result:
+        return result["data"]
+    return result if isinstance(result, dict) else {}
 
 
 async def _fetch_local_disks(window: str, overhead_percent: int) -> dict[str, Any]:
