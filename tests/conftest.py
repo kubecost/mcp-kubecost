@@ -161,3 +161,261 @@ def abandoned_workloads_api_response() -> list:
             "monthlySavings": 8.00,
         },
     ]
+
+
+@pytest.fixture
+def savings_overview_api_response() -> dict:
+    """Minimal /model/savings response with all 8 categories."""
+    return {
+        "code": 200,
+        "data": {
+            "cluster": "",
+            "profile": "HighAvailability",
+            "abandonedWorkloads": {"savingsPerMonth": 632.78, "lastRefresh": "2026-07-17T15:02:20Z"},
+            "nodeGroupSizing": {"savingsPerMonth": 1888.08, "lastRefresh": "2026-07-17T15:02:20Z"},
+            "resourceQuotaSizing": {"savingsPerMonth": 0.0, "lastRefresh": "2026-07-17T15:02:20Z"},
+            "orphanedResources": {"savingsPerMonth": 0.0, "lastRefresh": "2026-07-17T15:00:00Z"},
+            "underutilizedLocalDisks": {"savingsPerMonth": 118.45, "lastRefresh": "2026-07-17T15:02:10Z"},
+            "persistentVolumeSizing": {"savingsPerMonth": 218.66, "lastRefresh": "2026-07-17T15:01:44Z"},
+            "unclaimedVolumes": {"savingsPerMonth": 22.67, "lastRefresh": "2026-07-17T15:00:00Z"},
+            "containerRequestSizing": {"savingsPerMonth": 831.94, "lastRefresh": "2026-07-17T15:02:20Z"},
+        },
+        "meta": {"isWarm": True},
+    }
+
+
+@pytest.fixture
+def pv_sizing_api_response() -> dict:
+    """Minimal persistentVolumeSizing API response with two recommendations."""
+    return {
+        "recommendations": [
+            {
+                "volumeName": "pvc-aaa",
+                "claimName": "db-data",
+                "claimNamespace": "turbonomic",
+                "clusterId": "kc-demo-prod",
+                "maxUsageBytes": 10984706048,
+                "averageUsageBytes": 10984696758,
+                "recommendedCapacityBytes": 17179869184,
+                "recommendedCostMonthly": 1.28,
+                "currentCapacityBytes": 536870912000,
+                "currentCostMonthly": 40.0,
+                "savingsMonthly": 38.72,
+                "storageClass": "gp3",
+            },
+            {
+                "volumeName": "pvc-bbb",
+                "claimName": "cache-data",
+                "claimNamespace": "default",
+                "clusterId": "kc-demo-prod",
+                "maxUsageBytes": 1073741824,
+                "averageUsageBytes": 1073741824,
+                "recommendedCapacityBytes": 2147483648,
+                "recommendedCostMonthly": 0.20,
+                "currentCapacityBytes": 107374182400,
+                "currentCostMonthly": 8.0,
+                "savingsMonthly": 7.80,
+                "storageClass": "gp3",
+            },
+        ]
+    }
+
+
+@pytest.fixture
+def local_disks_api_response() -> dict:
+    """Minimal localLowDisks API response with two disks."""
+    return {
+        "unutilizedDisks": [
+            {
+                "diskName": "ip-10-0-4-95.us-west-2.compute.internal",
+                "clusterId": "kc-demo-rosa",
+                "utilizationPercent": 0.0,
+                "currentUsageBytes": 0,
+                "currentCapacityBytes": 375204589568,
+                "recommendedCapacityBytes": 0,
+                "currentCostMonthly": 13.98,
+                "savingsMonthly": 13.98,
+            },
+            {
+                "diskName": "ip-10-0-5-12.us-west-2.compute.internal",
+                "clusterId": "kc-demo-rosa",
+                "utilizationPercent": 0.05,
+                "currentUsageBytes": 18760229478,
+                "currentCapacityBytes": 375204589568,
+                "recommendedCapacityBytes": 0,
+                "currentCostMonthly": 5.00,
+                "savingsMonthly": 5.00,
+            },
+        ]
+    }
+
+
+@pytest.fixture
+def node_group_sizing_api_response() -> dict:
+    """Minimal nodeGroupSizing API response with two recommendations including ChangeInstanceType."""
+    return {
+        "code": 200,
+        "data": {
+            "window": {"start": "2026-07-10T00:00:00Z", "end": "2026-07-17T00:00:00Z"},
+            "minNodeCount": 1,
+            "cpuMetric": "usage.p95",
+            "cpuTargetUtilization": 0.65,
+            "ramMetric": "usage.max",
+            "ramTargetUtilization": 0.65,
+            "totalSavingsPerMonth": 209.27,
+            "warnings": [],
+            "recommendations": [
+                {
+                    "nodeGroup": "aws-usw2-demo-ng8",
+                    "recommendation": "ScaleIn",
+                    "before": {
+                        "instanceType": "t3a.2xlarge",
+                        "nodeCount": 5,
+                        "pricePerMonth": 546.37,
+                        "resources": {
+                            "cpu": {
+                                "unit": "m",
+                                "capacity": {"avg": 40000},
+                                "usage": {"avg": 3071.05, "p95": 16457.02},
+                                "utilization": 0.411,
+                            },
+                            "ram": {
+                                "unit": "Mi",
+                                "capacity": {"avg": 159034.32},
+                                "usage": {"avg": 32495.77, "p95": 37128.29},
+                                "utilization": 0.313,
+                            },
+                        },
+                    },
+                    "after": {
+                        "instanceType": "t3a.2xlarge",
+                        "nodeCount": 4,
+                        "pricePerMonth": 437.10,
+                        "resources": {
+                            "cpu": {"unit": "m", "capacity": {"avg": 32000}, "utilization": 0.514},
+                            "ram": {"unit": "Mi", "capacity": {"avg": 127227}, "utilization": 0.391},
+                        },
+                    },
+                    "savingsPerMonth": 109.27,
+                },
+                {
+                    "nodeGroup": "aws-usw2-demo-ng9",
+                    "recommendation": "ChangeInstanceType",
+                    "before": {
+                        "instanceType": "m5.xlarge",
+                        "nodeCount": 3,
+                        "pricePerMonth": 300.0,
+                        "resources": {
+                            "cpu": {
+                                "unit": "m",
+                                "capacity": {"avg": 12000},
+                                "usage": {"avg": 1000.0, "p95": 2000.0},
+                                "utilization": 0.2,
+                            },
+                            "ram": {
+                                "unit": "Mi",
+                                "capacity": {"avg": 49000},
+                                "usage": {"avg": 10000.0, "p95": 15000.0},
+                                "utilization": 0.25,
+                            },
+                        },
+                    },
+                    "after": {
+                        "instanceType": "t3a.xlarge",
+                        "nodeCount": 3,
+                        "pricePerMonth": 200.0,
+                        "resources": {
+                            "cpu": {"unit": "m", "capacity": {"avg": 12000}, "utilization": 0.35},
+                            "ram": {"unit": "Mi", "capacity": {"avg": 24000}, "utilization": 0.5},
+                        },
+                    },
+                    "savingsPerMonth": 100.0,
+                },
+            ],
+        },
+    }
+
+
+@pytest.fixture
+def unclaimed_volumes_api_response() -> dict:
+    """Minimal unclaimedVolumes API response."""
+    return {
+        "code": 200,
+        "data": {
+            "count": 2,
+            "monthlyCost": 15.24,
+            "volumes": [
+                {
+                    "monthlyCost": 7.62,
+                    "volumeName": "pvc-aaa",
+                    "properties": {
+                        "category": "Storage",
+                        "provider": "GCP",
+                        "service": "Kubernetes",
+                        "cluster": "kc-demo-stage",
+                        "name": "pvc-aaa",
+                        "providerID": "pvc-aaa",
+                    },
+                },
+                {
+                    "monthlyCost": 7.62,
+                    "volumeName": "pvc-bbb",
+                    "properties": {
+                        "category": "Storage",
+                        "provider": "AWS",
+                        "service": "Kubernetes",
+                        "cluster": "kc-demo-prod",
+                        "name": "pvc-bbb",
+                        "providerID": "pvc-bbb",
+                    },
+                },
+            ],
+        },
+    }
+
+
+@pytest.fixture
+def resource_quota_api_response() -> dict:
+    """Minimal resourceQuotaSizing API response with two namespace recommendations."""
+    return {
+        "code": 200,
+        "data": {
+            "window": {"start": "2026-07-10T00:00:00Z", "end": "2026-07-17T00:00:00Z"},
+            "itemCount": 2,
+            "totalMonthlySavings": 0.0,
+            "recommendations": [
+                {
+                    "isNewResourceQuota": True,
+                    "cluster": "kc-demo-rosa",
+                    "namespace": "openshift-image-registry",
+                    "category": "compute",
+                    "resources": [
+                        {
+                            "isNewResource": True,
+                            "isDownsize": False,
+                            "resourceType": "requests.cpu",
+                            "category": "compute",
+                            "used": "280m",
+                            "recommended": "378m",
+                        },
+                    ],
+                },
+                {
+                    "isNewResourceQuota": False,
+                    "cluster": "kc-demo-prod",
+                    "namespace": "monitoring",
+                    "category": "compute",
+                    "resources": [
+                        {
+                            "isNewResource": False,
+                            "isDownsize": True,
+                            "resourceType": "requests.memory",
+                            "category": "compute",
+                            "used": "512Mi",
+                            "recommended": "256Mi",
+                        },
+                    ],
+                },
+            ],
+        },
+    }

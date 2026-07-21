@@ -8,7 +8,9 @@ from mcp_kubecost.errors import ErrorCode
 
 class TestKubecostClientErrorToToolError:
     def _make(self, status_code: int) -> KubecostClientError:
-        return KubecostClientError(status_code=status_code, message="err", url="http://x")
+        return KubecostClientError(
+            status_code=status_code, message="err", url="http://x/model/savings", path="/model/savings"
+        )
 
     def test_401_authentication_failed(self):
         te = self._make(401).to_tool_error()
@@ -19,11 +21,15 @@ class TestKubecostClientErrorToToolError:
         te = self._make(403).to_tool_error()
         assert te.code == ErrorCode.PERMISSION_DENIED
         assert te.retryable is False
+        assert "http://x" not in te.message
+        assert "/model/savings" in te.message
 
     def test_404_not_found(self):
         te = self._make(404).to_tool_error()
         assert te.code == ErrorCode.NOT_FOUND
         assert te.retryable is False
+        assert "http://x" not in te.message
+        assert "/model/savings" in te.message
 
     def test_429_rate_limited(self):
         te = self._make(429).to_tool_error()

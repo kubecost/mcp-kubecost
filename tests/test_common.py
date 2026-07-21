@@ -124,7 +124,7 @@ class TestExtractList:
 
 class TestSummarizeException:
     def test_kubecost_client_error_mapped(self):
-        exc = KubecostClientError(status_code=401, message="unauth", url="http://x")
+        exc = KubecostClientError(status_code=401, message="unauth", url="http://x", path="/x")
         summary = summarize_exception(exc)
         assert summary["code"] == ErrorCode.AUTHENTICATION_FAILED.value
         assert "401" in summary["message"]
