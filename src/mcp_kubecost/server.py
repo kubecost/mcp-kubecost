@@ -14,21 +14,27 @@ os.environ["FASTMCP_SHOW_SERVER_BANNER"] = "false"
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse, PlainTextResponse
+from starlette.responses import JSONResponse
 
 from mcp_kubecost.config.settings import get_settings
 from mcp_kubecost.middleware import ToonMiddleware
 from mcp_kubecost.middleware.toon import is_toon_enabled
 from mcp_kubecost.skills import register_all_skills
 from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
-from mcp_kubecost.utils import OUTPUT_DIR
 
 _SERVER_INSTRUCTIONS = (
-    "This is a read-only Kubecost MCP server. "
-    "Use kubecost_list_windows to discover valid time windows, "
-    "get_kubecost_workload_costs to query cost allocation by cluster, namespace, or controller, "
-    "get_container_savings_recommendations to retrieve container rightsizing recommendations, "
-    "and get_abandoned_workloads to identify idle workloads and estimate decommission savings."
+    "Read-only Kubecost MCP server for cost visibility and savings recommendations. "
+    "Start here: get_savings_overview for a ranked summary of all savings categories "
+    "on any general savings question; kubecost_list_windows to discover valid time "
+    "windows; get_kubecost_workload_costs for cost allocation by cluster, namespace, "
+    "or controller. "
+    "Drill-down tools: get_container_savings_recommendations for container rightsizing, "
+    "get_abandoned_workloads to identify idle workloads and estimate decommission savings, "
+    "get_pv_sizing_recommendations for PVC storage right-sizing, "
+    "get_local_disk_savings for underutilized node-local disks, "
+    "get_cluster_rightsizing_recommendations for node group scale-in/out recommendations, "
+    "get_unclaimed_volumes for unbound PersistentVolumes, "
+    "and get_resource_quota_recommendations for namespace ResourceQuota governance."
 )
 
 
@@ -55,10 +61,10 @@ def create_server(server_name) -> FastMCP:
     return mcp
 
 
-def _build_headers(api_token: str | None) -> dict[str, str]:
-    if not api_token:
+def _build_headers(api_key: str | None) -> dict[str, str]:
+    if not api_key:
         return {}
-    return {"Authorization": f"Bearer {api_token}"}
+    return {"Authorization": f"Bearer {api_key}"}
 
 
 # When using the fastmcp cli, all project wide initialization must be outside the main() function.
@@ -68,7 +74,7 @@ logging.getLogger("mcp_kubecost").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
-mcp_server_name = os.getenv("MCP_SERVER_NAME", "Kubecost MCP")
+mcp_server_name = os.getenv("MCP_SERVER_NAME", "Kubecost_MCP")
 os.environ["FASTMCP_SHOW_SERVER_BANNER"] = "false"
 version = pkg_version(distribution_name="mcp-kubecost")
 
@@ -78,31 +84,11 @@ mcp = create_server(mcp_server_name)
 
 @mcp.custom_route("/version", methods=["GET"])
 async def version_endpoint(_request: Request) -> JSONResponse:
-    return JSONResponse({"version": os.environ.get("CLDY_MCP_LOCAL_VERSION", "unknown")})
-
-
-@mcp.custom_route("/reports", methods=["GET"])
-async def list_reports(_request: Request) -> JSONResponse:
-    """List all available CSV reports."""
-    files = sorted(
-        OUTPUT_DIR.glob("*.csv"),
-        key=lambda p: p.stat().st_mtime,
-        reverse=True,
-    )
-    return JSONResponse({"reports": [{"filename": f.name, "size_bytes": f.stat().st_size} for f in files]})
-
-
-@mcp.custom_route("/reports/{filename}", methods=["GET"])
-async def download_report(request: Request) -> FileResponse | PlainTextResponse:
-    """Download a specific CSV report by filename."""
-    filename = request.path_params["filename"]
-    output_root = OUTPUT_DIR.resolve()
-    path = (OUTPUT_DIR / filename).resolve()
-    if not path.is_relative_to(output_root):
-        return PlainTextResponse("Forbidden", status_code=403)
-    if not path.is_file() or path.suffix != ".csv":
-        return PlainTextResponse("Not found", status_code=404)
-    return FileResponse(path, media_type="text/csv", filename=filename)
+    try:
+        v = pkg_version("mcp-kubecost")
+    except Exception:
+        v = "unknown"
+    return JSONResponse({"version": v})
 
 
 def main() -> None:

@@ -1,6 +1,6 @@
 {
     "$schema": "https://gofastmcp.com/public/schemas/fastmcp.json/v1.json",
-    "name": "mcp-kubecost",
+    "name": "mcp_kubecost",
     "source": {
         "path": "./src/mcp_kubecost/server.py"
     },

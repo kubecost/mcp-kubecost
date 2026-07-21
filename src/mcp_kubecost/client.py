@@ -17,37 +17,43 @@ logger = logging.getLogger(__name__)
 class KubecostClientError(Exception):
     """Raised when the Kubecost API returns an error."""
 
-    def __init__(self, status_code: int, message: str, url: str):
+    def __init__(self, status_code: int, message: str, url: str, path: str):
         self.status_code = status_code
         self.message = message
         self.url = url
+        self.path = path
         super().__init__(f"HTTP {status_code} from {url}: {message}")
+
+    @property
+    def redacted_url(self) -> str:
+        """URL with the configured base URL replaced by a placeholder, for user-facing messages."""
+        return f"https://YOUR_KUBECOST_URL{self.path}"
 
     def to_tool_error(self) -> ToolError:
         """Convert to a structured ToolError for LLM consumption."""
         if self.status_code == 401:
             return ToolError(
                 code=ErrorCode.AUTHENTICATION_FAILED,
-                message="Authentication failed. The API key or token is invalid or expired.",
+                message="Authentication failed. The API key is invalid or expired.",
                 retryable=False,
-                suggested_action="Verify that KUBECOST_API_KEY or KUBECOST_OPEN_TOKEN is correctly configured.",
+                suggested_action="Verify that KUBECOST_API_KEY is correctly configured.",
                 context={"status_code": self.status_code},
             )
         elif self.status_code == 403:
             return ToolError(
                 code=ErrorCode.PERMISSION_DENIED,
-                message=f"Permission denied for this resource: {self.url}",
+                message=f"Permission denied for this resource: {self.redacted_url}",
                 retryable=False,
                 suggested_action="Check that the API key has the required permissions for this endpoint.",
-                context={"status_code": self.status_code, "url": self.url},
+                context={"status_code": self.status_code, "url": self.redacted_url},
             )
         elif self.status_code == 404:
             return ToolError(
                 code=ErrorCode.NOT_FOUND,
-                message=f"Resource not found: {self.url}",
+                message=f"Resource not found: {self.redacted_url}",
                 retryable=False,
                 suggested_action="Verify the resource ID or path is correct. Use a list tool to find valid IDs.",
-                context={"status_code": self.status_code, "url": self.url},
+                context={"status_code": self.status_code, "url": self.redacted_url},
             )
         elif self.status_code == 429:
             return ToolError(
@@ -80,24 +86,6 @@ def _get_base_url() -> str:
     base_url = os.environ.get("KUBECOST_BASE_URL", DEFAULT_BASE_URL)
     logger.debug(f"Base URL: {base_url}")
     return base_url
-
-
-def _get_auth_headers() -> dict[str, str]:
-    """Build authentication headers.
-
-    Supports two auth modes:
-    1. API Key (basic auth) — set KUBECOST_API_KEY
-    2. Apptio OpenToken — set KUBECOST_OPEN_TOKEN and KUBECOST_ENVIRONMENT_ID
-    """
-    headers: dict[str, str] = {"User-Agent": "Kubecost-MCPServer/demo"}
-    open_token = os.environ.get("KUBECOST_OPEN_TOKEN")
-    if open_token:
-        headers["apptio-opentoken"] = open_token
-        env_id = os.environ.get("KUBECOST_ENVIRONMENT_ID")
-        if env_id:
-            headers["apptio-current-environment"] = env_id
-        logger.debug(f"Using KUBECOST_OPEN_TOKEN authentication for environment {env_id}")
-    return headers
 
 
 def _get_auth() -> tuple[str, str] | None:
@@ -148,14 +136,13 @@ async def get(path: str, params: dict[str, Any] | None = None) -> Any:
     base_url = _get_base_url()
     url = f"{base_url}{path}"
     auth = _get_auth()
-    headers = _get_auth_headers()
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.get(
             url,
             params=params,
             auth=auth,
-            headers=headers,
+            headers={"User-Agent": "Kubecost-MCPServer"},
         )
 
     if response.status_code >= 400:
@@ -163,6 +150,7 @@ async def get(path: str, params: dict[str, Any] | None = None) -> Any:
             status_code=response.status_code,
             message=response.text,
             url=url,
+            path=path,
         )
 
     try:
@@ -199,12 +187,9 @@ async def post(path: str, json: dict[str, Any] | None = None, params: dict[str, 
     base_url = _get_base_url()
     url = f"{base_url}{path}"
     auth = _get_auth()
-    headers = _get_auth_headers()
 
-    if not auth and "apptio-opentoken" not in headers:
-        raise ValueError(
-            "No authentication configured. Set KUBECOST_API_KEY or KUBECOST_OPEN_TOKEN environment variable."
-        )
+    if not auth:
+        raise ValueError("No authentication configured. Set KUBECOST_API_KEY environment variable.")
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         response = await client.post(
@@ -212,7 +197,7 @@ async def post(path: str, json: dict[str, Any] | None = None, params: dict[str, 
             json=json,
             params=params,
             auth=auth,
-            headers=headers,
+            headers={"User-Agent": "Kubecost-MCPServer"},
         )
 
     if response.status_code >= 400:
@@ -220,6 +205,7 @@ async def post(path: str, json: dict[str, Any] | None = None, params: dict[str, 
             status_code=response.status_code,
             message=response.text,
             url=url,
+            path=path,
         )
 
     return response.json()
