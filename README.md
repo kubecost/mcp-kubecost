@@ -1,67 +1,85 @@
-# Kubecost FinOps MCP Server
+# Kubecost FinOps MCP Server<!-- omit in toc -->
 
-Business-first MCP server built with FastMCP 3.4+ for FinOps analytics on Kubecost data.
+A read-only MCP server that connects your AI assistant to [Kubecost](https://www.kubecost.com/) so you can ask natural-language questions about Kubernetes cloud costs and savings — no dashboards, no SQL.
 
-## What This Server Provides
+- [Who This Is For](#who-this-is-for)
+- [What You Can Ask](#what-you-can-ask)
+  - [Cost visibility](#cost-visibility)
+  - [Savings opportunities](#savings-opportunities)
+- [What's Included](#whats-included)
+- [Quick Start](#quick-start)
 
-- Three FinOps tools for Kubernetes workload cost analysis and container rightsizing recommendations.
-- Reusable prompts for executive reporting, showback, cost exploration, and savings workflows.
-- Reference resources for Kubecost query parameters, cost fields, and sizing presets.
-- Dual runtime support: STDIO (local/desktop) and Streamable HTTP (service deployment).
+## Who This Is For
 
-## Project Structure
+- **FinOps Practictioners** who want to answer questions about their Kubernetes costs and savings with natural language questions.
+- **Engineering managers** who need spend summaries and savings reports on demand.
+- **Platform engineers** who want cost visibility in their IDE or AI chats without switching to the Kubecost UI.
 
-- `src/mcp_kubecost/server.py` — MCP composition root and HTTP custom routes (`/version`, `/reports`).
-- `src/mcp_kubecost/client.py` — Async httpx client for the Kubecost API.
-- `src/mcp_kubecost/tools/kubecost_tools.py` — Tool handlers, inline prompts, and schema resources.
-- `src/mcp_kubecost/skills/` — Workflow guidance prompts (cost allocation, optimization).
-- `src/mcp_kubecost/domain/kubecost/` — CSV parsing, aggregation, and sizing guidance.
-- `src/mcp_kubecost/config/` — Environment-backed settings.
-- `k8s/` — Kubernetes deployment manifests.
-- `scripts/` — Pre-commit hooks and repo safety checks.
+> [!NOTE]
+> As of version 1.x, the server is read-only. It never modifies your cluster or Kubecost configuration.
 
-## Setup (uv)
+## What You Can Ask
 
-1. Create and sync environment:
+### Cost visibility
 
-   ```bash
-   uv venv .venv
-   uv sync --extra dev
-   ```
+- "What are my top 10 most expensive namespaces over the last 30 days?"
 
-2. Copy [`.env.example`](.env.example) to `.env` and configure:
+- "Show me CPU and memory costs per cluster for this month."
 
-   **Kubecost API auth** (used by `client.py`):
+- "Which pods are driving the most spend in the `production` namespace?"
 
-   - `KUBECOST_BASE_URL=https://your-kubecost-host` — defaults to the demo host if unset
-   - `KUBECOST_API_KEY=...` — basic auth (API key mode)
-   - Or Apptio OpenToken: `KUBECOST_OPEN_TOKEN=...` and `KUBECOST_ENVIRONMENT_ID=...`
+- "Give me a daily cost trend broken down by namespace for the last two weeks."
 
-   **Server config:**
+### Savings opportunities
 
-   - `MCP_SERVER_NAME=Kubecost FinOps MCP` — display name in MCP clients
-   - `MCP_KUBECOST_BASE_URL=https://your-mcp-host` — required in HTTP mode so tools generate clickable CSV download links
-   - `TOON_ENABLED=false` — disable TOON serialization and return plain JSON (default: `true`)
+- "Where can I save the most money in my cluster right now?"
 
-## Run
+- "Which containers are over-provisioned and by how much?"
 
-**STDIO** (local/desktop):
+- "Show me abandoned workloads — pods that are running but appear idle."
 
-```bash
-uv run python -m mcp_kubecost.server
-# or
-uv run mcp-kubecost
-# or
-uv run fastmcp run fastmcp.json
-```
+- "Which PersistentVolumeClaims are significantly over-provisioned?"
 
-**HTTP** (service deployment, port 3030):
+- "Are there any PersistentVolumes with no PVC binding that I can delete?"
 
-```bash
-uv run fastmcp run fastmcp-docker.json
-```
+- "What would I save if I right-sized my node groups?"
 
-Example Cursor/client config for the public demo:
+- "Which namespaces have resource quotas that are too loose or missing entirely?"
+
+## What's Included
+
+**10 tools** — all read-only, all structured for LLM consumption:
+
+| Tool | What it answers |
+|------|----------------|
+| `kubecost_list_windows` | Available time windows for cost queries |
+| `get_kubecost_workload_costs` | Spend by cluster, namespace, pod, label, or any combination |
+| `get_savings_overview` | All Kubecost savings categories ranked by estimated monthly savings |
+| `get_container_savings_recommendations` | CPU/RAM rightsizing recommendations with conservative/balanced/aggressive presets |
+| `get_abandoned_workloads` | Running pods with near-zero network traffic (idle waste) |
+| `get_pv_sizing_recommendations` | Over-provisioned PersistentVolumeClaims |
+| `get_local_disk_savings` | Underutilized node-local disks |
+| `get_unclaimed_volumes` | PersistentVolumes with no PVC binding |
+| `get_cluster_rightsizing_recommendations` | Node group scale-in and instance type change recommendations |
+| `get_resource_quota_recommendations` | Namespace ResourceQuota right-sizing |
+
+**Guided prompts** — step-by-step workflows your assistant can follow:
+
+- `explore_costs` — Interactive cost exploration wizard
+- `top_spenders` — Top cost drivers by cluster and namespace
+- `cost_trend` — Daily cost trend analysis
+- `explore_container_savings` — Container rightsizing walkthrough
+- `container_rightsizing_guide` — Methodology guide for CPU vs memory sizing
+- `explore_abandoned_workloads` — Abandoned workload investigation workflow
+
+**Skills** — high-level guidance prompts for common FinOps workflows:
+
+- `kubecost_cost_allocation` — Kubernetes cost visibility workflows
+- `optimization` — Savings investigation and rightsizing workflows
+
+## Quick Start
+
+**Point at the public demo** (no credentials needed):
 
 ```json
 {
@@ -74,38 +92,4 @@ Example Cursor/client config for the public demo:
 }
 ```
 
-## Docker / Kubernetes
-
-```bash
-just docker-build-load      # build image locally
-just docker-build-push      # bump version, push to ECR
-just update-mcp-kubecost    # kubectl apply deployment
-```
-
-The Docker image runs `fastmcp run fastmcp-docker.json` on port 3030. Demo ingress: `mcp.demo.kubecost.cloud`.
-
-## Quality Checks
-
-- Format: `uv run ruff format .`
-- Lint: `uv run ruff check . --fix`
-- Tests: `uv run pytest` — MCP contract and tool behavior tests in `tests/`
-
-See [README-pre-commit.md](README-pre-commit.md) for local vs CI pre-commit hook tiers.
-
-## FinOps Writing Tone Guide
-
-- Prioritize financial outcomes and decision support over implementation details.
-- Always disclose whether idle cost is included in any reported spend.
-- Use language appropriate for finance, platform, and engineering leadership audiences.
-- Include impact, confidence, and recommended next actions in summaries.
-
-## For AI Coding Agents
-
-See [AGENTS.md](AGENTS.md) for architecture, conventions, and development workflow.
-
-## Security and Repository Safety
-
-- Never hardcode credentials; use environment variables only.
-- Do not commit `.env` files or token files.
-- Large files are blocked in CI if they exceed configured thresholds.
-- CI includes a lightweight secret-pattern and large-file safety check.
+See [DEVELOPMENT.md](DEVELOPMENT.md) for build, test, and deployment instructions.

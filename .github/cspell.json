@@ -76,7 +76,18 @@
         "lookback",
         "statefulset",
         "daemonset",
-        "nullglob"
+        "nullglob",
+        "PVC",
+        "PVCs",
+        "unclaimed",
+        "resizing",
+        "rightsizing",
+        "gp3",
+        "gp2",
+        "GCP",
+        "turbonomic",
+        "ROSA",
+        "aggregator"
     ],
     "ignorePaths": [
         "**/__tests__/**",

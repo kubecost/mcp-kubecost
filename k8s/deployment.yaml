@@ -25,7 +25,7 @@ spec:
         runAsNonRoot: true
       containers:
         - name: mcp-kubecost
-          image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:0.2.5
+          image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:0.2.10
           imagePullPolicy: IfNotPresent
           env:
           - name: MCP_KUBECOST_BASE_URL

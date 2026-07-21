@@ -1,6 +1,8 @@
 # Task Runner
 # https://github.com/casey/just
 
+MCP_CONFIG := "./.bob/mcp.json"
+
 default:
     @just --list
 # Cross-platform sed (works on both Linux and macOS)
@@ -56,8 +58,53 @@ docker-build-push:
     echo ""
     echo "✅ Image pushed to $CONTAINER_IMAGE"
 
+# ── Environment ────────────────────────────────────────────────────────────────
+# Install dependencies and create virtual environment
+setup:
+    uv venv --clear
+    uv sync --all-extras --active
+
+# ── Testing ────────────────────────────────────────────────────────────────────
 test:
     uv run pytest
 
 test-all:
     uv run pytest -m ""
+
+# ── Development Server ─────────────────────────────────────────────────────────
+
+# Start FastMCP dev server with browser inspector UI
+dev:
+    fastmcp dev inspector
+
+# Start FastMCP as HTTP server on port 9000 (for debugging with logs)
+serve:
+    fastmcp run ./fastmcp-http.json
+
+# ── FastMCP CLI ────────────────────────────────────────────────────────────────
+
+# Inspect the MCP server (list tools, prompts, resources)
+inspect:
+    fastmcp inspect
+
+# List all tools and prompts
+list:
+    fastmcp list {{MCP_CONFIG}} --prompts
+
+# Call a tool with no parameters (e.g.: just call kubecost_get_infra_costs)
+call TOOL:
+    fastmcp call {{MCP_CONFIG}} {{TOOL}}
+
+# Call a tool with JSON input (e.g.: just call-json my_tool '{"key": "val"}')
+call-json TOOL INPUT:
+    fastmcp call {{MCP_CONFIG}} {{TOOL}} --input-json '{{INPUT}}'
+
+# ── Client Setup ───────────────────────────────────────────────────────────────
+
+# Install MCP config for Bob (IBM Bob Shell)
+install-bob:
+    fastmcp install mcp-json ./fastmcp.json --project $PWD --env-file .env
+
+# Install MCP config for Claude Desktop
+install-claude:
+    fastmcp install claude-desktop ./fastmcp.json --project $PWD --env-file .env

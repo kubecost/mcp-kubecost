@@ -27,14 +27,13 @@ Use the existing `.venv` when running Python commands. Run `ruff format` and `is
 |--------|----------|
 | New MCP tool, prompt, or resource | [`src/mcp_kubecost/tools/kubecost_tools.py`](src/mcp_kubecost/tools/kubecost_tools.py) |
 | Workflow guidance prompt (skill) | New module under [`src/mcp_kubecost/skills/`](src/mcp_kubecost/skills/), register in [`skills/__init__.py`](src/mcp_kubecost/skills/__init__.py) |
-| CSV parsing / sizing logic | [`src/mcp_kubecost/domain/kubecost/`](src/mcp_kubecost/domain/kubecost/) |
 | HTTP client / auth | [`src/mcp_kubecost/client.py`](src/mcp_kubecost/client.py) |
 | HTTP custom routes (`/version`, `/reports`) | [`server.py`](src/mcp_kubecost/server.py) |
 | Env-backed settings | [`src/mcp_kubecost/config/settings.py`](src/mcp_kubecost/config/settings.py) |
 
 **Pattern A for tools:** thin handler → `client.get()` → domain helpers. Do not create separate `prompts/`, `resources/`, or `api/` packages unless deliberately refactoring.
 
-Current MCP surface: 3 tools (`kubecost_list_windows`, `get_kubecost_workload_costs`, `get_container_savings_recommendations`), inline prompts/resources in `kubecost_tools.py`, and 2 skills in `skills/`.
+Current MCP surface: 10 tools (`kubecost_list_windows`, `get_kubecost_workload_costs`, `get_container_savings_recommendations`, `get_abandoned_workloads`, `get_savings_overview`, `get_pv_sizing_recommendations`, `get_local_disk_savings`, `get_cluster_rightsizing_recommendations`, `get_unclaimed_volumes`, `get_resource_quota_recommendations`), inline prompts/resources in `kubecost_tools.py`, and 2 skills in `skills/`.
 
 ## Response Limits Pattern
 
@@ -78,27 +77,19 @@ Two naming schemes exist today. Do not add a third without a dedicated unificati
 |----------------------------|------------------------------------------|
 | `KUBECOST_BASE_URL` | `KUBECOST_BASE_URL` |
 | `KUBECOST_API_KEY` | `KUBECOST_API_KEY` |
-| `KUBECOST_OPEN_TOKEN` | — |
-| `KUBECOST_ENVIRONMENT_ID` | — |
-
-HTTP-only:
-
-- `MCP_KUBECOST_BASE_URL` — base URL for CSV download links in [`utils.py`](src/mcp_kubecost/utils.py)
-- `CLDY_MCP_LOCAL_VERSION` — returned by the `/version` endpoint
 
 See [`.env.example`](.env.example) for a copy-paste template.
 
 ## Transport / Local Verification
 
 - **STDIO:** `uv run python -m mcp_kubecost.server` or `uv run fastmcp run fastmcp.json`
-- **HTTP:** `uv run fastmcp run fastmcp-docker.json` (port 3030; matches Docker CMD)
+- **HTTP:** `uv run fastmcp run fastmcp-http.json` (port 3030; matches Docker CMD)
 
 There is no `run_http()` helper — use the FastMCP config files above.
 
 ## Boundaries
 
 - Never commit `.env`, tokens, or secrets
-- Never inline large CSV blobs in tool responses — use download URLs
 - Do not reintroduce removed tools (`kubecost_get_cluster_cost_by_workload`, `kubecost_get_infra_costs`, `list_container_clusters`, `kubecost_get_request_sizing`)
 - Only create git commits when explicitly asked
 

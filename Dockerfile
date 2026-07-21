@@ -31,4 +31,4 @@ RUN uv sync --locked \
 USER 1001
 EXPOSE 3030
 
-CMD ["uv", "run", "fastmcp", "run", "fastmcp-docker.json"]
+CMD ["uv", "run", "fastmcp", "run", "fastmcp-http.json"]
