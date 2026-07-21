@@ -11,7 +11,7 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
 
 ## Who This Is For
 
-- **FinOps Practictioners** who want to answer questions about their Kubernetes costs and savings with natural language questions.
+- **FinOps Practitioners** who want to answer questions about their Kubernetes costs and savings with natural language questions.
 - **Engineering managers** who need spend summaries and savings reports on demand.
 - **Platform engineers** who want cost visibility in their IDE or AI chats without switching to the Kubecost UI.
 
