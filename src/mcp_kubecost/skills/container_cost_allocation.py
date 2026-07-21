@@ -49,17 +49,7 @@ by namespace/service/label, or any workload-level spend breakdown.
 
 ### top_n parameter
 - Controls how many rows appear in the inline summary (default: 15)
-- Full data is always available via the CSV download link
 
-## Presentation
-- The tool returns an Executive Summary with a summary CSV and a full CSV download link
-- Always render the summary CSV as a bar chart (comparisons) or line chart (trends)
-- Always show the 'Download CSV' link — never open or display the raw CSV inline
-
-## Do NOT
-- Use `run_cost_report` for Kubernetes costs — use `get_kubecost_workload_costs`
-- Use the old tools `kubecost_get_cluster_cost_by_workload`, `kubecost_get_infra_costs`, \
-`list_container_clusters`, or `kubecost_get_request_sizing` — they have been removed
 """
 
 

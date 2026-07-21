@@ -1,4 +1,4 @@
-"""FastMCP middleware for cldy-mcp-public."""
+"""FastMCP middleware for kubecost-mcp."""
 
 from mcp_kubecost.middleware.toon import ToonMiddleware
 
