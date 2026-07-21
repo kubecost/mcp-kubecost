@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from mcp_kubecost.errors import ConfigError
 
@@ -40,6 +41,15 @@ def _get_required_env(name: str) -> str:
     return value
 
 
+def _get_url_env(name: str) -> str:
+    """Return a required env var that must be an http(s) URL."""
+    value = _get_required_env(name).rstrip("/")
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ConfigError(f"Invalid URL for {name}: {value!r} (expected http(s)://host[...])")
+    return value
+
+
 def _get_int_env(name: str, default: int) -> int:
     raw = os.getenv(name, str(default)).strip()
     try:
@@ -59,10 +69,7 @@ def _get_float_env(name: str, default: float) -> float:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Load and cache settings from environment."""
-    # Default to Kubecost Kubecost API if not specified
-    if not os.getenv("KUBECOST_BASE_URL", "").strip():
-        raise ConfigError("Missing required environment variable: KUBECOST_BASE_URL")
-    kubecost_base_url = os.getenv("KUBECOST_BASE_URL").strip().rstrip("/")
+    kubecost_base_url = _get_url_env("KUBECOST_BASE_URL")
 
     return Settings(
         kubecost_base_url=kubecost_base_url,

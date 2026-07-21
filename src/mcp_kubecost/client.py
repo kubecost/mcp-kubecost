@@ -1,15 +1,12 @@
 """HTTP client for the Kubecost V3 API."""
 
 import logging
-import os
 from typing import Any
 
 import httpx
 
+from mcp_kubecost.config.settings import get_settings
 from mcp_kubecost.errors import ErrorCode, ToolError
-
-# Base URL can be overridden for EU/APAC regions
-DEFAULT_BASE_URL = "https://demo.kubecost.xyz"
 
 logger = logging.getLogger(__name__)
 
@@ -82,15 +79,15 @@ class KubecostClientError(Exception):
 
 
 def _get_base_url() -> str:
-    """Determine the base URL from environment configuration."""
-    base_url = os.environ.get("KUBECOST_BASE_URL", DEFAULT_BASE_URL)
+    """Return the Kubecost base URL from settings."""
+    base_url = get_settings().kubecost_base_url
     logger.debug(f"Base URL: {base_url}")
     return base_url
 
 
 def _get_auth() -> tuple[str, str] | None:
     """Return basic auth tuple if API key is configured."""
-    api_key = os.environ.get("KUBECOST_API_KEY")
+    api_key = get_settings().KUBECOST_API_KEY
     if api_key:
         logger.debug("Using KUBECOST_API_KEY authentication")
         return (api_key, "")
