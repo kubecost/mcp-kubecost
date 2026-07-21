@@ -17,6 +17,12 @@ class Settings:
     kubecost_base_path: str
     kubecost_container_savings_path: str
     kubecost_abandoned_workloads_path: str
+    kubecost_savings_overview_path: str
+    kubecost_pv_sizing_path: str
+    kubecost_local_disks_path: str
+    kubecost_node_group_sizing_path: str
+    kubecost_unclaimed_volumes_path: str
+    kubecost_resource_quota_path: str
     KUBECOST_API_KEY: str | None
     request_timeout_seconds: float
     retry_count: int
@@ -54,7 +60,9 @@ def _get_float_env(name: str, default: float) -> float:
 def get_settings() -> Settings:
     """Load and cache settings from environment."""
     # Default to Kubecost Kubecost API if not specified
-    kubecost_base_url = os.getenv("KUBECOST_BASE_URL", "https://demo.kubecost.xyz").strip().rstrip("/")
+    if not os.getenv("KUBECOST_BASE_URL", "").strip():
+        raise ConfigError("Missing required environment variable: KUBECOST_BASE_URL")
+    kubecost_base_url = os.getenv("KUBECOST_BASE_URL").strip().rstrip("/")
 
     return Settings(
         kubecost_base_url=kubecost_base_url,
@@ -64,6 +72,18 @@ def get_settings() -> Settings:
         ).strip(),
         kubecost_abandoned_workloads_path=os.getenv(
             "KUBECOST_ABANDONED_WORKLOADS_PATH", "/model/savings/abandonedWorkloads"
+        ).strip(),
+        kubecost_savings_overview_path=os.getenv("KUBECOST_SAVINGS_OVERVIEW_PATH", "/model/savings").strip(),
+        kubecost_pv_sizing_path=os.getenv("KUBECOST_PV_SIZING_PATH", "/model/savings/persistentVolumeSizing").strip(),
+        kubecost_local_disks_path=os.getenv("KUBECOST_LOCAL_DISKS_PATH", "/model/savings/localLowDisks").strip(),
+        kubecost_node_group_sizing_path=os.getenv(
+            "KUBECOST_NODE_GROUP_SIZING_PATH", "/model/savings/nodeGroupSizing/recommendations"
+        ).strip(),
+        kubecost_unclaimed_volumes_path=os.getenv(
+            "KUBECOST_UNCLAIMED_VOLUMES_PATH", "/model/savings/unclaimedVolumes"
+        ).strip(),
+        kubecost_resource_quota_path=os.getenv(
+            "KUBECOST_RESOURCE_QUOTA_PATH", "/model/savings/resourceQuotaSizing/recommendations"
         ).strip(),
         KUBECOST_API_KEY=os.getenv("KUBECOST_API_KEY", "").strip() or None,
         request_timeout_seconds=_get_float_env("REQUEST_TIMEOUT_SECONDS", 15.0),
