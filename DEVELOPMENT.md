@@ -78,7 +78,7 @@ uv run fastmcp run fastmcp-http.json
 Run this python script to generate the readme.md file based on the MCP tools and prompts.
 
 ```bash
-just readme-tools 
+just readme-tools
 ```
 
 ## Testing and Quality
