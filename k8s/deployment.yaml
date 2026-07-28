@@ -20,16 +20,16 @@ spec:
         app: mcp-kubecost
     spec:
       securityContext:
-        runAsUser: 1001
-        runAsGroup: 1001
+        runAsUser: 1000
+        runAsGroup: 1000
         runAsNonRoot: true
       containers:
         - name: mcp-kubecost
-          image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:0.2.11
+          image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:0.2.23
           imagePullPolicy: IfNotPresent
           env:
-          - name: MCP_KUBECOST_BASE_URL
-            value: "https://mcp.demo.kubecost.cloud"
+          - name: KUBECOST_BASE_URL
+            value: "https://demo.kubecost.xyz"
           - name: FASTMCP_HTTP_ALLOWED_HOSTS
             value: '["mcp.demo.kubecost.cloud"]'
           - name: TOON_ENABLED
