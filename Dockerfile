@@ -1,34 +1,60 @@
 # syntax=docker/dockerfile:1
 # check=skip=InvalidDefaultArgInFrom
 
-FROM python:3.12-slim
+FROM ghcr.io/astral-sh/uv:trixie-slim AS builder
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
-USER root
+# Omit development dependencies
+ENV UV_NO_DEV=1
 
-# one big layer that patches any fixable CVEs and adds a non-root user
-RUN apt-get update && apt-get upgrade -y \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && python -m pip install --no-cache-dir --upgrade "pip>=26.1.2" \
-    && groupadd --gid 1001 appuser \
-    && useradd --uid 1001 --gid 1001 --create-home --shell /bin/bash appuser
+# Configure the Python directory so it is consistent
+ENV UV_PYTHON_INSTALL_DIR=/python
 
-# Install uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Only use the managed Python version
+ENV UV_PYTHON_PREFERENCE=only-managed
+ENV FASTMCP_SHOW_SERVER_BANNER=false
+
+# Install Python before the project for caching
+RUN uv python install 3.12
 
 WORKDIR /app
-COPY . /app
-# Disable development dependencies
-ENV UV_NO_DEV=1
-ENV PATH="/app/.venv/bin:${PATH}"
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --locked --no-install-project
+COPY src/ fastmcp-http.json /app/src/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    --mount=type=bind,source=README.md,target=README.md \
+    uv sync --locked
 
-RUN uv sync --locked \
-    && chown -R appuser:appuser /app \
-    && chown -R appuser:appuser /home/appuser
+# Then, use a final image without uv
+FROM debian:trixie-slim
 
-# AKP requires number based user, not "appuser"
-USER 1001
+# Setup a non-root user
+RUN groupadd --system --gid 1000 nonroot \
+ && useradd --system --gid 1000 --uid 1000 --create-home nonroot
+
+# Copy the Python version
+COPY --from=builder /python /python
+
+# Copy the application from the builder
+COPY --from=builder --chown=nonroot:nonroot /app /app
+
+# Place executables in the environment at the front of the path
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Keeps Python from buffering stdout and stderr to avoid situations where
+# the application crashes without emitting any logs due to buffering.
+ENV PYTHONUNBUFFERED=1
+
+# Use the non-root user to run our application
+USER nonroot
+
+# Use `/app` as the working directory
+WORKDIR /app
+
 EXPOSE 3030
 
-CMD ["uv", "run", "fastmcp", "run", "fastmcp-http.json"]
+CMD ["fastmcp", "run", "src/fastmcp-http.json", "--skip-env"]
