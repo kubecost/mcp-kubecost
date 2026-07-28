@@ -20,12 +20,12 @@ spec:
         app: mcp-kubecost
     spec:
       securityContext:
-        runAsUser: 1000
-        runAsGroup: 1000
+        runAsUser: 10001
+        runAsGroup: 10001
         runAsNonRoot: true
       containers:
         - name: mcp-kubecost
-          image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:0.2.23
+          image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:0.2.26
           imagePullPolicy: IfNotPresent
           env:
           - name: KUBECOST_BASE_URL
@@ -47,7 +47,7 @@ spec:
               memory: "1Gi"
           securityContext:
             allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false
+            readOnlyRootFilesystem: true
             capabilities:
               drop:
               - ALL
