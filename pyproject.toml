@@ -5,7 +5,7 @@ description = "FinOps-first MCP server for Kubecost analytics."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "fastmcp>=3.4.0,<4",
+  "fastmcp>=3.4.5,<4",
   "httpx>=0.28.1",
   "python-dotenv>=1.2.2",
   "py-toon-format>=0.1.0",
