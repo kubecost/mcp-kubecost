@@ -352,7 +352,7 @@ def _classify_comparison_window(window: str, field_name: str) -> tuple[str, Any]
         except ValueError:
             raise_tool_error(
                 ErrorCode.INVALID_INPUT,
-                message=f"{field_name}='{window}' contains an unparseable RFC3339 timestamp.",
+                message=f"{field_name}='{window}' contains an invalid RFC3339 timestamp.",
                 retryable=False,
                 suggested_action=(
                     f"Provide {field_name} as 'lastweek', 'lastmonth', or an RFC3339 range "
