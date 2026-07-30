@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 # Re-export so callers that need to catch McpToolError can import it from here
 # rather than depending on fastmcp.exceptions directly.
 __all__ = [
+    "DEFAULT_WINDOW",
+    "MIN_QUANTILE_WINDOW",
     "BaseToolResponse",
     "McpToolError",
     "QueryStatus",
@@ -40,14 +42,50 @@ __all__ = [
     "call_post_api",
     "extract_list",
     "format_tool_error",
+    "parse_window_days",
     "raise_tool_error",
     "safe_path_segment",
     "summarize_exception",
     "validate_response",
 ]
 
+# Default query window used by all tools unless the caller overrides it.
+DEFAULT_WINDOW: str = "15d"
+
+# Quantile algorithms (quantileOfAverages, quantileOfMaxes) require enough
+# data points for a meaningful distribution. Enforce at least this many days.
+MIN_QUANTILE_WINDOW: str = "15d"
+
 # Cap message size so a misbehaving upstream cannot blow up token usage.
 _MAX_ERROR_MESSAGE_CHARS = 500
+
+# Named windows with a fixed, unambiguous day count.
+_NAMED_WINDOW_DAYS: dict[str, int] = {
+    "1d": 1,
+    "3d": 3,
+    "7d": 7,
+    "15d": 15,
+    "30d": 30,
+    "60d": 60,
+    "90d": 90,
+}
+
+
+def parse_window_days(window: str) -> int | None:
+    """Return the number of days represented by *window*, or ``None`` if unknown.
+
+    Handles simple ``"Nd"`` patterns (e.g. ``"7d"``, ``"15d"``).  Returns
+    ``None`` for calendar aliases (``"month"``, ``"week"``, etc.) and RFC3339
+    ranges — these cannot be reliably compared without a reference timestamp and
+    are assumed to satisfy any minimum-day requirement.
+    """
+    lower = window.strip().lower()
+    if lower in _NAMED_WINDOW_DAYS:
+        return _NAMED_WINDOW_DAYS[lower]
+    # Support arbitrary "Nd" patterns not in the lookup table.
+    if lower.endswith("d") and lower[:-1].isdigit():
+        return int(lower[:-1])
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +215,7 @@ def _handle_call_failure(exc: Exception, path: str) -> NoReturn:
             ErrorCode.CONFIGURATION_ERROR,
             str(exc),
             retryable=False,
-            suggested_action=("Set KUBECOST_API_KEY or KUBECOST_OPEN_TOKEN in the environment."),
+            suggested_action=("Set KUBECOST_API_KEY in the environment."),
         )
     logger.exception("Unexpected error calling Kubecost API path %s", path)
     raise_tool_error(

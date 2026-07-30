@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from mcp_kubecost.errors import ConfigError
 
@@ -17,6 +18,12 @@ class Settings:
     kubecost_base_path: str
     kubecost_container_savings_path: str
     kubecost_abandoned_workloads_path: str
+    kubecost_savings_overview_path: str
+    kubecost_pv_sizing_path: str
+    kubecost_local_disks_path: str
+    kubecost_node_group_sizing_path: str
+    kubecost_unclaimed_volumes_path: str
+    kubecost_resource_quota_path: str
     KUBECOST_API_KEY: str | None
     request_timeout_seconds: float
     retry_count: int
@@ -31,6 +38,15 @@ def _get_required_env(name: str) -> str:
     value = os.getenv(name, "").strip()
     if not value:
         raise ConfigError(f"Missing required environment variable: {name}")
+    return value
+
+
+def _get_url_env(name: str) -> str:
+    """Return a required env var that must be an http(s) URL."""
+    value = _get_required_env(name).rstrip("/")
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ConfigError(f"Invalid URL for {name}: {value!r} (expected http(s)://host[...])")
     return value
 
 
@@ -53,8 +69,7 @@ def _get_float_env(name: str, default: float) -> float:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Load and cache settings from environment."""
-    # Default to Kubecost Kubecost API if not specified
-    kubecost_base_url = os.getenv("KUBECOST_BASE_URL", "https://demo.kubecost.xyz").strip().rstrip("/")
+    kubecost_base_url = _get_url_env("KUBECOST_BASE_URL")
 
     return Settings(
         kubecost_base_url=kubecost_base_url,
@@ -65,10 +80,22 @@ def get_settings() -> Settings:
         kubecost_abandoned_workloads_path=os.getenv(
             "KUBECOST_ABANDONED_WORKLOADS_PATH", "/model/savings/abandonedWorkloads"
         ).strip(),
+        kubecost_savings_overview_path=os.getenv("KUBECOST_SAVINGS_OVERVIEW_PATH", "/model/savings").strip(),
+        kubecost_pv_sizing_path=os.getenv("KUBECOST_PV_SIZING_PATH", "/model/savings/persistentVolumeSizing").strip(),
+        kubecost_local_disks_path=os.getenv("KUBECOST_LOCAL_DISKS_PATH", "/model/savings/localLowDisks").strip(),
+        kubecost_node_group_sizing_path=os.getenv(
+            "KUBECOST_NODE_GROUP_SIZING_PATH", "/model/savings/nodeGroupSizing/recommendations"
+        ).strip(),
+        kubecost_unclaimed_volumes_path=os.getenv(
+            "KUBECOST_UNCLAIMED_VOLUMES_PATH", "/model/savings/unclaimedVolumes"
+        ).strip(),
+        kubecost_resource_quota_path=os.getenv(
+            "KUBECOST_RESOURCE_QUOTA_PATH", "/model/savings/resourceQuotaSizing/recommendations"
+        ).strip(),
         KUBECOST_API_KEY=os.getenv("KUBECOST_API_KEY", "").strip() or None,
         request_timeout_seconds=_get_float_env("REQUEST_TIMEOUT_SECONDS", 15.0),
         retry_count=_get_int_env("REQUEST_RETRY_COUNT", 2),
-        default_window=os.getenv("DEFAULT_WINDOW", "7d").strip(),
+        default_window=os.getenv("DEFAULT_WINDOW", "15d").strip(),
         http_host=os.getenv("MCP_HTTP_HOST", "127.0.0.1").strip(),
         http_port=_get_int_env("MCP_HTTP_PORT", 8000),
         show_banner=False,

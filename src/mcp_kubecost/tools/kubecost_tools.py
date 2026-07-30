@@ -1,8 +1,10 @@
 """Kubecost allocation & savings tools.
 
-Returns fully-typed Pydantic structured output — no CSV files, no in-memory
-resource store.  Rows are returned directly in the response payload; large
-result sets are paged via the ``next_cursor`` / ``cursor`` pattern.
+Returns fully-typed Pydantic structured output — no in-memory
+resource store. Rows are returned directly in the response payload; large
+result sets are bounded via a ``top_n`` parameter with a ``truncated`` flag
+(client-side sort+slice), or true server-side ``limit``/``offset`` pagination
+where the upstream API supports it (e.g. ``get_resource_quota_recommendations``).
 
 Contract version: 3.0
 """
@@ -10,8 +12,9 @@ Contract version: 3.0
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
@@ -28,18 +31,32 @@ from mcp_kubecost.domain.kubecost.sizing_guidance import (
     format_presets_resource,
     resolve_sizing_params,
 )
-from mcp_kubecost.tools._common import BaseToolResponse, McpToolError, QueryStatus, call_get_api
+from mcp_kubecost.errors import ErrorCode
+from mcp_kubecost.tools._common import (
+    DEFAULT_WINDOW,
+    MIN_QUANTILE_WINDOW,
+    BaseToolResponse,
+    McpToolError,
+    QueryStatus,
+    call_get_api,
+    parse_window_days,
+    raise_tool_error,
+)
 
 logger = logging.getLogger(__name__)
 
 _VERSION = "3.0"
 
-_READ_ONLY = ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=True,
-)
+
+def _read_only(title: str) -> ToolAnnotations:
+    return ToolAnnotations(
+        title=title,
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=True,
+    )
+
 
 # ---------------------------------------------------------------------------
 # UI constants
@@ -57,6 +74,7 @@ _AGGREGATE_CHOICES = {
 
 _WINDOW_CHOICES = {
     "7d": "Last 7 days",
+    "15d": "Last 15 days",
     "30d": "Last 30 days",
     "90d": "Last 90 days",
     "today": "Today",
@@ -89,7 +107,8 @@ Reply with your preferences (e.g. "No to both", "Yes to undersized, No to trivia
 
 _CONTAINER_SAVINGS_WINDOW_CLARIFICATION = f"""\
 15 days is used by default.
-When using quantiles, a minimum number of data points (15 days) is needed for meaningful calculations.
+When using quantileOfAverages or quantileOfMaxes, a minimum of 15 days is REQUIRED and enforced — \
+passing a shorter window will raise an error. Use 15d, 30d, 90d or an RFC3339 range spanning ≥ 15 days.
 
 When using Max, the only requirement is a window of 1 day or more.
 1d, 3d, 7d, 15d, 30d or an RFC3339 range. {_WINDOW_RFC3339_NOTE}
@@ -258,10 +277,259 @@ def _aggregate_by_dimensions(rows: list[dict], dimension_cols: list[str]) -> lis
 
 
 # ---------------------------------------------------------------------------
+# Cost comparison window validation & diffing (get_kubecost_cost_comparison)
+# ---------------------------------------------------------------------------
+
+# Bare relative windows ("7d", "15d", ...) are resolved by Kubecost relative to
+# "now", so they always include a partial current day. Reject these for
+# period-over-period comparisons since the partial day skews the diff.
+_BARE_RELATIVE_WINDOW = re.compile(r"^\d+d$")
+
+# Calendar-relative aliases that also resolve relative to "now" and therefore
+# include a partial current period.
+_REJECTED_RELATIVE_ALIASES: frozenset[str] = frozenset({"today", "week", "month"})
+
+# Fixed calendar-period aliases — safe to use for comparisons since they never
+# include the current (in-progress) period.
+_ACCEPTED_COMPARISON_ALIASES: frozenset[str] = frozenset({"lastweek", "lastmonth"})
+
+
+def _classify_comparison_window(window: str, field_name: str) -> tuple[str, Any]:
+    """Classify a comparison window as ('alias', name) or ('rfc3339', (start, end)).
+
+    Raises a structured ToolError for any window that is unsuitable for a
+    period-over-period comparison (see module docstring rules).
+    """
+    raw = (window or "").strip()
+    lower = raw.lower()
+
+    if _BARE_RELATIVE_WINDOW.match(lower):
+        raise_tool_error(
+            ErrorCode.INVALID_INPUT,
+            message=(
+                f"{field_name}='{window}' is a bare relative window. Kubecost resolves windows like "
+                "'7d' relative to 'now', so they always include a partial current day and skew a diff."
+            ),
+            retryable=False,
+            suggested_action=(
+                f"Use 'lastweek' or 'lastmonth' for {field_name}, or an explicit RFC3339 range "
+                "(e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z') that ends before today."
+            ),
+        )
+
+    if lower in _REJECTED_RELATIVE_ALIASES:
+        raise_tool_error(
+            ErrorCode.INVALID_INPUT,
+            message=(
+                f"{field_name}='{window}' resolves relative to 'now' and includes a partial current period, "
+                "which skews a diff."
+            ),
+            retryable=False,
+            suggested_action=(
+                f"Use 'lastweek' or 'lastmonth' for {field_name}, or an explicit RFC3339 range that ends before today."
+            ),
+        )
+
+    if lower in _ACCEPTED_COMPARISON_ALIASES:
+        return "alias", lower
+
+    if "," in raw:
+        parts = [p.strip() for p in raw.split(",")]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message=f"{field_name}='{window}' is not a valid RFC3339 range. Expected 'start,end'.",
+                retryable=False,
+                suggested_action=(
+                    f"Provide {field_name} as 'lastweek', 'lastmonth', or an RFC3339 range "
+                    "e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z'."
+                ),
+            )
+        start_str, end_str = parts
+        try:
+            start = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+            end = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+        except ValueError:
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message=f"{field_name}='{window}' contains an invalid RFC3339 timestamp.",
+                retryable=False,
+                suggested_action=(
+                    f"Provide {field_name} as 'lastweek', 'lastmonth', or an RFC3339 range "
+                    "e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z'."
+                ),
+            )
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=UTC)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=UTC)
+        if end <= start:
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message=f"{field_name}='{window}' has an end timestamp that is not after the start.",
+                retryable=False,
+                suggested_action=f"Provide {field_name} as 'start,end' with end after start.",
+            )
+        today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        if end > today_start:
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message=(
+                    f"{field_name}='{window}' extends into today (end={end.isoformat()}), which includes "
+                    "partial/incomplete data and skews a diff."
+                ),
+                retryable=False,
+                suggested_action=(
+                    f"Provide {field_name} with an end timestamp at or before {today_start.isoformat()} "
+                    "(the start of today, UTC)."
+                ),
+            )
+        return "rfc3339", (start, end)
+
+    raise_tool_error(
+        ErrorCode.INVALID_INPUT,
+        message=(
+            f"{field_name}='{window}' is not a supported comparison window. Bare relative windows "
+            "('7d', 'today', 'week', 'month') are rejected because they include a partial current period."
+        ),
+        retryable=False,
+        suggested_action=(
+            f"Provide {field_name} as 'lastweek', 'lastmonth', or an RFC3339 range "
+            "e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z'."
+        ),
+    )
+
+
+def _validate_comparison_windows(current_window: str, baseline_window: str) -> None:
+    """Validate that current_window and baseline_window are comparable.
+
+    Enforces (raising a structured ToolError on any violation):
+    - Neither window may be a bare relative window ('Nd', 'today', 'week', 'month').
+    - Both windows must be the same 'type': either the identical fixed-calendar
+      alias ('lastweek'/'lastweek' or 'lastmonth'/'lastmonth'), or two RFC3339
+      ranges of identical duration.
+    - RFC3339 ranges must not extend into today (partial data).
+    """
+    current_kind, current_value = _classify_comparison_window(current_window, "current_window")
+    baseline_kind, baseline_value = _classify_comparison_window(baseline_window, "baseline_window")
+
+    if current_kind != baseline_kind:
+        raise_tool_error(
+            ErrorCode.INVALID_INPUT,
+            message=(
+                f"current_window and baseline_window must be the same type of window "
+                f"(got {current_kind}='{current_window}' vs {baseline_kind}='{baseline_window}')."
+            ),
+            retryable=False,
+            suggested_action=(
+                "Use matching aliases (e.g. both 'lastweek') or two RFC3339 ranges of equal duration for both windows."
+            ),
+        )
+
+    if current_kind == "alias":
+        if current_value != baseline_value:
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message=(
+                    f"current_window='{current_window}' and baseline_window='{baseline_window}' are "
+                    "different calendar aliases and are not equal-length comparable periods."
+                ),
+                retryable=False,
+                suggested_action="Use the same alias for both windows, or switch to explicit RFC3339 ranges.",
+            )
+    else:
+        current_start, current_end = current_value
+        baseline_start, baseline_end = baseline_value
+        if (current_end - current_start) != (baseline_end - baseline_start):
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message=(
+                    f"current_window='{current_window}' and baseline_window='{baseline_window}' have "
+                    "different durations and cannot be diffed as equal-length periods."
+                ),
+                retryable=False,
+                suggested_action="Adjust one of the RFC3339 ranges so both windows span the same duration.",
+            )
+
+
+def _diff_allocation_rows(
+    current_rows: list[dict[str, Any]],
+    baseline_rows: list[dict[str, Any]],
+    dimension_cols: list[str],
+) -> list[dict[str, Any]]:
+    """Join current and baseline aggregated allocation rows on their dimension tuple.
+
+    Returns one dict per dimension key present in either input, each with the
+    dimension values, ``current_cost``, ``baseline_cost``, ``change``
+    (current - baseline), and ``pct_change`` (None when baseline_cost is 0,
+    in which case the row is also flagged with ``is_new=True``). Sorted by
+    absolute ``change`` descending.
+    """
+
+    def _key(row: dict[str, Any]) -> tuple:
+        return tuple(row.get(dim, "") for dim in dimension_cols)
+
+    current_by_key: dict[tuple, dict[str, Any]] = {_key(r): r for r in current_rows}
+    baseline_by_key: dict[tuple, dict[str, Any]] = {_key(r): r for r in baseline_rows}
+
+    all_keys = set(current_by_key) | set(baseline_by_key)
+    diffed: list[dict[str, Any]] = []
+
+    for key in all_keys:
+        current_row = current_by_key.get(key)
+        baseline_row = baseline_by_key.get(key)
+
+        current_cost = float((current_row or {}).get("totalCost", 0) or 0)
+        baseline_cost = float((baseline_row or {}).get("totalCost", 0) or 0)
+        change = current_cost - baseline_cost
+
+        is_new = baseline_cost == 0
+        pct_change: float | None = None
+        if not is_new:
+            pct_change = round((change / baseline_cost) * 100, 2)
+
+        source_row = current_row or baseline_row or {}
+        row: dict[str, Any] = {dim: source_row.get(dim, "") for dim in dimension_cols}
+        row.update(
+            {
+                "current_cost": _format_number(current_cost),
+                "baseline_cost": _format_number(baseline_cost),
+                "change": _format_number(change),
+                "pct_change": pct_change,
+                "is_new": is_new,
+            }
+        )
+        diffed.append(row)
+
+    diffed.sort(key=lambda r: abs(float(r.get("change", 0) or 0)), reverse=True)
+    return diffed
+
+
+# ---------------------------------------------------------------------------
 # Container savings parsing
 # ---------------------------------------------------------------------------
 
 _SAVINGS_API_FETCH_LIMIT = 1000  # Maximum rows to request from the Kubecost API per call
+
+# Algorithms that require a minimum window of MIN_QUANTILE_WINDOW days.
+_QUANTILE_ALGORITHMS: frozenset[str] = frozenset({"quantileofaverages", "quantileofmaxes"})
+
+
+def _cap_raw_rows(rows: list[dict[str, Any]], resource: str) -> tuple[list[dict[str, Any]], bool]:
+    """Defensively cap an upstream row list for endpoints with no server-side limit/offset support.
+
+    Returns (capped_rows, was_capped) so callers can propagate the truncation signal.
+    """
+    if len(rows) > _SAVINGS_API_FETCH_LIMIT:
+        logger.warning(
+            "Kubecost returned %d %s rows; truncating to %d before processing.",
+            len(rows),
+            resource,
+            _SAVINGS_API_FETCH_LIMIT,
+        )
+        return rows[:_SAVINGS_API_FETCH_LIMIT], True
+    return rows, False
+
 
 SAVINGS_AGGREGATE_OPTIONS: tuple[str, ...] = ("containerName", "namespace", "clusterID")
 
@@ -681,6 +949,208 @@ class ContainerSavingsResponse(BaseToolResponse):
     )
 
 
+# ---------------------------------------------------------------------------
+# New savings response models (Sub-Tasks 2–7)
+# ---------------------------------------------------------------------------
+
+
+class SavingsCategory(BaseModel):
+    """One savings category from GET /model/savings."""
+
+    key: str = Field(description="Kubecost savings category key (e.g. 'nodeGroupSizing').")
+    savings_per_month: float = Field(default=0.0, description="Estimated monthly savings (USD).")
+    last_refresh: str = Field(default="", description="ISO-8601 timestamp of the last data refresh.")
+    drill_down_tool: str | None = Field(default=None, description="MCP tool name to call for detailed recommendations.")
+
+
+class SavingsOverviewResponse(BaseToolResponse):
+    """Response for get_savings_overview."""
+
+    categories: list[SavingsCategory] = Field(
+        default_factory=list, description="All savings categories, ranked by savings_per_month."
+    )
+    total_savings_per_month: float = Field(
+        default=0.0, description="Sum of savings_per_month across all categories (USD)."
+    )
+    category_count: int = Field(default=0, description="Number of categories returned.")
+
+
+class PVSizingRow(BaseModel):
+    """One PVC right-sizing recommendation."""
+
+    volume_name: str = Field(default="", description="PersistentVolume name.")
+    claim_name: str = Field(default="", description="PersistentVolumeClaim name.")
+    claim_namespace: str = Field(default="", description="Namespace of the PVC.")
+    cluster_id: str = Field(default="", description="Kubecost cluster ID.")
+    max_usage_bytes: int = Field(default=0, description="Maximum observed usage in bytes.")
+    average_usage_bytes: int = Field(default=0, description="Average observed usage in bytes.")
+    recommended_capacity_bytes: int = Field(default=0, description="Recommended capacity in bytes.")
+    recommended_cost_monthly: float = Field(
+        default=0.0, description="Estimated monthly cost at recommended size (USD)."
+    )
+    current_capacity_bytes: int = Field(default=0, description="Current provisioned capacity in bytes.")
+    current_cost_monthly: float = Field(default=0.0, description="Current monthly cost (USD).")
+    savings_monthly: float = Field(default=0.0, description="Estimated monthly savings if resized (USD).")
+    storage_class: str = Field(default="", description="StorageClass name.")
+
+
+class PVSizingResponse(BaseToolResponse):
+    """Response for get_pv_sizing_recommendations."""
+
+    rows: list[PVSizingRow] = Field(default_factory=list, description="PVC right-sizing recommendations.")
+    total_monthly_savings: float = Field(
+        default=0.0, description="Total monthly savings across all filtered rows (USD)."
+    )
+    row_count: int = Field(
+        default=0, description="Total number of rows in the filtered population (before top_n slice)."
+    )
+    truncated: bool = Field(default=False, description="True if result was sliced to top_n.")
+
+
+class LocalDiskRow(BaseModel):
+    """One underutilized node-local disk."""
+
+    disk_name: str = Field(default="", description="Disk/node identifier.")
+    cluster_id: str = Field(default="", description="Kubecost cluster ID.")
+    utilization_percent: float = Field(default=0.0, description="Disk utilization as a 0-1 ratio (NOT 0-100).")
+    current_usage_bytes: int = Field(default=0, description="Current used bytes.")
+    current_capacity_bytes: int = Field(default=0, description="Current capacity in bytes.")
+    recommended_capacity_bytes: int = Field(
+        default=0, description="Recommended capacity in bytes. 0 = full decommission."
+    )
+    current_cost_monthly: float = Field(default=0.0, description="Current monthly cost (USD).")
+    savings_monthly: float = Field(default=0.0, description="Estimated monthly savings (USD).")
+
+
+class LocalDiskSavingsResponse(BaseToolResponse):
+    """Response for get_local_disk_savings."""
+
+    rows: list[LocalDiskRow] = Field(default_factory=list, description="Underutilized disk recommendations.")
+    total_monthly_savings: float = Field(
+        default=0.0, description="Total monthly savings across all filtered rows (USD)."
+    )
+    row_count: int = Field(
+        default=0, description="Total number of rows in the filtered population (before top_n slice)."
+    )
+    truncated: bool = Field(default=False, description="True if result was sliced to top_n.")
+
+
+class ResourceMetrics(BaseModel):
+    """CPU or RAM metrics for a node group state."""
+
+    capacity_avg: float = Field(default=0.0, description="Average capacity (in the unit specified by the API).")
+    utilization: float = Field(default=0.0, description="Utilization ratio 0-1.")
+    usage_avg: float | None = Field(default=None, description="Average usage. None in the recommended (after) state.")
+    usage_p95: float | None = Field(default=None, description="P95 usage. None in the recommended (after) state.")
+
+
+class NodeGroupState(BaseModel):
+    """Node group state (before or after recommendation)."""
+
+    instance_type: str = Field(default="", description="EC2/GCE/Azure instance type.")
+    node_count: int = Field(default=0, description="Number of nodes.")
+    price_per_month: float = Field(default=0.0, description="Total monthly cost for this node group (USD).")
+    cpu: ResourceMetrics = Field(description="CPU metrics.")
+    ram: ResourceMetrics = Field(description="RAM metrics.")
+
+
+class NodeGroupRecommendation(BaseModel):
+    """One node group rightsizing recommendation."""
+
+    node_group: str = Field(default="", description="Node group name.")
+    recommendation: str = Field(
+        default="",
+        description="Recommended action. Observed values: 'ScaleIn', 'None', 'ChangeInstanceType'. Open string.",
+    )
+    before: NodeGroupState = Field(description="Current node group state.")
+    after: NodeGroupState = Field(description="Recommended node group state.")
+    savings_per_month: float = Field(default=0.0, description="Estimated monthly savings (USD).")
+
+
+class ClusterRightsizingResponse(BaseToolResponse):
+    """Response for get_cluster_rightsizing_recommendations."""
+
+    cluster: str = Field(default="", description="Cluster ID queried.")
+    profile: str = Field(default="production", description="Sizing profile used.")
+    window: str = Field(default="", description="Time window used.")
+    recommendations: list[NodeGroupRecommendation] = Field(
+        default_factory=list, description="Node group recommendations."
+    )
+    total_savings_per_month: float = Field(default=0.0, description="Total estimated monthly savings (USD).")
+    recommendation_count: int = Field(default=0, description="Number of recommendations.")
+    truncated: bool = Field(
+        default=False, description="True if upstream returned >1000 recommendations and results were capped."
+    )
+    warnings: list[str] = Field(default_factory=list, description="API-level warnings (if any).")
+
+
+class UnclaimedVolumeProperties(BaseModel):
+    """Properties of an unclaimed PersistentVolume."""
+
+    cluster: str = Field(default="", description="Kubecost cluster ID.")
+    provider: str = Field(default="", description="Cloud provider (e.g. GCP, AWS).")
+    service: str = Field(default="", description="Service name.")
+    name: str = Field(default="", description="Volume name.")
+    provider_id: str = Field(default="", description="Provider-specific volume ID.")
+
+
+class UnclaimedVolumeRow(BaseModel):
+    """One unclaimed PersistentVolume."""
+
+    volume_name: str = Field(default="", description="PersistentVolume name.")
+    monthly_cost: float = Field(default=0.0, description="Monthly cost -- full savings if deleted (USD).")
+    properties: UnclaimedVolumeProperties = Field(description="Volume properties.")
+
+
+class UnclaimedVolumesResponse(BaseToolResponse):
+    """Response for get_unclaimed_volumes."""
+
+    rows: list[UnclaimedVolumeRow] = Field(default_factory=list, description="Unclaimed volumes.")
+    total_monthly_cost: float = Field(default=0.0, description="Total monthly cost of filtered volumes (USD).")
+    row_count: int = Field(
+        default=0, description="Total number of rows in the filtered population (before top_n slice)."
+    )
+    truncated: bool = Field(default=False, description="True if result was sliced to top_n.")
+
+
+class QuotaResourceChange(BaseModel):
+    """One resource type change within a namespace quota recommendation."""
+
+    resource_type: str = Field(default="", description="Resource type (e.g. 'requests.cpu', 'requests.memory').")
+    category: str = Field(default="", description="Resource category (e.g. 'compute').")
+    used: str = Field(default="", description="Current observed usage.")
+    recommended: str = Field(default="", description="Recommended quota value.")
+    is_new_resource: bool = Field(default=False, description="True if this resource type has no existing quota entry.")
+    is_downsize: bool = Field(default=False, description="True if this recommendation reduces the quota.")
+
+
+class QuotaNamespaceRecommendation(BaseModel):
+    """ResourceQuota recommendation for one namespace."""
+
+    cluster: str = Field(default="", description="Kubecost cluster ID.")
+    namespace: str = Field(default="", description="Kubernetes namespace.")
+    category: str = Field(default="", description="Category (e.g. 'compute').")
+    is_new_resource_quota: bool = Field(
+        default=False, description="True if no ResourceQuota exists yet for this namespace."
+    )
+    resources: list[QuotaResourceChange] = Field(default_factory=list, description="Per-resource-type changes.")
+
+
+class ResourceQuotaResponse(BaseToolResponse):
+    """Response for get_resource_quota_recommendations."""
+
+    recommendations: list[QuotaNamespaceRecommendation] = Field(
+        default_factory=list, description="Namespace quota recommendations."
+    )
+    item_count: int = Field(
+        default=0, description="Total item count reported by the API (may exceed len(recommendations) when paginating)."
+    )
+    total_monthly_savings: float = Field(
+        default=0.0, description="Total monthly savings (USD). May be 0 -- this is a correctness tool."
+    )
+    truncated: bool = Field(default=False, description="True if more pages exist.")
+
+
 class AbandonedWorkloadRow(BaseModel):
     """One pod identified as potentially abandoned due to low network activity."""
 
@@ -758,6 +1228,54 @@ class AbandonedWorkloadsResponse(BaseToolResponse):
     )
 
 
+class CostComparisonRow(BaseModel):
+    """One dimension's cost comparison between the current and baseline window."""
+
+    model_config = ConfigDict(extra="allow")
+
+    current_cost: float = Field(default=0.0, description="Total cost in the current window (USD).")
+    baseline_cost: float = Field(default=0.0, description="Total cost in the baseline window (USD).")
+    change: float = Field(default=0.0, description="current_cost - baseline_cost (USD). Positive = cost increased.")
+    pct_change: float | None = Field(
+        default=None,
+        description=(
+            "Percent change from baseline to current. Null when baseline_cost is 0 "
+            "(see is_new) since percent change is undefined."
+        ),
+    )
+    is_new: bool = Field(
+        default=False,
+        description="True when this dimension had zero cost in the baseline window (newly appeared).",
+    )
+
+
+class CostComparisonResponse(BaseToolResponse):
+    """Response from get_kubecost_cost_comparison."""
+
+    current_window: str = Field(description="Current-period window as passed by the caller.")
+    baseline_window: str = Field(description="Baseline-period window as passed by the caller.")
+    aggregate: str = Field(description="Aggregation dimension(s) requested.")
+    dimensions: list[str] = Field(
+        default_factory=list, description="Resolved dimension columns present in each result row."
+    )
+    total_current_cost: float = Field(default=0.0, description="Sum of current_cost across all rows (USD).")
+    total_baseline_cost: float = Field(default=0.0, description="Sum of baseline_cost across all rows (USD).")
+    total_change: float = Field(default=0.0, description="total_current_cost - total_baseline_cost (USD).")
+    row_count: int = Field(default=0, description="Total number of rows in the full diffed population.")
+    rows: list[CostComparisonRow] = Field(
+        default_factory=list,
+        description=(
+            "Diff rows sorted by absolute change descending, capped at top_n. "
+            "Each row contains the requested dimension values plus current_cost, "
+            "baseline_cost, change, pct_change, and is_new."
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description="True when the full diffed result set was larger than top_n.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
@@ -810,16 +1328,15 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
     )
     async def get_kubecost_workload_costs(
         window: Annotated[
-            str | None,
+            str,
             Field(
                 description=(
-                    "User-confirmed time window, examples (not limited to) '7d', '15d', '30d', 'month', or an RFC3339 "
+                    "Time window for the query. Examples: '7d', '15d', '30d', 'month', or an RFC3339 "
                     "range '2026-05-01T00:00:00Z,2026-06-01T00:00:00Z'. "
-                    "If omitted, the tool returns an error directing you to call "
-                    "kubecost_list_windows first."
+                    "Defaults to '" + DEFAULT_WINDOW + "'."
                 )
             ),
-        ] = None,
+        ] = DEFAULT_WINDOW,
         aggregate: Annotated[
             str,
             Field(
@@ -881,8 +1398,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         time window with the user first (see kubecost_list_windows).
 
         WHEN NOT TO USE: For container rightsizing/savings use
-        get_container_savings_recommendations; for non-Kubernetes cloud cost use
-        run_cost_report.
+        get_container_savings_recommendations. For period-over-period cost
+        change / spike investigation, use get_kubecost_cost_comparison instead.
         """
         if not window:
             return KubecostAllocationResponse(
@@ -974,6 +1491,160 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             total_cost=round(filtered_total, 2),
             row_count=len(filtered),
             rows=[AllocationRow.model_validate(r) for r in filtered[:top_n]],
+            truncated=truncated,
+        )
+
+    @mcp.tool(
+        version=_VERSION,
+        annotations=ToolAnnotations(
+            title="Get Kubecost Cost Comparison",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
+    async def get_kubecost_cost_comparison(
+        current_window: Annotated[
+            str,
+            Field(
+                description=(
+                    "The more recent period to inspect. Accepts 'lastweek', 'lastmonth', or an "
+                    "explicit RFC3339 range 'start,end' that ends before today (UTC). Bare relative "
+                    "windows ('7d', 'today', 'week', 'month') are REJECTED because they include a "
+                    "partial current period."
+                )
+            ),
+        ],
+        baseline_window: Annotated[
+            str,
+            Field(
+                description=(
+                    "The prior period to compare against. Must be the SAME type as current_window: "
+                    "an identical alias ('lastweek' vs 'lastweek') or an RFC3339 range with the same "
+                    "duration as current_window."
+                )
+            ),
+        ],
+        aggregate: Annotated[
+            str,
+            Field(
+                description=(
+                    "Aggregation dimension(s): a single value ('cluster') or a "
+                    "comma-separated list ('cluster,namespace'). "
+                    "Also accepts: pod, node, controller, label, container, "
+                    "controllerKind, department, environment, owner, product, team."
+                ),
+            ),
+        ] = "cluster,namespace",
+        top_n: Annotated[
+            int,
+            Field(
+                description=(
+                    "Maximum rows to include in the response. "
+                    "When the full diffed result exceeds top_n, the response sets truncated=True."
+                ),
+                ge=1,
+                le=10000,
+            ),
+        ] = 20,
+    ) -> CostComparisonResponse:
+        """Compare Kubernetes cost allocation between two equal-length windows to find cost spikes.
+
+        WHAT: Fetches allocation data for current_window and baseline_window separately,
+        aggregates each by the chosen dimension(s), and returns a per-dimension diff
+        (current_cost, baseline_cost, change, pct_change) sorted by absolute change
+        descending. This is the anomaly-investigation entry point.
+
+        WHEN TO USE: Run this FIRST when investigating "why did costs change" or "what
+        spiked" questions. Run this first to find which dimension changed the most,
+        then drill into get_container_savings_recommendations, get_abandoned_workloads,
+        or get_cluster_rightsizing_recommendations for that dimension.
+
+        WHEN NOT TO USE: For a single-period cost snapshot (no comparison), use
+        get_kubecost_workload_costs instead.
+
+        Window rules (enforced): current_window and baseline_window must both be
+        'lastweek', both be 'lastmonth', or both be RFC3339 ranges of identical
+        duration ending before today. Bare relative windows ('7d', 'today', 'week',
+        'month') are rejected since Kubecost resolves them relative to 'now' and
+        they would include partial, in-progress data.
+        """
+        _validate_comparison_windows(current_window, baseline_window)
+
+        try:
+            current_response = await _fetch_allocation(
+                aggregate=aggregate,
+                window=current_window,
+                accumulate=True,
+                limit=100000,
+            )
+            baseline_response = await _fetch_allocation(
+                aggregate=aggregate,
+                window=baseline_window,
+                accumulate=True,
+                limit=100000,
+            )
+        except McpToolError as exc:
+            return CostComparisonResponse(
+                status=QueryStatus.ERROR,
+                message=str(exc),
+                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                current_window=current_window,
+                baseline_window=baseline_window,
+                aggregate=aggregate,
+            )
+
+        current_dims, current_rows = _parse_allocation_response(current_response)
+        baseline_dims, baseline_rows = _parse_allocation_response(baseline_response)
+        dimension_cols = current_dims or baseline_dims
+
+        if not current_rows and not baseline_rows:
+            return CostComparisonResponse(
+                status=QueryStatus.EMPTY,
+                message=(f"No Kubecost allocation data for either window ('{current_window}' or '{baseline_window}')."),
+                recommended_action="Try different windows or a different aggregate dimension.",
+                current_window=current_window,
+                baseline_window=baseline_window,
+                aggregate=aggregate,
+                dimensions=dimension_cols,
+            )
+
+        current_aggregated = _aggregate_by_dimensions(current_rows, dimension_cols) if current_rows else []
+        baseline_aggregated = _aggregate_by_dimensions(baseline_rows, dimension_cols) if baseline_rows else []
+
+        diffed = _diff_allocation_rows(current_aggregated, baseline_aggregated, dimension_cols)
+
+        total_current = sum(float(r.get("current_cost", 0) or 0) for r in diffed)
+        total_baseline = sum(float(r.get("baseline_cost", 0) or 0) for r in diffed)
+        truncated = len(diffed) > top_n
+
+        top_mover = diffed[0] if diffed else None
+        top_mover_desc = ""
+        if top_mover:
+            dim_desc = ", ".join(f"{dim}={top_mover.get(dim, '')}" for dim in dimension_cols)
+            top_mover_desc = f" Biggest mover: {dim_desc} (change ${top_mover.get('change', 0):,.2f})."
+
+        return CostComparisonResponse(
+            status=QueryStatus.OK,
+            message=(
+                f"Compared {current_window} (${total_current:,.2f}) vs {baseline_window} "
+                f"(${total_baseline:,.2f}) by {', '.join(dimension_cols) or aggregate}: "
+                f"{len(diffed)} row(s)" + (f" (showing top {top_n})" if truncated else "") + "." + top_mover_desc
+            ),
+            recommended_action=(
+                "Drill into get_container_savings_recommendations, get_abandoned_workloads, or "
+                "get_cluster_rightsizing_recommendations for the dimension(s) with the largest change."
+            ),
+            current_window=current_window,
+            baseline_window=baseline_window,
+            aggregate=aggregate,
+            dimensions=dimension_cols,
+            total_current_cost=round(total_current, 2),
+            total_baseline_cost=round(total_baseline, 2),
+            total_change=round(total_current - total_baseline, 2),
+            row_count=len(diffed),
+            rows=[CostComparisonRow.model_validate(r) for r in diffed[:top_n]],
             truncated=truncated,
         )
 
@@ -1079,8 +1750,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         quantiles, CPU vs memory strategy), invoke the container_rightsizing_guide
         prompt first.
 
-        WHEN NOT TO USE: For non-Kubernetes resources use get_rightsizing_recommendations;
-        for raw Kubernetes spend use get_kubecost_workload_costs.
+        WHEN NOT TO USE: For raw Kubernetes spend by cluster/namespace/pod, use
+        get_kubecost_workload_costs.
         """
         sizing = resolve_sizing_params(
             preset,
@@ -1103,6 +1774,30 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         resolved_target_ram: float = sizing["target_ram_utilization"]
         resolved_include_undersized: bool = sizing["include_undersized"]
         resolved_min_monthly_savings: float = sizing["min_monthly_savings"]
+
+        uses_quantile = (
+            resolved_algorithm_cpu.lower() in _QUANTILE_ALGORITHMS
+            or resolved_algorithm_ram.lower() in _QUANTILE_ALGORITHMS
+        )
+        if uses_quantile:
+            window_days = parse_window_days(resolved_window)
+            min_days = parse_window_days(MIN_QUANTILE_WINDOW)
+            if window_days is not None and min_days is not None and window_days < min_days:
+                raise_tool_error(
+                    ErrorCode.INVALID_INPUT,
+                    message=(
+                        f"Window '{resolved_window}' is too short for quantile algorithms. "
+                        f"quantileOfAverages and quantileOfMaxes require at least {MIN_QUANTILE_WINDOW} "
+                        "of data to produce a meaningful distribution. "
+                        f"Use '{MIN_QUANTILE_WINDOW}', '30d', '90d', or an RFC3339 range spanning "
+                        f"≥ {min_days} days."
+                    ),
+                    retryable=False,
+                    suggested_action=(
+                        f"Re-call with window='{MIN_QUANTILE_WINDOW}' or longer, "
+                        "or switch to algorithm_cpu='max' / algorithm_ram='max' for short windows."
+                    ),
+                )
 
         try:
             response = await _fetch_request_sizing(
@@ -1228,7 +1923,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         version=_VERSION,
-        annotations=_READ_ONLY,
+        annotations=_read_only("Get Abandoned Workloads"),
     )
     async def get_abandoned_workloads(
         days: Annotated[
@@ -1342,6 +2037,632 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             workload_count=len(rows),
             total_monthly_savings=total_savings,
             rows=[AbandonedWorkloadRow.model_validate(r, from_attributes=False) for r in rows],
+            truncated=truncated,
+        )
+
+    # ── Savings overview and new savings tools ───────────────────────────────
+
+    @mcp.tool(
+        version=_VERSION,
+        annotations=_read_only("Get Savings Overview"),
+    )
+    async def get_savings_overview() -> SavingsOverviewResponse:
+        """Return a ranked summary of all Kubecost savings categories.
+
+        WHAT: Calls GET /model/savings and returns all 8 savings categories ranked
+        by estimated monthly savings descending. Each category includes the name,
+        estimated savings per month, last refresh time, and (where available) the
+        name of the drill-down tool to call for details. No truncation — there are
+        only 8 categories.
+
+        WHEN TO USE: As the first response to any general "how can I save money?"
+        or "what are my biggest savings opportunities?" question. Presents the full
+        ranked summary and offers to drill into any category.
+
+        WHEN NOT TO USE: When the user has already identified a specific category
+        (e.g. "show me container rightsizing") — call the drill-down tool directly.
+        """
+        try:
+            raw = await _fetch_savings_overview()
+        except McpToolError as exc:
+            return SavingsOverviewResponse(
+                status=QueryStatus.ERROR,
+                message=str(exc),
+                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+            )
+
+        data = raw if isinstance(raw, dict) else {}
+        # Strip non-category top-level keys
+        skip_keys = {"cluster", "profile"}
+        drill_down_map = {
+            "containerRequestSizing": "get_container_savings_recommendations",
+            "abandonedWorkloads": "get_abandoned_workloads",
+            "nodeGroupSizing": "get_cluster_rightsizing_recommendations",
+            "persistentVolumeSizing": "get_pv_sizing_recommendations",
+            "underutilizedLocalDisks": "get_local_disk_savings",
+            "unclaimedVolumes": "get_unclaimed_volumes",
+            "resourceQuotaSizing": "get_resource_quota_recommendations",
+            "orphanedResources": None,
+        }
+        categories: list[SavingsCategory] = []
+        for key, entry in data.items():
+            if key in skip_keys or not isinstance(entry, dict):
+                continue
+            categories.append(
+                SavingsCategory(
+                    key=key,
+                    savings_per_month=round(float(entry.get("savingsPerMonth", 0.0) or 0.0), 2),
+                    last_refresh=entry.get("lastRefresh", ""),
+                    drill_down_tool=drill_down_map.get(key),
+                )
+            )
+        categories.sort(key=lambda c: c.savings_per_month, reverse=True)
+        total = round(sum(c.savings_per_month for c in categories), 2)
+
+        if not categories:
+            return SavingsOverviewResponse(
+                status=QueryStatus.EMPTY,
+                message="No savings categories returned by Kubecost.",
+                recommended_action="Verify the Kubecost API is reachable and warm.",
+            )
+
+        actionable = [c.drill_down_tool for c in categories if c.drill_down_tool and c.savings_per_month > 0]
+        return SavingsOverviewResponse(
+            status=QueryStatus.OK,
+            message=(
+                f"Found {len(categories)} savings categories with estimated total monthly savings of ${total:,.2f}."
+            ),
+            recommended_action=(
+                "Drill into the highest-savings category first. "
+                + (f"Available drill-down tools: {', '.join(actionable)}." if actionable else "")
+            ),
+            categories=categories,
+            total_savings_per_month=total,
+            category_count=len(categories),
+        )
+
+    @mcp.tool(
+        version=_VERSION,
+        annotations=_read_only("Get PV Sizing Recommendations"),
+    )
+    async def get_pv_sizing_recommendations(
+        window: Annotated[
+            str,
+            Field(description="Time window for usage data. Default '15d'. " + _WINDOW_RFC3339_NOTE),
+        ] = DEFAULT_WINDOW,
+        overhead_percent: Annotated[
+            int,
+            Field(
+                description=(
+                    "Overhead buffer added on top of max observed usage when computing recommended "
+                    "capacity (percent). Default 50 means recommend 1.5× max usage."
+                ),
+                ge=0,
+                le=500,
+            ),
+        ] = 50,
+        top_n: Annotated[
+            int,
+            Field(
+                description="Maximum recommendations to return, sorted by savings_monthly desc. Default 20.",
+                ge=1,
+                le=1000,
+            ),
+        ] = 20,
+        min_monthly_savings: Annotated[
+            float,
+            Field(description="Minimum monthly savings (USD) to include a recommendation. Default $1.00.", ge=0.0),
+        ] = 1.0,
+    ) -> PVSizingResponse:
+        """Return PersistentVolumeClaim right-sizing recommendations ranked by monthly savings.
+
+        WHAT: Calls GET /model/savings/persistentVolumeSizing and returns recommendations
+        to shrink over-provisioned PVCs based on observed usage. Each row includes the
+        current and recommended capacity (in bytes), current and recommended monthly cost,
+        and estimated monthly savings. The full filtered set is fetched before slicing so
+        that total_monthly_savings and row_count describe the full population.
+
+        WHEN TO USE: When investigating storage over-provisioning or when the savings
+        overview shows persistentVolumeSizing has significant savings.
+
+        WHEN NOT TO USE: For unclaimed (unbound) volumes, use get_unclaimed_volumes.
+        For node-level local disk savings, use get_local_disk_savings.
+        """
+        try:
+            raw = await _fetch_pv_sizing(window=window, overhead_percent=overhead_percent)
+        except McpToolError as exc:
+            return PVSizingResponse(
+                status=QueryStatus.ERROR,
+                message=str(exc),
+                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+            )
+
+        recs: list[dict[str, Any]] = raw if isinstance(raw, list) else raw.get("recommendations", [])
+        filtered = [r for r in recs if float(r.get("savingsMonthly", 0.0) or 0.0) >= min_monthly_savings]
+        filtered.sort(key=lambda r: float(r.get("savingsMonthly", 0.0) or 0.0), reverse=True)
+        total_savings = round(sum(float(r.get("savingsMonthly", 0.0) or 0.0) for r in filtered), 2)
+        truncated = len(filtered) > top_n
+        sliced = filtered[:top_n]
+
+        if not sliced:
+            return PVSizingResponse(
+                status=QueryStatus.EMPTY,
+                message=f"No PV sizing recommendations found with min_monthly_savings=${min_monthly_savings:.2f}.",
+                recommended_action="Lower min_monthly_savings or check the savings overview for total PV savings.",
+            )
+
+        return PVSizingResponse(
+            status=QueryStatus.OK,
+            message=(
+                f"Found {len(filtered)} PV sizing recommendation(s) with total monthly savings "
+                f"of ${total_savings:,.2f}" + (f" (showing top {top_n})." if truncated else ".")
+            ),
+            recommended_action=(
+                "Review the highest-savings recommendations first. "
+                "Confirm storage class supports shrinking before resizing."
+            ),
+            rows=[
+                PVSizingRow(
+                    volume_name=r.get("volumeName", ""),
+                    claim_name=r.get("claimName", ""),
+                    claim_namespace=r.get("claimNamespace", ""),
+                    cluster_id=r.get("clusterId", ""),
+                    max_usage_bytes=int(r.get("maxUsageBytes", 0) or 0),
+                    average_usage_bytes=int(r.get("averageUsageBytes", 0) or 0),
+                    recommended_capacity_bytes=int(r.get("recommendedCapacityBytes", 0) or 0),
+                    recommended_cost_monthly=round(float(r.get("recommendedCostMonthly", 0.0) or 0.0), 4),
+                    current_capacity_bytes=int(r.get("currentCapacityBytes", 0) or 0),
+                    current_cost_monthly=round(float(r.get("currentCostMonthly", 0.0) or 0.0), 4),
+                    savings_monthly=round(float(r.get("savingsMonthly", 0.0) or 0.0), 4),
+                    storage_class=r.get("storageClass", ""),
+                )
+                for r in sliced
+            ],
+            total_monthly_savings=total_savings,
+            row_count=len(filtered),
+            truncated=truncated,
+        )
+
+    @mcp.tool(
+        version=_VERSION,
+        annotations=_read_only("Get Local Disk Savings"),
+    )
+    async def get_local_disk_savings(
+        window: Annotated[
+            str,
+            Field(description="Time window for usage data. Default '15d'. " + _WINDOW_RFC3339_NOTE),
+        ] = DEFAULT_WINDOW,
+        overhead_percent: Annotated[
+            int,
+            Field(
+                description="Overhead buffer (percent) added when computing recommended capacity. Default 50.",
+                ge=0,
+                le=500,
+            ),
+        ] = 50,
+        top_n: Annotated[
+            int,
+            Field(description="Maximum disks to return, sorted by savings_monthly desc. Default 20.", ge=1, le=1000),
+        ] = 20,
+        min_monthly_savings: Annotated[
+            float,
+            Field(description="Minimum monthly savings (USD) to include a disk. Default $1.00.", ge=0.0),
+        ] = 1.0,
+    ) -> LocalDiskSavingsResponse:
+        """Return underutilized node-local disk savings recommendations.
+
+        WHAT: Calls GET /model/savings/localLowDisks and returns disks that are
+        underutilized on their node. Each row includes disk name, cluster, utilization
+        ratio (0–1 scale), current and recommended capacity in bytes, and estimated
+        monthly savings. recommended_capacity_bytes=0 means full decommission is
+        recommended (utilization is effectively zero).
+
+        Note: utilization_percent is a 0–1 ratio, NOT a 0–100 percentage.
+
+        WHEN TO USE: When investigating node-level local storage waste, or when the
+        savings overview shows underutilizedLocalDisks has significant savings.
+
+        WHEN NOT TO USE: For PVC right-sizing, use get_pv_sizing_recommendations.
+        For unclaimed volumes, use get_unclaimed_volumes.
+        """
+        try:
+            raw = await _fetch_local_disks(window=window, overhead_percent=overhead_percent)
+        except McpToolError as exc:
+            return LocalDiskSavingsResponse(
+                status=QueryStatus.ERROR,
+                message=str(exc),
+                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+            )
+
+        disks: list[dict[str, Any]] = raw if isinstance(raw, list) else raw.get("unutilizedDisks", [])
+        disks, was_capped = _cap_raw_rows(disks, "local disk")
+        filtered = [d for d in disks if float(d.get("savingsMonthly", 0.0) or 0.0) >= min_monthly_savings]
+        filtered.sort(key=lambda d: float(d.get("savingsMonthly", 0.0) or 0.0), reverse=True)
+        total_savings = round(sum(float(d.get("savingsMonthly", 0.0) or 0.0) for d in filtered), 2)
+        truncated = was_capped or len(filtered) > top_n
+        sliced = filtered[:top_n]
+
+        if not sliced:
+            return LocalDiskSavingsResponse(
+                status=QueryStatus.EMPTY,
+                message=f"No underutilized local disks found with min_monthly_savings=${min_monthly_savings:.2f}.",
+                recommended_action="Lower min_monthly_savings or check the savings overview for total disk savings.",
+            )
+
+        return LocalDiskSavingsResponse(
+            status=QueryStatus.OK,
+            message=(
+                f"Found {len(filtered)} underutilized disk(s) with total monthly savings "
+                f"of ${total_savings:,.2f}" + (f" (showing top {top_n})." if truncated else ".")
+            ),
+            recommended_action=(
+                "Disks with recommended_capacity_bytes=0 are candidates for full decommission. "
+                "Confirm with node owners before removing storage."
+            ),
+            rows=[
+                LocalDiskRow(
+                    disk_name=d.get("diskName", ""),
+                    cluster_id=d.get("clusterId", ""),
+                    utilization_percent=round(float(d.get("utilizationPercent", 0.0) or 0.0), 6),
+                    current_usage_bytes=int(d.get("currentUsageBytes", 0) or 0),
+                    current_capacity_bytes=int(d.get("currentCapacityBytes", 0) or 0),
+                    recommended_capacity_bytes=int(d.get("recommendedCapacityBytes", 0) or 0),
+                    current_cost_monthly=round(float(d.get("currentCostMonthly", 0.0) or 0.0), 4),
+                    savings_monthly=round(float(d.get("savingsMonthly", 0.0) or 0.0), 4),
+                )
+                for d in sliced
+            ],
+            total_monthly_savings=total_savings,
+            row_count=len(filtered),
+            truncated=truncated,
+        )
+
+    @mcp.tool(
+        version=_VERSION,
+        annotations=_read_only("Get Cluster Rightsizing Recommendations"),
+    )
+    async def get_cluster_rightsizing_recommendations(
+        cluster: Annotated[
+            str,
+            Field(
+                description=(
+                    "Kubecost cluster ID to fetch node group sizing recommendations for. "
+                    "Omitting cluster returns an empty recommendations list (not an API error). "
+                    "If you don't know the cluster name, call get_kubecost_workload_costs "
+                    "with aggregate='cluster' first to discover available cluster IDs."
+                )
+            ),
+        ],
+        window: Annotated[
+            str,
+            Field(description="Time window for usage data. Default '15d'. " + _WINDOW_RFC3339_NOTE),
+        ] = DEFAULT_WINDOW,
+        profile: Annotated[
+            Literal["development", "production", "high-availability"],
+            Field(
+                description=(
+                    "Sizing conservativeness profile. 'production' (default) balances savings "
+                    "and reliability. 'development' is more aggressive. 'high-availability' "
+                    "is most conservative."
+                )
+            ),
+        ] = "production",
+    ) -> ClusterRightsizingResponse:
+        """Return node group scale-in/scale-out/instance-type recommendations for a cluster.
+
+        WHAT: Calls GET /model/savings/nodeGroupSizing/recommendations for the given cluster
+        and returns recommendations to right-size node groups (scale in, scale out, or change
+        instance type). Each recommendation includes before/after node count, instance type,
+        monthly price, CPU/RAM utilization, and estimated monthly savings.
+
+        Note: omitting cluster does NOT return an API error — it returns 200 with an empty
+        recommendations list. Provide a cluster ID to get useful results.
+
+        WHEN TO USE: When investigating node-level infrastructure savings, or when the savings
+        overview shows nodeGroupSizing has significant savings.
+
+        WHEN NOT TO USE: For container CPU/memory rightsizing, use get_container_savings_recommendations.
+        For abandoned pods, use get_abandoned_workloads.
+        """
+        try:
+            raw = await _fetch_node_group_sizing(cluster=cluster, window=window, profile=profile)
+        except McpToolError as exc:
+            return ClusterRightsizingResponse(
+                status=QueryStatus.ERROR,
+                message=str(exc),
+                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                cluster=cluster,
+                profile=profile,
+                window=window,
+            )
+
+        recs_raw, was_capped = _cap_raw_rows(raw.get("recommendations", []), "node group sizing")
+        total_savings = round(float(raw.get("totalSavingsPerMonth", 0.0) or 0.0), 2)
+        warnings: list[str] = raw.get("warnings") or []
+        window_info = raw.get("window", {})
+        window_str = window_info.get("start", window) if isinstance(window_info, dict) else window
+
+        recs_raw_sorted = sorted(recs_raw, key=lambda r: float(r.get("savingsPerMonth", 0.0) or 0.0), reverse=True)
+
+        def _resource_metrics(res: dict) -> ResourceMetrics:
+            cap = res.get("capacity", {}) or {}
+            usage = res.get("usage", {}) or {}
+            return ResourceMetrics(
+                capacity_avg=round(float(cap.get("avg", 0.0) or 0.0), 4),
+                utilization=round(float(res.get("utilization", 0.0) or 0.0), 6),
+                usage_avg=round(float(usage.get("avg", 0.0) or 0.0), 4) if usage else None,
+                usage_p95=round(float(usage.get("p95", 0.0) or 0.0), 4) if usage.get("p95") is not None else None,
+            )
+
+        def _node_group_state(state: dict) -> NodeGroupState:
+            resources = state.get("resources", {}) or {}
+            cpu_res = resources.get("cpu", {}) or {}
+            ram_res = resources.get("ram", {}) or {}
+            return NodeGroupState(
+                instance_type=state.get("instanceType", ""),
+                node_count=int(state.get("nodeCount", 0) or 0),
+                price_per_month=round(float(state.get("pricePerMonth", 0.0) or 0.0), 2),
+                cpu=_resource_metrics(cpu_res),
+                ram=_resource_metrics(ram_res),
+            )
+
+        recommendations = [
+            NodeGroupRecommendation(
+                node_group=r.get("nodeGroup", ""),
+                recommendation=r.get("recommendation", ""),
+                before=_node_group_state(r.get("before", {})),
+                after=_node_group_state(r.get("after", {})),
+                savings_per_month=round(float(r.get("savingsPerMonth", 0.0) or 0.0), 2),
+            )
+            for r in recs_raw_sorted
+        ]
+
+        if not recommendations:
+            return ClusterRightsizingResponse(
+                status=QueryStatus.EMPTY,
+                message=(
+                    f"No node group sizing recommendations found for cluster '{cluster}'. "
+                    "Verify the cluster ID is correct and that Kubecost has usage data for it."
+                ),
+                recommended_action=(
+                    "Call get_kubecost_workload_costs with aggregate='cluster' to list available cluster IDs."
+                ),
+                cluster=cluster,
+                profile=profile,
+                window=window_str,
+                total_savings_per_month=total_savings,
+                warnings=warnings,
+            )
+
+        return ClusterRightsizingResponse(
+            status=QueryStatus.OK,
+            message=(
+                f"Found {len(recommendations)} node group recommendation(s) for cluster '{cluster}' "
+                f"with estimated monthly savings of ${total_savings:,.2f}."
+            ),
+            recommended_action=(
+                "Review ScaleIn and ChangeInstanceType recommendations first for quickest savings. "
+                "Validate node counts against workload headroom before applying."
+            ),
+            cluster=cluster,
+            profile=profile,
+            window=window_str,
+            recommendations=recommendations,
+            total_savings_per_month=total_savings,
+            recommendation_count=len(recommendations),
+            truncated=was_capped,
+            warnings=warnings,
+        )
+
+    @mcp.tool(
+        version=_VERSION,
+        annotations=_read_only("Get Unclaimed Volumes"),
+    )
+    async def get_unclaimed_volumes(
+        window: Annotated[
+            str,
+            Field(description="Time window for cost data. Default '15d'. " + _WINDOW_RFC3339_NOTE),
+        ] = DEFAULT_WINDOW,
+        top_n: Annotated[
+            int,
+            Field(description="Maximum volumes to return, sorted by monthly_cost desc. Default 20.", ge=1, le=1000),
+        ] = 20,
+        min_monthly_cost: Annotated[
+            float,
+            Field(description="Minimum monthly cost (USD) to include a volume. Default $1.00.", ge=0.0),
+        ] = 1.0,
+    ) -> UnclaimedVolumesResponse:
+        """Return PersistentVolumes that are provisioned but not bound to any PVC.
+
+        WHAT: Calls GET /model/savings/unclaimedVolumes and returns volumes that exist
+        in the cluster but have no PersistentVolumeClaim binding them — pure waste with
+        no right-sizing needed. Each row includes the volume name, monthly cost, cluster,
+        provider, and service. Deleting the volume saves the full monthly_cost.
+
+        Note: These volumes have no PVC attached — deletion is generally safe, but confirm
+        with your storage or platform team before removing any volume.
+
+        WHEN TO USE: When investigating unattached storage waste, or when the savings
+        overview shows unclaimedVolumes has significant savings.
+
+        WHEN NOT TO USE: For over-provisioned PVCs that ARE in use, use
+        get_pv_sizing_recommendations. For node-local disk savings, use get_local_disk_savings.
+        """
+        try:
+            raw = await _fetch_unclaimed_volumes(window=window)
+        except McpToolError as exc:
+            return UnclaimedVolumesResponse(
+                status=QueryStatus.ERROR,
+                message=str(exc),
+                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+            )
+
+        data = raw if isinstance(raw, dict) else {}
+        volumes, was_capped = _cap_raw_rows(data.get("volumes", []), "unclaimed volume")
+        total_monthly_cost_api = round(float(data.get("monthlyCost", 0.0) or 0.0), 2)
+
+        filtered = [v for v in volumes if float(v.get("monthlyCost", 0.0) or 0.0) >= min_monthly_cost]
+        filtered.sort(key=lambda v: float(v.get("monthlyCost", 0.0) or 0.0), reverse=True)
+        total_cost = round(sum(float(v.get("monthlyCost", 0.0) or 0.0) for v in filtered), 2)
+        truncated = was_capped or len(filtered) > top_n
+        sliced = filtered[:top_n]
+
+        if not sliced:
+            return UnclaimedVolumesResponse(
+                status=QueryStatus.EMPTY,
+                message=f"No unclaimed volumes found with min_monthly_cost=${min_monthly_cost:.2f}.",
+                recommended_action=(
+                    "Lower min_monthly_cost or check the savings overview for total unclaimed volume savings."
+                ),
+                total_monthly_cost=total_monthly_cost_api,
+            )
+
+        return UnclaimedVolumesResponse(
+            status=QueryStatus.OK,
+            message=(
+                f"Found {len(filtered)} unclaimed volume(s) with total monthly cost "
+                f"of ${total_cost:,.2f}" + (f" (showing top {top_n})." if truncated else ".")
+            ),
+            recommended_action=(
+                "These volumes have no PVC — deletion saves the full monthly_cost. "
+                "Confirm with your storage team before removing any volume."
+            ),
+            rows=[
+                UnclaimedVolumeRow(
+                    volume_name=v.get("volumeName", ""),
+                    monthly_cost=round(float(v.get("monthlyCost", 0.0) or 0.0), 4),
+                    properties=UnclaimedVolumeProperties(
+                        cluster=v.get("properties", {}).get("cluster", ""),
+                        provider=v.get("properties", {}).get("provider", ""),
+                        service=v.get("properties", {}).get("service", ""),
+                        name=v.get("properties", {}).get("name", ""),
+                        provider_id=v.get("properties", {}).get("providerID", ""),
+                    ),
+                )
+                for v in sliced
+            ],
+            total_monthly_cost=total_cost,
+            row_count=len(filtered),
+            truncated=truncated,
+        )
+
+    @mcp.tool(
+        version=_VERSION,
+        annotations=_read_only("Get Resource Quota Recommendations"),
+    )
+    async def get_resource_quota_recommendations(
+        window: Annotated[
+            str,
+            Field(description="Time window for usage data. Default '15d'. " + _WINDOW_RFC3339_NOTE),
+        ] = DEFAULT_WINDOW,
+        profile: Annotated[
+            Literal["development", "production", "high-availability"],
+            Field(
+                description=(
+                    "Sizing conservativeness profile. 'production' (default) balances correctness "
+                    "and headroom. 'development' is more aggressive. 'high-availability' adds more buffer."
+                )
+            ),
+        ] = "production",
+        limit: Annotated[
+            int,
+            Field(
+                description=(
+                    "Maximum namespace recommendations to return per page (server-side pagination). "
+                    "Default 20. Unlike other savings tools, this is true API-side pagination — "
+                    "not a post-fetch client-side slice."
+                ),
+                ge=1,
+                le=1000,
+            ),
+        ] = 20,
+        offset: Annotated[
+            int,
+            Field(description="Pagination offset (0-based). Default 0.", ge=0),
+        ] = 0,
+    ) -> ResourceQuotaResponse:
+        """Return namespace-level ResourceQuota sizing recommendations.
+
+        WHAT: Calls GET /model/savings/resourceQuotaSizing/recommendations and returns
+        per-namespace recommendations to create or resize ResourceQuota objects. Each
+        recommendation covers one namespace and contains a list of resource type changes
+        (CPU requests, memory requests, etc.). isNewResourceQuota=true means no quota
+        exists yet (create action); isDownsize=true means reducing an existing quota.
+
+        Note: total_monthly_savings may be 0 — this is a configuration-correctness tool,
+        not primarily a dollar-savings tool. It helps prevent over-allocation and enforce
+        namespace-level resource governance.
+
+        Note on pagination: limit and offset are true server-side pagination parameters
+        (unlike top_n in other savings tools which is client-side slicing after a broad
+        fetch). Use offset to page through large result sets.
+
+        WHEN TO USE: When investigating namespace resource governance, quota drift, or
+        when the savings overview shows resourceQuotaSizing has recommendations.
+
+        WHEN NOT TO USE: For container CPU/memory rightsizing within a namespace, use
+        get_container_savings_recommendations. For node-level savings, use
+        get_cluster_rightsizing_recommendations.
+        """
+        try:
+            raw = await _fetch_resource_quota_recommendations(
+                window=window, profile=profile, limit=limit, offset=offset
+            )
+        except McpToolError as exc:
+            return ResourceQuotaResponse(
+                status=QueryStatus.ERROR,
+                message=str(exc),
+                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+            )
+
+        recs_raw: list[dict[str, Any]] = raw.get("recommendations", [])
+        item_count = int(raw.get("itemCount", len(recs_raw)) or len(recs_raw))
+        total_monthly_savings = round(float(raw.get("totalMonthlySavings", 0.0) or 0.0), 2)
+        truncated = item_count > offset + len(recs_raw)
+
+        if not recs_raw:
+            return ResourceQuotaResponse(
+                status=QueryStatus.EMPTY,
+                message="No resource quota recommendations found.",
+                recommended_action="Try a different window or profile, or check the savings overview.",
+                item_count=item_count,
+                total_monthly_savings=total_monthly_savings,
+            )
+
+        recommendations = [
+            QuotaNamespaceRecommendation(
+                cluster=r.get("cluster", ""),
+                namespace=r.get("namespace", ""),
+                category=r.get("category", ""),
+                is_new_resource_quota=bool(r.get("isNewResourceQuota", False)),
+                resources=[
+                    QuotaResourceChange(
+                        resource_type=res.get("resourceType", ""),
+                        category=res.get("category", ""),
+                        used=res.get("used", ""),
+                        recommended=res.get("recommended", ""),
+                        is_new_resource=bool(res.get("isNewResource", False)),
+                        is_downsize=bool(res.get("isDownsize", False)),
+                    )
+                    for res in r.get("resources", [])
+                ],
+            )
+            for r in recs_raw
+        ]
+
+        return ResourceQuotaResponse(
+            status=QueryStatus.OK,
+            message=(
+                f"Found {item_count} namespace quota recommendation(s)"
+                + (f" (page offset={offset}, showing {len(recommendations)})." if offset > 0 or truncated else ".")
+            ),
+            recommended_action=(
+                "Focus on namespaces with isDownsize=true for immediate savings. "
+                "Create missing quotas (isNewResourceQuota=true) to enforce governance."
+            ),
+            recommendations=recommendations,
+            item_count=item_count,
+            total_monthly_savings=total_monthly_savings,
             truncated=truncated,
         )
 
@@ -1494,6 +2815,50 @@ Pick an option or describe what you want
 
 Once you've answered all three, I'll call `get_kubecost_workload_costs` with your choices and
 present an Executive Summary with a chart.
+"""
+
+    @mcp.prompt()
+    def explore_cost_comparison() -> str:
+        """Start a guided cost anomaly / spike investigation using period-over-period comparison."""
+        agg_menu = "\n".join(f"  - **{k}** — {v}" for k, v in _AGGREGATE_CHOICES.items())
+        return f"""\
+Let's find out what changed in your Kubernetes costs. I'll walk you through picking two
+comparable periods, then compare them.
+
+---
+
+**Step 1 — Pick two comparable periods**
+Both periods must be the SAME type and SAME length — this is enforced, not just advisory:
+  - **'lastweek' vs 'lastweek'** — compares the most recently completed calendar week
+    against itself run at different times (typically used with an explicit baseline
+    RFC3339 range instead — see below).
+  - **'lastmonth' vs 'lastmonth'** — same idea for calendar months.
+  - **Two explicit RFC3339 ranges of identical duration**, e.g.
+    current_window='2026-07-13T00:00:00Z,2026-07-20T00:00:00Z' and
+    baseline_window='2026-07-06T00:00:00Z,2026-07-13T00:00:00Z'. Both ranges must end
+    before today (UTC) — no partial/in-progress days.
+
+Bare relative windows like '7d', 'today', 'week', or 'month' are REJECTED because Kubecost
+resolves them relative to 'now' and they always include a partial current day, which would
+skew the diff.
+
+---
+
+**Step 2 — Group costs by**
+{agg_menu}
+
+---
+
+Once you've answered both, call `get_kubecost_cost_comparison` with current_window,
+baseline_window, and aggregate.
+
+Then present:
+1. A 2-3 bullet Executive Summary highlighting the biggest movers (largest absolute change).
+2. A summary table sorted by change descending, calling out any `is_new` dimensions.
+3. Based on which dimension changed most, suggest the matching drill-down tool:
+   - Container/pod-level increase → `get_container_savings_recommendations`
+   - Idle/dormant workload appeared → `get_abandoned_workloads`
+   - Node/cluster-level shift → `get_cluster_rightsizing_recommendations`
 """
 
     @mcp.prompt()
@@ -1683,3 +3048,93 @@ def _parse_abandoned_workloads_response(raw: list[dict[str, Any]]) -> list[dict[
 
     rows.sort(key=lambda r: r.get("monthlySavings", 0.0), reverse=True)
     return rows
+
+
+async def _fetch_savings_overview() -> dict[str, Any]:
+    """Fetch the savings overview from GET /model/savings."""
+    path = get_settings().kubecost_savings_overview_path
+    logger.debug("Kubecost savings overview: path=%s", path)
+    result = await call_get_api(path, params={})
+    # API returns { code, data, meta } — unwrap data
+    if isinstance(result, dict) and "data" in result:
+        return result["data"]
+    return result if isinstance(result, dict) else {}
+
+
+async def _fetch_pv_sizing(window: str, overhead_percent: int) -> dict[str, Any]:
+    """Fetch PV sizing recommendations with a broad fixed limit so callers can sort before slicing."""
+    params: dict[str, Any] = {
+        "window": window,
+        "overheadPercent": overhead_percent,
+        "offset": 0,
+        "limit": _SAVINGS_API_FETCH_LIMIT,
+    }
+    path = get_settings().kubecost_pv_sizing_path
+    logger.debug("Kubecost PV sizing: path=%s window=%s", path, window)
+    result = await call_get_api(path, params=params)
+    if isinstance(result, dict) and "data" in result:
+        return result["data"]
+    return result if isinstance(result, dict) else {}
+
+
+async def _fetch_local_disks(window: str, overhead_percent: int) -> dict[str, Any]:
+    """Fetch local disk savings recommendations."""
+    params: dict[str, Any] = {
+        "window": window,
+        "overheadPercent": overhead_percent,
+    }
+    path = get_settings().kubecost_local_disks_path
+    logger.debug("Kubecost local disks: path=%s window=%s", path, window)
+    result = await call_get_api(path, params=params)
+    # API returns { unutilizedDisks: [...] } directly (no code/data wrapper)
+    if isinstance(result, dict):
+        return result
+    return {}
+
+
+async def _fetch_node_group_sizing(cluster: str, window: str, profile: str) -> dict[str, Any]:
+    """Fetch node group sizing recommendations; unwraps the { code, data } wrapper."""
+    params: dict[str, Any] = {
+        "cluster": cluster,
+        "window": window,
+        "profile": profile,
+    }
+    path = get_settings().kubecost_node_group_sizing_path
+    logger.debug("Kubecost node group sizing: path=%s cluster=%s", path, cluster)
+    result = await call_get_api(path, params=params)
+    if isinstance(result, dict) and "data" in result:
+        return result["data"]
+    return result if isinstance(result, dict) else {}
+
+
+async def _fetch_unclaimed_volumes(window: str) -> dict[str, Any]:
+    """Fetch unclaimed volumes; unwraps the { code, data } wrapper."""
+    params: dict[str, Any] = {"window": window}
+    path = get_settings().kubecost_unclaimed_volumes_path
+    logger.debug("Kubecost unclaimed volumes: path=%s window=%s", path, window)
+    result = await call_get_api(path, params=params)
+    if isinstance(result, dict) and "data" in result:
+        return result["data"]
+    return result if isinstance(result, dict) else {}
+
+
+async def _fetch_resource_quota_recommendations(
+    window: str,
+    profile: str,
+    limit: int,
+    offset: int,
+) -> dict[str, Any]:
+    """Fetch resource quota recommendations; hardcodes show='all' (only confirmed valid value)."""
+    params: dict[str, Any] = {
+        "window": window,
+        "profile": profile,
+        "show": "all",
+        "limit": limit,
+        "offset": offset,
+    }
+    path = get_settings().kubecost_resource_quota_path
+    logger.debug("Kubecost resource quota: path=%s window=%s", path, window)
+    result = await call_get_api(path, params=params)
+    if isinstance(result, dict) and "data" in result:
+        return result["data"]
+    return result if isinstance(result, dict) else {}

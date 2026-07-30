@@ -1,0 +1,21 @@
+{
+    "mcpServers": {
+        "server": {
+            "command": "uv",
+            "args": [
+                "run",
+                "--project",
+                ".",
+                "--with",
+                "fastmcp",
+                "fastmcp",
+                "run",
+                "src/mcp_kubecost/server.py"
+            ],
+            "transport": "stdio",
+            "env": {
+                "KUBECOST_BASE_URL": "https://demo.kubecost.xyz"
+            }
+        }
+    }
+}

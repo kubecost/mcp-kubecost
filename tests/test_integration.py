@@ -11,7 +11,7 @@ They call the real MCP server tools via the fastmcp CLI, matching the commands:
 
 Prerequisites:
   - KUBECOST_BASE_URL must point to a live instance (or demo.kubecost.xyz is used).
-  - Optionally set KUBECOST_API_KEY / KUBECOST_OPEN_TOKEN for authenticated endpoints.
+  - Optionally set KUBECOST_API_KEY for authenticated endpoints.
 """
 
 from __future__ import annotations

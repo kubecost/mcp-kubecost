@@ -245,3 +245,5 @@ sample-data/assets-by-provider.json
 sample-data/assets-by-type.json
 scripts/sync-from-cldy.py
 mcp-http.json
+.vscode/extensions.json
+.vscode/settings.json
