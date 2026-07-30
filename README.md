@@ -36,12 +36,13 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
 
 ## Tools
 
-**10 tools** — all read-only, all structured for LLM consumption:
+**11 tools** — all read-only, all structured for LLM consumption:
 
 | Tool | Description |
 |------|-------------|
 | `kubecost_list_windows` | List the valid time windows for Kubecost cost queries. |
 | `get_kubecost_workload_costs` | Return Kubernetes cost allocation from Kubecost grouped by chosen dimensions. |
+| `get_kubecost_cost_comparison` | Compare Kubernetes cost allocation between two equal-length windows to find cost spikes. |
 | `get_container_savings_recommendations` | Return Kubernetes container rightsizing recommendations and potential savings. |
 | `get_abandoned_workloads` | Return pods with abnormally low network traffic — likely abandoned workloads. |
 | `get_savings_overview` | Return a ranked summary of all Kubecost savings categories. |
@@ -51,7 +52,7 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
 | `get_unclaimed_volumes` | Return PersistentVolumes that are provisioned but not bound to any PVC. |
 | `get_resource_quota_recommendations` | Return namespace-level ResourceQuota sizing recommendations. |
 
-**10 prompts** — step-by-step workflows your assistant can follow:
+**11 prompts** — step-by-step workflows your assistant can follow:
 
 | Prompt | Description |
 |--------|-------------|
@@ -60,10 +61,11 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
 | `container_savings_window_help` | Explain the time window options for the container savings tool. |
 | `container_savings_filter_help` | Explain the filter options (undersized containers, trivial savings) for container savings. |
 | `explore_costs` | Start a guided Kubernetes cost exploration. Presents choices step-by-step. |
+| `explore_cost_comparison` | Start a guided cost anomaly / spike investigation using period-over-period comparison. |
 | `top_spenders` | Show top cost drivers across clusters and namespaces for a given window. |
 | `cost_trend` | Show daily cost trend for a given aggregation dimension. |
 | `explore_abandoned_workloads` | Start a guided abandoned-workload investigation. Walks the user through threshold and scope choices. |
-| `optimization` | Guidance for rightsizing resources and planning Reserved Instance purchases. |
+| `optimization` | Guidance for rightsizing resources and diagnosing Kubernetes cost anomalies. |
 | `kubecost_cost_allocation` | Guidance for investigating Kubernetes cluster costs and container allocation. |
 
 ## Quick Start

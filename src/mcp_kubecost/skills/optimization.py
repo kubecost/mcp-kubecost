@@ -1,4 +1,4 @@
-"""Optimization skill — rightsizing and Reserved Instance workflows."""
+"""Optimization skill — rightsizing and cost anomaly investigation workflows."""
 
 from fastmcp import FastMCP
 
@@ -7,7 +7,7 @@ SKILL_CONTENT = """\
 
 ## When to Use
 Use this skill when investigating savings opportunities, rightsizing resources, \
-planning Reserved Instance purchases, or reviewing RI utilization.
+or diagnosing why costs changed (spikes, drops, anomalies).
 
 ## Available Tools
 
@@ -48,6 +48,15 @@ planning Reserved Instance purchases, or reviewing RI utilization.
   means create a new quota; isDownsize=true means reduce an existing one. total_monthly_savings may be 0 --
   this is a configuration-correctness tool. Uses true server-side pagination (limit/offset).
 
+### Cost anomaly / spike investigation (Kubecost)
+- `get_kubecost_cost_comparison` — Diffs Kubernetes allocation costs between two equal-length periods
+  (two equal-duration RFC3339 ranges) and returns a per-dimension
+  change/pct_change table sorted by absolute change descending. This is the entry point for "why did
+  costs change" or "what spiked" questions -- run it first to find which dimension moved most, then
+  drill into the tool that matches that dimension.
+- `explore_cost_comparison` prompt — Guided workflow for picking two comparable periods and interpreting
+  the diff.
+
 ## Common Workflows
 
 ### General savings investigation (any "how can I save?" question)
@@ -82,6 +91,16 @@ planning Reserved Instance purchases, or reviewing RI utilization.
 2. Call `get_cluster_rightsizing_recommendations` with the cluster ID and profile='production'
 3. Focus on 'ScaleIn' and 'ChangeInstanceType' recommendations for quickest savings
 4. Validate recommended node counts against current workload headroom before applying
+
+### Cost anomaly / spike investigation ("why did costs change?")
+1. Invoke `explore_cost_comparison` prompt to walk the user through picking two comparable periods
+2. Call `get_kubecost_cost_comparison` with current_window, baseline_window, and an aggregate dimension
+3. Identify the top mover(s) by absolute `change` in the sorted diff table
+4. Drill into the matching tool based on which dimension moved most:
+   - Container/pod-level cost increase → `get_container_savings_recommendations`
+   - A newly idle/dormant workload (`is_new` in reverse, or low traffic) → `get_abandoned_workloads`
+   - Node/cluster-level shift → `get_cluster_rightsizing_recommendations`
+5. Rows with `is_new=true` had zero cost in the baseline period -- flag these as newly appeared workloads
 """
 
 
@@ -90,9 +109,9 @@ def register_optimization_skill(mcp: FastMCP) -> None:
 
     @mcp.prompt()
     def optimization() -> str:
-        """Guidance for rightsizing resources and planning Reserved Instance purchases.
+        """Guidance for rightsizing resources and diagnosing Kubernetes cost anomalies.
 
-        Use when investigating savings opportunities, checking RI utilization,
-        or planning commitment purchases. Always check rightsizing before RI planning.
+        Use when investigating savings opportunities, rightsizing workloads or nodes,
+        or figuring out why costs changed (spikes, drops).
         """
         return SKILL_CONTENT

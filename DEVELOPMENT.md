@@ -90,7 +90,7 @@ uv run ruff check . --fix              # lint
 uvx pre-commit run --config .pre-commit-config-ci.yaml --all-files
 ```
 
-Run `ruff format` and `isort` after every Python edit. See [README-pre-commit.md](README-pre-commit.md) for local vs CI hook tiers.
+Run `ruff format` and `ruff check --fix` after every Python edit. See [README-pre-commit.md](README-pre-commit.md) for local vs CI hook tiers.
 
 ## Docker / Kubernetes
 

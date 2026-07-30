@@ -9,12 +9,18 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import UTC
 
 import pytest
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError as FastMcpToolError
 from pytest_httpx import HTTPXMock
 
-from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
+from mcp_kubecost.tools.kubecost_tools import (
+    _diff_allocation_rows,
+    _validate_comparison_windows,
+    register_kubecost_tools,
+)
 
 BASE_URL = os.environ.get("KUBECOST_BASE_URL", "https://demo.kubecost.xyz")
 ALLOCATION_PATH = "/model/allocation"
@@ -680,3 +686,219 @@ class TestGetResourceQuotaRecommendations:
         result = await tool.run({})
         # totalMonthlySavings is 0 in the fixture — that's expected for this correctness tool
         assert _sc(result)["total_monthly_savings"] == pytest.approx(0.0)
+
+
+# ── _validate_comparison_windows (Task 1) ────────────────────────────────────
+
+
+class TestComparisonWindowValidation:
+    @pytest.mark.parametrize("window", ["7d", "15d", "30d", "1d"])
+    def test_bare_relative_window_rejected(self, window):
+        with pytest.raises(FastMcpToolError, match="invalid_input"):
+            _validate_comparison_windows(window, "lastweek")
+
+    @pytest.mark.parametrize("window", ["today", "week", "month"])
+    def test_relative_alias_rejected(self, window):
+        with pytest.raises(FastMcpToolError, match="invalid_input"):
+            _validate_comparison_windows(window, "lastweek")
+
+    def test_mismatched_aliases_rejected(self):
+        with pytest.raises(FastMcpToolError, match="invalid_input"):
+            _validate_comparison_windows("lastweek", "lastmonth")
+
+    def test_mixed_alias_and_rfc3339_rejected(self):
+        with pytest.raises(FastMcpToolError, match="invalid_input"):
+            _validate_comparison_windows("lastweek", "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z")
+
+    def test_unequal_duration_rfc3339_rejected(self):
+        with pytest.raises(FastMcpToolError, match="invalid_input"):
+            _validate_comparison_windows(
+                "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
+                "2020-01-01T00:00:00Z,2020-01-06T00:00:00Z",
+            )
+
+    def test_rfc3339_range_including_today_rejected(self):
+        from datetime import datetime, timedelta
+
+        tomorrow = (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
+        with pytest.raises(FastMcpToolError, match="invalid_input"):
+            _validate_comparison_windows(
+                f"2020-01-01T00:00:00Z,{tomorrow}",
+                "2019-01-01T00:00:00Z,2019-01-08T00:00:00Z",
+            )
+
+    def test_malformed_rfc3339_rejected(self):
+        with pytest.raises(FastMcpToolError, match="invalid_input"):
+            _validate_comparison_windows("not-a-date,also-not-a-date", "lastweek")
+
+    def test_lastweek_vs_lastweek_accepted(self):
+        _validate_comparison_windows("lastweek", "lastweek")  # should not raise
+
+    def test_lastmonth_vs_lastmonth_accepted(self):
+        _validate_comparison_windows("lastmonth", "lastmonth")  # should not raise
+
+    def test_equal_duration_rfc3339_ranges_accepted(self):
+        # Both 7-day ranges, well in the past — should not raise
+        _validate_comparison_windows(
+            "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
+            "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z",
+        )
+
+
+# ── _diff_allocation_rows (Task 2) ───────────────────────────────────────────
+
+
+class TestDiffAllocationRows:
+    def test_new_dimension_in_current_only(self):
+        current = [{"namespace": "new-ns", "totalCost": 50.0}]
+        baseline: list[dict] = []
+        result = _diff_allocation_rows(current, baseline, ["namespace"])
+        assert len(result) == 1
+        row = result[0]
+        assert row["namespace"] == "new-ns"
+        assert row["current_cost"] == 50.0
+        assert row["baseline_cost"] == 0
+        assert row["is_new"] is True
+        assert row["pct_change"] is None
+
+    def test_dimension_dropped_in_baseline_only(self):
+        current: list[dict] = []
+        baseline = [{"namespace": "gone-ns", "totalCost": 30.0}]
+        result = _diff_allocation_rows(current, baseline, ["namespace"])
+        assert len(result) == 1
+        row = result[0]
+        assert row["namespace"] == "gone-ns"
+        assert row["current_cost"] == 0
+        assert row["baseline_cost"] == 30.0
+        assert row["change"] == -30.0
+        assert row["is_new"] is False
+
+    def test_normal_increase(self):
+        current = [{"namespace": "ns-a", "totalCost": 120.0}]
+        baseline = [{"namespace": "ns-a", "totalCost": 100.0}]
+        result = _diff_allocation_rows(current, baseline, ["namespace"])
+        row = result[0]
+        assert row["change"] == 20.0
+        assert row["pct_change"] == 20.0
+        assert row["is_new"] is False
+
+    def test_normal_decrease(self):
+        current = [{"namespace": "ns-a", "totalCost": 80.0}]
+        baseline = [{"namespace": "ns-a", "totalCost": 100.0}]
+        result = _diff_allocation_rows(current, baseline, ["namespace"])
+        row = result[0]
+        assert row["change"] == -20.0
+        assert row["pct_change"] == -20.0
+
+    def test_zero_baseline_division_handled(self):
+        current = [{"namespace": "ns-a", "totalCost": 10.0}]
+        baseline = [{"namespace": "ns-a", "totalCost": 0.0}]
+        result = _diff_allocation_rows(current, baseline, ["namespace"])
+        row = result[0]
+        assert row["pct_change"] is None
+        assert row["is_new"] is True
+
+    def test_sorted_by_absolute_change_desc(self):
+        current = [
+            {"namespace": "small-change", "totalCost": 101.0},
+            {"namespace": "big-drop", "totalCost": 10.0},
+        ]
+        baseline = [
+            {"namespace": "small-change", "totalCost": 100.0},
+            {"namespace": "big-drop", "totalCost": 200.0},
+        ]
+        result = _diff_allocation_rows(current, baseline, ["namespace"])
+        assert result[0]["namespace"] == "big-drop"
+        assert result[1]["namespace"] == "small-change"
+
+
+# ── get_kubecost_cost_comparison (Task 3, end-to-end) ────────────────────────
+
+
+def _comparison_allocation_response(ns_name: str, total_cost: float) -> dict:
+    return {
+        "data": [
+            {
+                f"cluster-one/{ns_name}": {
+                    "name": f"cluster-one/{ns_name}",
+                    "properties": {"cluster": "cluster-one", "namespace": ns_name},
+                    "window": {"start": "2020-01-01T00:00:00Z", "end": "2020-01-08T00:00:00Z"},
+                    "cpuCost": total_cost * 0.6,
+                    "cpuCostIdle": 0.0,
+                    "ramCost": total_cost * 0.4,
+                    "ramCostIdle": 0.0,
+                    "networkCost": 0.0,
+                    "pvCost": 0.0,
+                    "gpuCost": 0.0,
+                    "gpuCostIdle": 0.0,
+                    "loadBalancerCost": 0.0,
+                    "sharedCost": 0.0,
+                    "totalCost": total_cost,
+                    "totalEfficiency": 0.5,
+                }
+            }
+        ]
+    }
+
+
+class TestGetKubecostCostComparison:
+    @pytest.mark.asyncio
+    async def test_success_with_clear_top_mover(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(
+            method="GET",
+            url=_allocation_url(),
+            json=_comparison_allocation_response("ns-a", 200.0),
+        )
+        httpx_mock.add_response(
+            method="GET",
+            url=_allocation_url(),
+            json=_comparison_allocation_response("ns-a", 50.0),
+        )
+        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        result = await tool.run(
+            {
+                "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
+                "baseline_window": "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z",
+                "aggregate": "namespace",
+            }
+        )
+        sc = _sc(result)
+        assert sc["status"] == "ok"
+        assert sc["row_count"] == 1
+        assert sc["rows"][0]["change"] == pytest.approx(150.0)
+
+    @pytest.mark.asyncio
+    async def test_empty_both_windows(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        result = await tool.run(
+            {
+                "current_window": "lastweek",
+                "baseline_window": "lastweek",
+            }
+        )
+        assert _sc(result)["status"] == "empty"
+
+    @pytest.mark.asyncio
+    async def test_http_error_on_either_call(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_allocation_url(), status_code=500)
+        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        result = await tool.run(
+            {
+                "current_window": "lastweek",
+                "baseline_window": "lastweek",
+            }
+        )
+        assert _sc(result)["status"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_validation_error_returns_tool_error_not_raw_exception(self, mcp_app):
+        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        with pytest.raises(FastMcpToolError, match="invalid_input"):
+            await tool.run(
+                {
+                    "current_window": "7d",
+                    "baseline_window": "lastweek",
+                }
+            )

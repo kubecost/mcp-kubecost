@@ -12,8 +12,9 @@ Contract version: 3.0
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
@@ -273,6 +274,235 @@ def _aggregate_by_dimensions(rows: list[dict], dimension_cols: list[str]) -> lis
                 row[field] = _format_number(row[field])
 
     return aggregated
+
+
+# ---------------------------------------------------------------------------
+# Cost comparison window validation & diffing (get_kubecost_cost_comparison)
+# ---------------------------------------------------------------------------
+
+# Bare relative windows ("7d", "15d", ...) are resolved by Kubecost relative to
+# "now", so they always include a partial current day. Reject these for
+# period-over-period comparisons since the partial day skews the diff.
+_BARE_RELATIVE_WINDOW = re.compile(r"^\d+d$")
+
+# Calendar-relative aliases that also resolve relative to "now" and therefore
+# include a partial current period.
+_REJECTED_RELATIVE_ALIASES: frozenset[str] = frozenset({"today", "week", "month"})
+
+# Fixed calendar-period aliases — safe to use for comparisons since they never
+# include the current (in-progress) period.
+_ACCEPTED_COMPARISON_ALIASES: frozenset[str] = frozenset({"lastweek", "lastmonth"})
+
+
+def _classify_comparison_window(window: str, field_name: str) -> tuple[str, Any]:
+    """Classify a comparison window as ('alias', name) or ('rfc3339', (start, end)).
+
+    Raises a structured ToolError for any window that is unsuitable for a
+    period-over-period comparison (see module docstring rules).
+    """
+    raw = (window or "").strip()
+    lower = raw.lower()
+
+    if _BARE_RELATIVE_WINDOW.match(lower):
+        raise_tool_error(
+            ErrorCode.INVALID_INPUT,
+            message=(
+                f"{field_name}='{window}' is a bare relative window. Kubecost resolves windows like "
+                "'7d' relative to 'now', so they always include a partial current day and skew a diff."
+            ),
+            retryable=False,
+            suggested_action=(
+                f"Use 'lastweek' or 'lastmonth' for {field_name}, or an explicit RFC3339 range "
+                "(e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z') that ends before today."
+            ),
+        )
+
+    if lower in _REJECTED_RELATIVE_ALIASES:
+        raise_tool_error(
+            ErrorCode.INVALID_INPUT,
+            message=(
+                f"{field_name}='{window}' resolves relative to 'now' and includes a partial current period, "
+                "which skews a diff."
+            ),
+            retryable=False,
+            suggested_action=(
+                f"Use 'lastweek' or 'lastmonth' for {field_name}, or an explicit RFC3339 range that ends before today."
+            ),
+        )
+
+    if lower in _ACCEPTED_COMPARISON_ALIASES:
+        return "alias", lower
+
+    if "," in raw:
+        parts = [p.strip() for p in raw.split(",")]
+        if len(parts) != 2 or not parts[0] or not parts[1]:
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message=f"{field_name}='{window}' is not a valid RFC3339 range. Expected 'start,end'.",
+                retryable=False,
+                suggested_action=(
+                    f"Provide {field_name} as 'lastweek', 'lastmonth', or an RFC3339 range "
+                    "e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z'."
+                ),
+            )
+        start_str, end_str = parts
+        try:
+            start = datetime.fromisoformat(start_str.replace("Z", "+00:00"))
+            end = datetime.fromisoformat(end_str.replace("Z", "+00:00"))
+        except ValueError:
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message=f"{field_name}='{window}' contains an unparseable RFC3339 timestamp.",
+                retryable=False,
+                suggested_action=(
+                    f"Provide {field_name} as 'lastweek', 'lastmonth', or an RFC3339 range "
+                    "e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z'."
+                ),
+            )
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=UTC)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=UTC)
+        if end <= start:
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message=f"{field_name}='{window}' has an end timestamp that is not after the start.",
+                retryable=False,
+                suggested_action=f"Provide {field_name} as 'start,end' with end after start.",
+            )
+        today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        if end > today_start:
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message=(
+                    f"{field_name}='{window}' extends into today (end={end.isoformat()}), which includes "
+                    "partial/incomplete data and skews a diff."
+                ),
+                retryable=False,
+                suggested_action=(
+                    f"Provide {field_name} with an end timestamp at or before {today_start.isoformat()} "
+                    "(the start of today, UTC)."
+                ),
+            )
+        return "rfc3339", (start, end)
+
+    raise_tool_error(
+        ErrorCode.INVALID_INPUT,
+        message=(
+            f"{field_name}='{window}' is not a supported comparison window. Bare relative windows "
+            "('7d', 'today', 'week', 'month') are rejected because they include a partial current period."
+        ),
+        retryable=False,
+        suggested_action=(
+            f"Provide {field_name} as 'lastweek', 'lastmonth', or an RFC3339 range "
+            "e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z'."
+        ),
+    )
+
+
+def _validate_comparison_windows(current_window: str, baseline_window: str) -> None:
+    """Validate that current_window and baseline_window are comparable.
+
+    Enforces (raising a structured ToolError on any violation):
+    - Neither window may be a bare relative window ('Nd', 'today', 'week', 'month').
+    - Both windows must be the same 'type': either the identical fixed-calendar
+      alias ('lastweek'/'lastweek' or 'lastmonth'/'lastmonth'), or two RFC3339
+      ranges of identical duration.
+    - RFC3339 ranges must not extend into today (partial data).
+    """
+    current_kind, current_value = _classify_comparison_window(current_window, "current_window")
+    baseline_kind, baseline_value = _classify_comparison_window(baseline_window, "baseline_window")
+
+    if current_kind != baseline_kind:
+        raise_tool_error(
+            ErrorCode.INVALID_INPUT,
+            message=(
+                f"current_window and baseline_window must be the same type of window "
+                f"(got {current_kind}='{current_window}' vs {baseline_kind}='{baseline_window}')."
+            ),
+            retryable=False,
+            suggested_action=(
+                "Use matching aliases (e.g. both 'lastweek') or two RFC3339 ranges of equal duration for both windows."
+            ),
+        )
+
+    if current_kind == "alias":
+        if current_value != baseline_value:
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message=(
+                    f"current_window='{current_window}' and baseline_window='{baseline_window}' are "
+                    "different calendar aliases and are not equal-length comparable periods."
+                ),
+                retryable=False,
+                suggested_action="Use the same alias for both windows, or switch to explicit RFC3339 ranges.",
+            )
+    else:
+        current_start, current_end = current_value
+        baseline_start, baseline_end = baseline_value
+        if (current_end - current_start) != (baseline_end - baseline_start):
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message=(
+                    f"current_window='{current_window}' and baseline_window='{baseline_window}' have "
+                    "different durations and cannot be diffed as equal-length periods."
+                ),
+                retryable=False,
+                suggested_action="Adjust one of the RFC3339 ranges so both windows span the same duration.",
+            )
+
+
+def _diff_allocation_rows(
+    current_rows: list[dict[str, Any]],
+    baseline_rows: list[dict[str, Any]],
+    dimension_cols: list[str],
+) -> list[dict[str, Any]]:
+    """Join current and baseline aggregated allocation rows on their dimension tuple.
+
+    Returns one dict per dimension key present in either input, each with the
+    dimension values, ``current_cost``, ``baseline_cost``, ``change``
+    (current - baseline), and ``pct_change`` (None when baseline_cost is 0,
+    in which case the row is also flagged with ``is_new=True``). Sorted by
+    absolute ``change`` descending.
+    """
+
+    def _key(row: dict[str, Any]) -> tuple:
+        return tuple(row.get(dim, "") for dim in dimension_cols)
+
+    current_by_key: dict[tuple, dict[str, Any]] = {_key(r): r for r in current_rows}
+    baseline_by_key: dict[tuple, dict[str, Any]] = {_key(r): r for r in baseline_rows}
+
+    all_keys = set(current_by_key) | set(baseline_by_key)
+    diffed: list[dict[str, Any]] = []
+
+    for key in all_keys:
+        current_row = current_by_key.get(key)
+        baseline_row = baseline_by_key.get(key)
+
+        current_cost = float((current_row or {}).get("totalCost", 0) or 0)
+        baseline_cost = float((baseline_row or {}).get("totalCost", 0) or 0)
+        change = current_cost - baseline_cost
+
+        is_new = baseline_cost == 0
+        pct_change: float | None = None
+        if not is_new:
+            pct_change = round((change / baseline_cost) * 100, 2)
+
+        source_row = current_row or baseline_row or {}
+        row: dict[str, Any] = {dim: source_row.get(dim, "") for dim in dimension_cols}
+        row.update(
+            {
+                "current_cost": _format_number(current_cost),
+                "baseline_cost": _format_number(baseline_cost),
+                "change": _format_number(change),
+                "pct_change": pct_change,
+                "is_new": is_new,
+            }
+        )
+        diffed.append(row)
+
+    diffed.sort(key=lambda r: abs(float(r.get("change", 0) or 0)), reverse=True)
+    return diffed
 
 
 # ---------------------------------------------------------------------------
@@ -998,6 +1228,54 @@ class AbandonedWorkloadsResponse(BaseToolResponse):
     )
 
 
+class CostComparisonRow(BaseModel):
+    """One dimension's cost comparison between the current and baseline window."""
+
+    model_config = ConfigDict(extra="allow")
+
+    current_cost: float = Field(default=0.0, description="Total cost in the current window (USD).")
+    baseline_cost: float = Field(default=0.0, description="Total cost in the baseline window (USD).")
+    change: float = Field(default=0.0, description="current_cost - baseline_cost (USD). Positive = cost increased.")
+    pct_change: float | None = Field(
+        default=None,
+        description=(
+            "Percent change from baseline to current. Null when baseline_cost is 0 "
+            "(see is_new) since percent change is undefined."
+        ),
+    )
+    is_new: bool = Field(
+        default=False,
+        description="True when this dimension had zero cost in the baseline window (newly appeared).",
+    )
+
+
+class CostComparisonResponse(BaseToolResponse):
+    """Response from get_kubecost_cost_comparison."""
+
+    current_window: str = Field(description="Current-period window as passed by the caller.")
+    baseline_window: str = Field(description="Baseline-period window as passed by the caller.")
+    aggregate: str = Field(description="Aggregation dimension(s) requested.")
+    dimensions: list[str] = Field(
+        default_factory=list, description="Resolved dimension columns present in each result row."
+    )
+    total_current_cost: float = Field(default=0.0, description="Sum of current_cost across all rows (USD).")
+    total_baseline_cost: float = Field(default=0.0, description="Sum of baseline_cost across all rows (USD).")
+    total_change: float = Field(default=0.0, description="total_current_cost - total_baseline_cost (USD).")
+    row_count: int = Field(default=0, description="Total number of rows in the full diffed population.")
+    rows: list[CostComparisonRow] = Field(
+        default_factory=list,
+        description=(
+            "Diff rows sorted by absolute change descending, capped at top_n. "
+            "Each row contains the requested dimension values plus current_cost, "
+            "baseline_cost, change, pct_change, and is_new."
+        ),
+    )
+    truncated: bool = Field(
+        default=False,
+        description="True when the full diffed result set was larger than top_n.",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
@@ -1120,8 +1398,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         time window with the user first (see kubecost_list_windows).
 
         WHEN NOT TO USE: For container rightsizing/savings use
-        get_container_savings_recommendations; for non-Kubernetes cloud cost use
-        run_cost_report.
+        get_container_savings_recommendations. For period-over-period cost
+        change / spike investigation, use get_kubecost_cost_comparison instead.
         """
         if not window:
             return KubecostAllocationResponse(
@@ -1213,6 +1491,160 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             total_cost=round(filtered_total, 2),
             row_count=len(filtered),
             rows=[AllocationRow.model_validate(r) for r in filtered[:top_n]],
+            truncated=truncated,
+        )
+
+    @mcp.tool(
+        version=_VERSION,
+        annotations=ToolAnnotations(
+            title="Get Kubecost Cost Comparison",
+            readOnlyHint=True,
+            destructiveHint=False,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
+    async def get_kubecost_cost_comparison(
+        current_window: Annotated[
+            str,
+            Field(
+                description=(
+                    "The more recent period to inspect. Accepts 'lastweek', 'lastmonth', or an "
+                    "explicit RFC3339 range 'start,end' that ends before today (UTC). Bare relative "
+                    "windows ('7d', 'today', 'week', 'month') are REJECTED because they include a "
+                    "partial current period."
+                )
+            ),
+        ],
+        baseline_window: Annotated[
+            str,
+            Field(
+                description=(
+                    "The prior period to compare against. Must be the SAME type as current_window: "
+                    "an identical alias ('lastweek' vs 'lastweek') or an RFC3339 range with the same "
+                    "duration as current_window."
+                )
+            ),
+        ],
+        aggregate: Annotated[
+            str,
+            Field(
+                description=(
+                    "Aggregation dimension(s): a single value ('cluster') or a "
+                    "comma-separated list ('cluster,namespace'). "
+                    "Also accepts: pod, node, controller, label, container, "
+                    "controllerKind, department, environment, owner, product, team."
+                ),
+            ),
+        ] = "cluster,namespace",
+        top_n: Annotated[
+            int,
+            Field(
+                description=(
+                    "Maximum rows to include in the response. "
+                    "When the full diffed result exceeds top_n, the response sets truncated=True."
+                ),
+                ge=1,
+                le=10000,
+            ),
+        ] = 20,
+    ) -> CostComparisonResponse:
+        """Compare Kubernetes cost allocation between two equal-length windows to find cost spikes.
+
+        WHAT: Fetches allocation data for current_window and baseline_window separately,
+        aggregates each by the chosen dimension(s), and returns a per-dimension diff
+        (current_cost, baseline_cost, change, pct_change) sorted by absolute change
+        descending. This is the anomaly-investigation entry point.
+
+        WHEN TO USE: Run this FIRST when investigating "why did costs change" or "what
+        spiked" questions. Run this first to find which dimension changed the most,
+        then drill into get_container_savings_recommendations, get_abandoned_workloads,
+        or get_cluster_rightsizing_recommendations for that dimension.
+
+        WHEN NOT TO USE: For a single-period cost snapshot (no comparison), use
+        get_kubecost_workload_costs instead.
+
+        Window rules (enforced): current_window and baseline_window must both be
+        'lastweek', both be 'lastmonth', or both be RFC3339 ranges of identical
+        duration ending before today. Bare relative windows ('7d', 'today', 'week',
+        'month') are rejected since Kubecost resolves them relative to 'now' and
+        they would include partial, in-progress data.
+        """
+        _validate_comparison_windows(current_window, baseline_window)
+
+        try:
+            current_response = await _fetch_allocation(
+                aggregate=aggregate,
+                window=current_window,
+                accumulate=True,
+                limit=100000,
+            )
+            baseline_response = await _fetch_allocation(
+                aggregate=aggregate,
+                window=baseline_window,
+                accumulate=True,
+                limit=100000,
+            )
+        except McpToolError as exc:
+            return CostComparisonResponse(
+                status=QueryStatus.ERROR,
+                message=str(exc),
+                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                current_window=current_window,
+                baseline_window=baseline_window,
+                aggregate=aggregate,
+            )
+
+        current_dims, current_rows = _parse_allocation_response(current_response)
+        baseline_dims, baseline_rows = _parse_allocation_response(baseline_response)
+        dimension_cols = current_dims or baseline_dims
+
+        if not current_rows and not baseline_rows:
+            return CostComparisonResponse(
+                status=QueryStatus.EMPTY,
+                message=(f"No Kubecost allocation data for either window ('{current_window}' or '{baseline_window}')."),
+                recommended_action="Try different windows or a different aggregate dimension.",
+                current_window=current_window,
+                baseline_window=baseline_window,
+                aggregate=aggregate,
+                dimensions=dimension_cols,
+            )
+
+        current_aggregated = _aggregate_by_dimensions(current_rows, dimension_cols) if current_rows else []
+        baseline_aggregated = _aggregate_by_dimensions(baseline_rows, dimension_cols) if baseline_rows else []
+
+        diffed = _diff_allocation_rows(current_aggregated, baseline_aggregated, dimension_cols)
+
+        total_current = sum(float(r.get("current_cost", 0) or 0) for r in diffed)
+        total_baseline = sum(float(r.get("baseline_cost", 0) or 0) for r in diffed)
+        truncated = len(diffed) > top_n
+
+        top_mover = diffed[0] if diffed else None
+        top_mover_desc = ""
+        if top_mover:
+            dim_desc = ", ".join(f"{dim}={top_mover.get(dim, '')}" for dim in dimension_cols)
+            top_mover_desc = f" Biggest mover: {dim_desc} (change ${top_mover.get('change', 0):,.2f})."
+
+        return CostComparisonResponse(
+            status=QueryStatus.OK,
+            message=(
+                f"Compared {current_window} (${total_current:,.2f}) vs {baseline_window} "
+                f"(${total_baseline:,.2f}) by {', '.join(dimension_cols) or aggregate}: "
+                f"{len(diffed)} row(s)" + (f" (showing top {top_n})" if truncated else "") + "." + top_mover_desc
+            ),
+            recommended_action=(
+                "Drill into get_container_savings_recommendations, get_abandoned_workloads, or "
+                "get_cluster_rightsizing_recommendations for the dimension(s) with the largest change."
+            ),
+            current_window=current_window,
+            baseline_window=baseline_window,
+            aggregate=aggregate,
+            dimensions=dimension_cols,
+            total_current_cost=round(total_current, 2),
+            total_baseline_cost=round(total_baseline, 2),
+            total_change=round(total_current - total_baseline, 2),
+            row_count=len(diffed),
+            rows=[CostComparisonRow.model_validate(r) for r in diffed[:top_n]],
             truncated=truncated,
         )
 
@@ -1318,8 +1750,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         quantiles, CPU vs memory strategy), invoke the container_rightsizing_guide
         prompt first.
 
-        WHEN NOT TO USE: For non-Kubernetes resources use get_rightsizing_recommendations;
-        for raw Kubernetes spend use get_kubecost_workload_costs.
+        WHEN NOT TO USE: For raw Kubernetes spend by cluster/namespace/pod, use
+        get_kubecost_workload_costs.
         """
         sizing = resolve_sizing_params(
             preset,
@@ -2383,6 +2815,50 @@ Pick an option or describe what you want
 
 Once you've answered all three, I'll call `get_kubecost_workload_costs` with your choices and
 present an Executive Summary with a chart.
+"""
+
+    @mcp.prompt()
+    def explore_cost_comparison() -> str:
+        """Start a guided cost anomaly / spike investigation using period-over-period comparison."""
+        agg_menu = "\n".join(f"  - **{k}** — {v}" for k, v in _AGGREGATE_CHOICES.items())
+        return f"""\
+Let's find out what changed in your Kubernetes costs. I'll walk you through picking two
+comparable periods, then compare them.
+
+---
+
+**Step 1 — Pick two comparable periods**
+Both periods must be the SAME type and SAME length — this is enforced, not just advisory:
+  - **'lastweek' vs 'lastweek'** — compares the most recently completed calendar week
+    against itself run at different times (typically used with an explicit baseline
+    RFC3339 range instead — see below).
+  - **'lastmonth' vs 'lastmonth'** — same idea for calendar months.
+  - **Two explicit RFC3339 ranges of identical duration**, e.g.
+    current_window='2026-07-13T00:00:00Z,2026-07-20T00:00:00Z' and
+    baseline_window='2026-07-06T00:00:00Z,2026-07-13T00:00:00Z'. Both ranges must end
+    before today (UTC) — no partial/in-progress days.
+
+Bare relative windows like '7d', 'today', 'week', or 'month' are REJECTED because Kubecost
+resolves them relative to 'now' and they always include a partial current day, which would
+skew the diff.
+
+---
+
+**Step 2 — Group costs by**
+{agg_menu}
+
+---
+
+Once you've answered both, call `get_kubecost_cost_comparison` with current_window,
+baseline_window, and aggregate.
+
+Then present:
+1. A 2-3 bullet Executive Summary highlighting the biggest movers (largest absolute change).
+2. A summary table sorted by change descending, calling out any `is_new` dimensions.
+3. Based on which dimension changed most, suggest the matching drill-down tool:
+   - Container/pod-level increase → `get_container_savings_recommendations`
+   - Idle/dormant workload appeared → `get_abandoned_workloads`
+   - Node/cluster-level shift → `get_cluster_rightsizing_recommendations`
 """
 
     @mcp.prompt()

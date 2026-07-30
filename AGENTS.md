@@ -19,7 +19,7 @@ uv run pytest
 uvx pre-commit run --config .pre-commit-config-ci.yaml --all-files
 ```
 
-Use the existing `.venv` when running Python commands. Run `ruff format` and `isort` after every Python edit.
+Use the existing `.venv` when running Python commands. Run `ruff format` and `ruff check --fix` after every Python edit.
 
 ## Architecture Map
 
@@ -33,7 +33,7 @@ Use the existing `.venv` when running Python commands. Run `ruff format` and `is
 
 **Pattern A for tools:** thin handler → `client.get()` → domain helpers. Do not create separate `prompts/`, `resources/`, or `api/` packages unless deliberately refactoring.
 
-Current MCP surface: 10 tools (`kubecost_list_windows`, `get_kubecost_workload_costs`, `get_container_savings_recommendations`, `get_abandoned_workloads`, `get_savings_overview`, `get_pv_sizing_recommendations`, `get_local_disk_savings`, `get_cluster_rightsizing_recommendations`, `get_unclaimed_volumes`, `get_resource_quota_recommendations`), inline prompts/resources in `kubecost_tools.py`, and 2 skills in `skills/`.
+Current MCP surface: 11 tools (`kubecost_list_windows`, `get_kubecost_workload_costs`, `get_kubecost_cost_comparison`, `get_container_savings_recommendations`, `get_abandoned_workloads`, `get_savings_overview`, `get_pv_sizing_recommendations`, `get_local_disk_savings`, `get_cluster_rightsizing_recommendations`, `get_unclaimed_volumes`, `get_resource_quota_recommendations`), inline prompts/resources in `kubecost_tools.py`, and 2 skills in `skills/`.
 
 ## Response Limits Pattern
 
@@ -63,7 +63,7 @@ Design rules:
 ## Code Conventions
 
 - Python 3.12+, `from __future__ import annotations`
-- Ruff (line-length 120, rules E/F/I/UP/B) + isort
+- Ruff (line-length 120, rules E/F/I/UP/B) — `ruff check --fix` handles import sorting (rule I)
 - Import order: stdlib → third-party → `mcp_kubecost.*`
 - Structured errors via [`errors.py`](src/mcp_kubecost/errors.py) (`ToolError`, `ErrorCode`) for LLM-facing failures
 - Keep tool handlers thin; push parsing and aggregation into the domain layer
@@ -97,7 +97,6 @@ There is no `run_http()` helper — use the FastMCP config files above.
 
 - `settings.py` timeout and retry fields are not wired to `client.py` (base URL and API key are)
 - CI runs Python 3.11; local dev should use 3.12+ per `requires-python`
-- `server.py` `instructions` mentions capabilities (RI utilization, business mappings) not yet implemented as tools — treat as aspirational
 
 ## Related Docs
 

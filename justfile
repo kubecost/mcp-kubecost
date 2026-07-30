@@ -37,6 +37,7 @@ docker-build-run:
     docker run --rm \
       --name mcp-kubecost \
       -p 3030:3030 \
+      -e KUBECOST_BASE_URL=https://demo.kubecost.xyz \
       mcp-kubecost
 
 docker-build-push:
@@ -103,6 +104,10 @@ call TOOL:
 # Call a tool with JSON input (e.g.: just call-json my_tool '{"key": "val"}')
 call-json TOOL INPUT:
     fastmcp call {{MCP_CONFIG}} {{TOOL}} --input-json '{{INPUT}}'
+
+# Run get_kubecost_cost_comparison for yesterday-vs-day-before and last-7-days-vs-month-ago
+cost-comparison AGGREGATE="namespace":
+    scripts/cost_comparison-day.sh {{MCP_CONFIG}} {{AGGREGATE}}
 
 # ── Client Setup ───────────────────────────────────────────────────────────────
 
