@@ -692,7 +692,7 @@ wheels = [
 
 [[package]]
 name = "mcp-kubecost"
-version = "0.2.28"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
