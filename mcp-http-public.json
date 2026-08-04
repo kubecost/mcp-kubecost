@@ -1,6 +1,6 @@
 {
     "mcpServers": {
-        "mcp_kubecost": {
+        "mcp-kubecost": {
             "type": "streamable-http",
             "url": "https://mcp.demo.kubecost.cloud/mcp"
         }
