@@ -1,0 +1,29 @@
+{
+  "manifest_version": "0.4",
+  "name": "mcp-kubecost",
+  "display_name": "Kubecost MCP",
+  "version": "0.3.0",
+  "description": "MCP server for Kubecost analytics.",
+  "author": {
+    "name": "Kubecost"
+  },
+  "server": {
+    "type": "uv",
+    "entry_point": "src/mcp_kubecost/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "src/mcp_kubecost/server.py"],
+      "env": {
+        "KUBECOST_BASE_URL": "http://localhost:9090"
+      }
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "linux", "win32"],
+    "runtimes": {
+      "python": ">=3.12"
+    }
+  },
+  "keywords": ["kubecost", "finops", "kubernetes", "cost", "mcp"],
+  "license": "Apache-2.0"
+}
