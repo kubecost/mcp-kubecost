@@ -114,6 +114,14 @@ def wrap_list(data: list, key: str) -> dict[str, Any]:
     return {key: data}
 
 
+def _build_params(params: dict[str, Any] | None) -> dict[str, Any]:
+    """Merge caller-supplied params with server-wide query flags (e.g. viewId)."""
+    merged: dict[str, Any] = dict(params) if params else {}
+    if get_settings().use_cac_views:
+        merged.setdefault("viewId", 0)
+    return merged or None  # type: ignore[return-value]
+
+
 async def get(path: str, params: dict[str, Any] | None = None) -> Any:
     """Make a GET request to the Kubecost API.
 
@@ -134,10 +142,10 @@ async def get(path: str, params: dict[str, Any] | None = None) -> Any:
     url = f"{base_url}{path}"
     auth = _get_auth()
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=60.0, verify=get_settings().ssl_verify) as client:
         response = await client.get(
             url,
-            params=params,
+            params=_build_params(params),
             auth=auth,
             headers={"User-Agent": "Kubecost-MCPServer"},
         )
@@ -188,11 +196,11 @@ async def post(path: str, json: dict[str, Any] | None = None, params: dict[str, 
     if not auth:
         raise ValueError("No authentication configured. Set KUBECOST_API_KEY environment variable.")
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    async with httpx.AsyncClient(timeout=60.0, verify=get_settings().ssl_verify) as client:
         response = await client.post(
             url,
             json=json,
-            params=params,
+            params=_build_params(params),
             auth=auth,
             headers={"User-Agent": "Kubecost-MCPServer"},
         )

@@ -22,6 +22,7 @@ import re
 from enum import StrEnum
 from typing import Any, NoReturn
 
+import httpx
 from fastmcp.exceptions import ToolError as McpToolError
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
@@ -215,16 +216,30 @@ def _handle_call_failure(exc: Exception, path: str) -> NoReturn:
             ErrorCode.CONFIGURATION_ERROR,
             str(exc),
             retryable=False,
-            suggested_action=("Set KUBECOST_API_KEY in the environment."),
+            suggested_action="Set KUBECOST_API_KEY in the environment.",
+        )
+    if isinstance(exc, httpx.ConnectError):
+        logger.warning("Kubecost API unreachable at %s: %s", path, exc)
+        raise_tool_error(
+            ErrorCode.DATA_UNAVAILABLE,
+            "Could not connect to the Kubecost API. The service may be down or the base URL may be incorrect.",
+            retryable=True,
+            suggested_action="Verify KUBECOST_BASE_URL is reachable and the Kubecost service is running.",
+        )
+    if isinstance(exc, httpx.TimeoutException):
+        logger.warning("Kubecost API request timed out at %s: %s", path, exc)
+        raise_tool_error(
+            ErrorCode.UPSTREAM_TIMEOUT,
+            "The Kubecost API request timed out.",
+            retryable=True,
+            suggested_action="Retry the request. If timeouts persist, the cluster may be under load.",
         )
     logger.exception("Unexpected error calling Kubecost API path %s", path)
     raise_tool_error(
         ErrorCode.DATA_UNAVAILABLE,
         f"Unexpected error contacting the Kubecost API: {type(exc).__name__}",
         retryable=True,
-        suggested_action=(
-            "Retry the request. If the failure persists, the upstream service may be returning a malformed response."
-        ),
+        suggested_action="Retry the request. If the failure persists, check the Kubecost service logs.",
     )
 
 

@@ -75,7 +75,7 @@ logging.getLogger("mcp_kubecost").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
-mcp_server_name = os.getenv("MCP_SERVER_NAME", "Kubecost_MCP")
+mcp_server_name = os.getenv("MCP_SERVER_NAME", "mcp-kubecost")
 os.environ["FASTMCP_SHOW_SERVER_BANNER"] = "false"
 version = pkg_version(distribution_name="mcp-kubecost")
 

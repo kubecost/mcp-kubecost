@@ -1,14 +1,12 @@
 {
   "$schema": "https://gofastmcp.com/public/schemas/fastmcp.json/v1.json",
-  "name": "mcp_kubecost",
   "source": {
     "path": "./src/mcp_kubecost/server.py"
   },
-  "environment": {
-    "dependencies": []
-  },
   "deployment": {
     "transport": "stdio",
-    "env": {}
+    "env": {
+      "KUBECOST_BASE_URL": "http://localhost:9090"
+    }
   }
 }
