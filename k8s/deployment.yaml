@@ -35,6 +35,8 @@ spec:
             value: '["mcp.demo.kubecost.cloud"]'
           - name: TOON_ENABLED
             value: "true"
+          - name: USE_CAC_VIEWS
+            value: "false"
           ports:
           - containerPort: 3030
             protocol: TCP

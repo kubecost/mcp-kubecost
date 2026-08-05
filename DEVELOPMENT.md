@@ -43,18 +43,7 @@ source .venv/bin/activate
 
 ## Configuration
 
-Copy [`.env.example`](.env.example) to `.env` and set:
-
-| Variable | Used by | Purpose |
-|----------|---------|---------|
-| `KUBECOST_BASE_URL` | `client.py` + `settings.py` | Kubecost host (e.g. `https://your-kubecost-host`) |
-| `KUBECOST_API_KEY` | `client.py` + `settings.py` | Basic auth API key |
-| `MCP_KUBECOST_BASE_URL` | `utils.py` | Base URL for download links (HTTP mode only) |
-| `MCP_SERVER_NAME` | `settings.py` | Display name in MCP clients |
-| `TOON_ENABLED` | `settings.py` | `false` returns plain JSON instead of TOON (default: `true`) |
-| `REQUEST_TIMEOUT_SECONDS` | `settings.py` (not wired) | HTTP timeout |
-| `FASTMCP_LOG_LEVEL` | FastMCP | Log verbosity |
-
+Copy [`.env.example`](.env.example) to `.env` and set any variable needed to change defaults.
 ## Run
 
 **STDIO** (local/desktop):

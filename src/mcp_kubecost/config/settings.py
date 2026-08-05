@@ -25,6 +25,8 @@ class Settings:
     kubecost_unclaimed_volumes_path: str
     kubecost_resource_quota_path: str
     KUBECOST_API_KEY: str | None
+    use_cac_views: bool
+    ssl_verify: bool | str  # passed directly to httpx verify=
     request_timeout_seconds: float
     retry_count: int
     default_window: str
@@ -48,6 +50,28 @@ def _get_url_env(name: str) -> str:
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ConfigError(f"Invalid URL for {name}: {value!r} (expected http(s)://host[...])")
     return value
+
+
+def _get_ssl_verify_env() -> bool | str:
+    """Return the httpx ssl verify value from SSL_VERIFY / SSL_CA_BUNDLE.
+
+    SSL_CA_BUNDLE=/path/to/ca.crt  → use that bundle (implies verify=True)
+    SSL_VERIFY=false               → disable verification (insecure)
+    (default)                      → True (httpx default)
+    """
+    ca_bundle = os.getenv("SSL_CA_BUNDLE", "").strip()
+    if ca_bundle:
+        return ca_bundle
+    return _get_bool_env("SSL_VERIFY", True)
+
+
+def _get_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name, str(default)).strip().lower()
+    if raw in ("1", "true", "yes"):
+        return True
+    if raw in ("0", "false", "no"):
+        return False
+    raise ConfigError(f"Invalid boolean for {name}: {raw!r} (expected true/false)")
 
 
 def _get_int_env(name: str, default: int) -> int:
@@ -93,6 +117,7 @@ def get_settings() -> Settings:
             "KUBECOST_RESOURCE_QUOTA_PATH", "/model/savings/resourceQuotaSizing/recommendations"
         ).strip(),
         KUBECOST_API_KEY=os.getenv("KUBECOST_API_KEY", "").strip() or None,
+        ssl_verify=_get_ssl_verify_env(),
         request_timeout_seconds=_get_float_env("REQUEST_TIMEOUT_SECONDS", 15.0),
         retry_count=_get_int_env("REQUEST_RETRY_COUNT", 2),
         default_window=os.getenv("DEFAULT_WINDOW", "15d").strip(),
@@ -100,4 +125,5 @@ def get_settings() -> Settings:
         http_port=_get_int_env("MCP_HTTP_PORT", 8000),
         show_banner=False,
         log_level=os.getenv("FASTMCP_LOG_LEVEL", "INFO").upper(),
+        use_cac_views=_get_bool_env("USE_CAC_VIEWS", False),
     )
