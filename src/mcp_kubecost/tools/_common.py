@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, NoReturn
 
@@ -39,14 +40,19 @@ __all__ = [
     "BaseToolResponse",
     "McpToolError",
     "QueryStatus",
+    "ResolvedWindow",
     "call_get_api",
     "call_post_api",
     "extract_list",
     "format_tool_error",
+    "parse_api_timestamp",
     "parse_window_days",
     "raise_tool_error",
+    "resolve_window",
+    "resolved_window_from_api",
     "safe_path_segment",
     "summarize_exception",
+    "to_api_window",
     "validate_response",
 ]
 
@@ -87,6 +93,215 @@ def parse_window_days(window: str) -> int | None:
     if lower.endswith("d") and lower[:-1].isdigit():
         return int(lower[:-1])
     return None
+
+
+class ResolvedWindow(BaseModel):
+    """A window converted to concrete UTC boundaries for display and reasoning."""
+
+    start_utc: datetime = Field(description="Inclusive UTC start timestamp of the window.")
+    end_utc: datetime = Field(description="Exclusive UTC end timestamp of the window.")
+    display_start: str = Field(description="Start date formatted as YYYY-MM-DD.")
+    display_end: str = Field(description="End date formatted as YYYY-MM-DD.")
+    display: str = Field(description="Human-readable date range and day count.")
+    days: int = Field(description="Number of 24-hour days covered by the window.")
+    is_partial: bool = Field(
+        description=(
+            "True when the period is still in progress; the day count reflects elapsed days only "
+            "and today's costs are incomplete."
+        )
+    )
+    source_expression: str = Field(description="Original window expression supplied by the caller.")
+
+
+def _to_display_date(dt: datetime) -> str:
+    """Format a timestamp as an ISO ``YYYY-MM-DD`` date."""
+    return dt.strftime("%Y-%m-%d")
+
+
+def _start_of_utc_day() -> datetime:
+    """Return midnight UTC of the current day."""
+    return datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _window_result(
+    start: datetime,
+    end: datetime,
+    source_expression: str,
+    *,
+    allow_partial_day: bool = False,
+) -> ResolvedWindow:
+    start = start.astimezone(UTC)
+    end = end.astimezone(UTC)
+    span_seconds = (end - start).total_seconds()
+    if span_seconds <= 0 or (not allow_partial_day and span_seconds % 86400):
+        raise_tool_error(
+            ErrorCode.INVALID_INPUT,
+            f"Window '{source_expression}' must span a positive whole number of days.",
+            retryable=False,
+            suggested_action="Provide a supported named window or an RFC3339 range with whole-day UTC boundaries.",
+        )
+    display_start = _to_display_date(start)
+    display_end = _to_display_date(end - timedelta(microseconds=1))
+    # Count the calendar days the window touches rather than dividing the span,
+    # so the day count can never disagree with the printed range and an
+    # in-progress end (Kubecost returns 'now' for 'week'/'month') still counts
+    # today as a day of data.
+    days = ((end - timedelta(microseconds=1)).date() - start.date()).days + 1
+    # Any window whose end extends past midnight today includes the in-progress
+    # current day, so its cost data is not yet final.
+    is_partial = end > _start_of_utc_day()
+    unit = "day" if days == 1 else "days"
+    qualifier = ", partial" if is_partial else ""
+    span = display_start if days == 1 else f"{display_start} to {display_end}"
+    display = f"{span} ({days} {unit}{qualifier})"
+    return ResolvedWindow(
+        start_utc=start,
+        end_utc=end,
+        display_start=display_start,
+        display_end=display_end,
+        display=display,
+        days=days,
+        is_partial=is_partial,
+        source_expression=source_expression,
+    )
+
+
+def parse_api_timestamp(value: Any) -> datetime | None:
+    """Parse an RFC3339 timestamp returned by Kubecost, or ``None`` if unusable.
+
+    Accepts the ``Z`` suffix Kubecost uses and normalises naive timestamps to UTC
+    so callers can compare results from different responses directly.
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+
+
+def resolved_window_from_api(window: Any, source_expression: str) -> ResolvedWindow | None:
+    """Build a ``ResolvedWindow`` from the window Kubecost echoed in its response.
+
+    This is ground truth — it is the range the server actually queried — and is
+    preferred over :func:`resolve_window`, which can only predict it. Returns
+    ``None`` for anything unusable so callers can fall back to the prediction
+    rather than losing the response.
+
+    Kubecost ends in-progress windows ('week', 'month') at the current instant
+    rather than a midnight boundary, so sub-day spans are accepted here.
+    """
+    if not isinstance(window, dict):
+        return None
+    raw_start, raw_end = window.get("start"), window.get("end")
+    if not raw_start or not raw_end:
+        return None
+    start, end = parse_api_timestamp(raw_start), parse_api_timestamp(raw_end)
+    if start is None or end is None:
+        logger.warning("Kubecost returned an unparseable window: %r", window)
+        return None
+    if end <= start:
+        logger.warning("Kubecost returned a non-positive window: %r", window)
+        return None
+    return _window_result(start, end, source_expression, allow_partial_day=True)
+
+
+def resolve_window(window: str) -> ResolvedWindow:
+    """Predict how Kubecost will resolve a window expression, without querying it.
+
+    Use :func:`resolved_window_from_api` instead whenever a response is already
+    in hand — this function can only approximate what the server will do.
+    """
+    source_expression = (window or "").strip()
+    lower = source_expression.lower()
+    if not source_expression:
+        raise_tool_error(
+            ErrorCode.INVALID_INPUT,
+            "A window expression is required.",
+            retryable=False,
+            suggested_action="Provide a named window such as '15d' or an RFC3339 start,end range.",
+        )
+
+    today = _start_of_utc_day()
+    # Windows that include today run to the close of the current day. For
+    # 'week'/'month' this also clamps a period-to-date so it never reports days
+    # that have not happened yet.
+    tomorrow = today + timedelta(days=1)
+    if lower in _NAMED_WINDOW_DAYS or (lower.endswith("d") and lower[:-1].isdigit()):
+        days = parse_window_days(lower)
+        assert days is not None
+        # Kubecost counts back N days *including* today, ending at the close of
+        # the current day — verified against /model/allocation. These windows
+        # therefore always include the in-progress day.
+        return _window_result(tomorrow - timedelta(days=days), tomorrow, source_expression)
+    if lower == "today":
+        return _window_result(today, tomorrow, source_expression)
+    if lower in {"week", "lastweek"}:
+        # Kubecost always starts its weeks on Sunday. datetime.weekday() is
+        # Monday=0..Sunday=6, so (weekday() + 1) % 7 is days since that Sunday.
+        current_week_start = today - timedelta(days=(today.weekday() + 1) % 7)
+        if lower == "week":
+            return _window_result(current_week_start, tomorrow, source_expression)
+        start = current_week_start - timedelta(days=7)
+        return _window_result(start, current_week_start, source_expression)
+    if lower in {"month", "lastmonth"}:
+        current_month_start = today.replace(day=1)
+        if lower == "month":
+            return _window_result(current_month_start, tomorrow, source_expression)
+        previous_day = current_month_start - timedelta(days=1)
+        return _window_result(previous_day.replace(day=1), current_month_start, source_expression)
+    if "," in source_expression:
+        parts = [part.strip() for part in source_expression.split(",")]
+        if len(parts) != 2 or not all(parts):
+            message = f"Window '{source_expression}' is not a valid RFC3339 range. Expected 'start,end'."
+        else:
+            try:
+                start, end = (datetime.fromisoformat(part.replace("Z", "+00:00")) for part in parts)
+                if start.tzinfo is None:
+                    start = start.replace(tzinfo=UTC)
+                if end.tzinfo is None:
+                    end = end.replace(tzinfo=UTC)
+                if end <= start:
+                    message = f"Window '{source_expression}' has an end timestamp that is not after the start."
+                else:
+                    return _window_result(start, end, source_expression)
+            except ValueError:
+                message = f"Window '{source_expression}' contains an invalid RFC3339 timestamp."
+        raise_tool_error(
+            ErrorCode.INVALID_INPUT,
+            message,
+            retryable=False,
+            suggested_action="Provide a valid RFC3339 range such as '2026-07-01T00:00:00Z,2026-07-08T00:00:00Z'.",
+        )
+    raise_tool_error(
+        ErrorCode.INVALID_INPUT,
+        f"Window '{source_expression}' is not supported.",
+        retryable=False,
+        suggested_action="Use a named window such as '15d', 'lastmonth', or an RFC3339 start,end range.",
+    )
+
+
+# Calendar aliases that Kubecost resolves incorrectly server-side.
+# These must be pre-resolved to explicit RFC3339 ranges before the API call.
+_CALENDAR_ALIASES: frozenset[str] = frozenset({"lastmonth", "lastweek", "month", "week"})
+
+
+def to_api_window(window: str) -> str:
+    """Return a Kubecost-safe window string for use in API call parameters.
+
+    Calendar aliases (``"lastmonth"``, ``"lastweek"``, ``"month"``, ``"week"``) are
+    pre-resolved to explicit RFC3339 date pairs because Kubecost's own server-side
+    resolution of these aliases is broken (e.g. ``"lastmonth"`` becomes a single day).
+    All other values — rolling windows like ``"7d"`` and already-explicit RFC3339 ranges
+    — are returned unchanged.
+    """
+    normalised = window.strip().lower()
+    if normalised not in _CALENDAR_ALIASES:
+        return window
+    resolved = resolve_window(window)
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    return f"{resolved.start_utc.strftime(fmt)},{resolved.end_utc.strftime(fmt)}"
 
 
 # ---------------------------------------------------------------------------

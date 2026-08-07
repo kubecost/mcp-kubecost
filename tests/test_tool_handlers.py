@@ -79,6 +79,42 @@ class TestKubecostListWindows:
         result = await tool.run({})
         assert "RFC3339" in _sc(result)["note"]
 
+    @pytest.mark.asyncio
+    async def test_every_option_carries_a_resolved_range(self, mcp_app):
+        """Discovery doubles as window preview, so no option may resolve to null."""
+        tool = await mcp_app.get_tool("kubecost_list_windows")
+        result = await tool.run({})
+        for option in _sc(result)["windows"]:
+            resolved = option["resolved"]
+            assert resolved is not None, f"{option['value']} failed to resolve"
+            assert resolved["days"] >= 1
+            assert resolved["source_expression"] == option["value"]
+            assert resolved["display_start"] in resolved["display"]
+
+    @pytest.mark.asyncio
+    async def test_to_date_options_are_marked_partial(self, mcp_app):
+        tool = await mcp_app.get_tool("kubecost_list_windows")
+        result = await tool.run({})
+        by_value = {o["value"]: o["resolved"] for o in _sc(result)["windows"]}
+        assert by_value["month"]["is_partial"] is True
+        assert by_value["week"]["is_partial"] is True
+        # Kubecost's Nd windows run through the close of today, so they are
+        # partial too; only the 'last*' aliases cover a completed period.
+        assert by_value["30d"]["is_partial"] is True
+        assert by_value["lastmonth"]["is_partial"] is False
+        assert by_value["lastweek"]["is_partial"] is False
+
+
+# ── removed tools ─────────────────────────────────────────────────────────────
+
+
+class TestRemovedTools:
+    @pytest.mark.asyncio
+    async def test_standalone_resolve_window_tool_is_not_registered(self, mcp_app):
+        """Window resolution is served by kubecost_list_windows and the
+        resolved_window field on every windowed response, not its own tool."""
+        assert "resolve_window" not in {tool.name for tool in await mcp_app.list_tools()}
+
 
 # ── get_kubecost_workload_costs ───────────────────────────────────────────────
 
@@ -151,6 +187,58 @@ class TestGetKubecostWorkloadCosts:
         sc = _sc(result)
         assert sc["truncated"] is True
         assert len(sc["rows"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_rows_carry_window_end(self, httpx_mock: HTTPXMock, mcp_app, allocation_response_one_ns):
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json=allocation_response_one_ns)
+        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        result = await tool.run({"window": "7d", "min_total_cost": 0.0})
+        sc = _sc(result)
+        assert sc["rows"][0]["window_start"] == "2024-01-01"
+        assert sc["rows"][0]["window_end"] == "2024-01-07"
+        # The row boundary agrees with the resolved window it belongs to.
+        assert sc["resolved_window"]["display_end"] == "2024-01-07"
+
+    @pytest.mark.asyncio
+    async def test_daily_buckets_report_the_full_span(
+        self, httpx_mock: HTTPXMock, mcp_app, allocation_response_daily_buckets
+    ):
+        """Regression: accumulate=false reported 1 day and collapsed every day into one row."""
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json=allocation_response_daily_buckets)
+        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        result = await tool.run(
+            {"window": "3d", "aggregate": "cluster,namespace", "accumulate": False, "min_total_cost": 0.0}
+        )
+        sc = _sc(result)
+        assert sc["resolved_window"]["days"] == 3
+        assert sc["resolved_window"]["display_start"] == "2024-01-01"
+        assert sc["resolved_window"]["display_end"] == "2024-01-03"
+        assert sc["row_count"] == 6
+        assert sc["total_cost"] == 72.0
+        assert [r["window_start"] for r in sc["rows"]] == [
+            "2024-01-01",
+            "2024-01-01",
+            "2024-01-02",
+            "2024-01-02",
+            "2024-01-03",
+            "2024-01-03",
+        ]
+        assert all(r["window_start"] == r["window_end"] for r in sc["rows"])
+        assert "Daily breakdown" in sc["message"]
+
+    @pytest.mark.asyncio
+    async def test_accumulated_response_is_unchanged(
+        self, httpx_mock: HTTPXMock, mcp_app, allocation_response_multi_ns
+    ):
+        """One shared window must still yield one row per key, costliest first."""
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json=allocation_response_multi_ns)
+        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        result = await tool.run({"window": "7d", "aggregate": "cluster,namespace", "min_total_cost": 0.0})
+        sc = _sc(result)
+        assert sc["row_count"] == 2
+        assert sc["resolved_window"]["days"] == 7
+        assert [r["totalCost"] for r in sc["rows"]] == [31.0, 7.2]
+        assert "Daily breakdown" not in sc["message"]
 
 
 # ── get_container_savings_recommendations ────────────────────────────────────
@@ -660,6 +748,19 @@ class TestGetResourceQuotaRecommendations:
         # Second recommendation has is_downsize=True
         rec_with_downsize = _sc(result)["recommendations"][1]
         assert rec_with_downsize["resources"][0]["is_downsize"] is True
+
+    @pytest.mark.asyncio
+    async def test_resolved_window_comes_from_the_api_echo(
+        self, httpx_mock: HTTPXMock, mcp_app, resource_quota_api_response
+    ):
+        """The endpoint echoes the range it queried; that beats the client-side prediction."""
+        httpx_mock.add_response(method="GET", url=_resource_quota_url(), json=resource_quota_api_response)
+        tool = await mcp_app.get_tool("get_resource_quota_recommendations")
+        result = await tool.run({"window": "7d"})
+        resolved = _sc(result)["resolved_window"]
+        assert resolved["display_start"] == "2026-07-10"
+        assert resolved["display_end"] == "2026-07-16"
+        assert resolved["days"] == 7
 
     @pytest.mark.asyncio
     async def test_empty_recommendations(self, httpx_mock: HTTPXMock, mcp_app):

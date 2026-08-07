@@ -1,0 +1,50 @@
+name: integration tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+# One run per PR: pushing a new commit cancels the run still in flight.
+# For a pull_request event github.ref is refs/pull/<number>/merge, so the group
+# is already scoped to a single PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Selects the Kubecost instance under test. The fastmcp CLI starts the server
+      # with the env block declared in this file, so the target lives there rather
+      # than in the workflow environment.
+      MCP_KUBECOST_CONFIG: tests/mcp-demo.json
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Check the target instance is reachable
+        run: |
+          set -euo pipefail
+          URL=$(jq -r '.mcpServers["mcp-kubecost"].env.KUBECOST_BASE_URL' "$MCP_KUBECOST_CONFIG")
+          echo "Integration target: $URL"
+          echo "Integration target: $URL" >> "$GITHUB_STEP_SUMMARY"
+          if ! curl -fsS --retry 3 --retry-delay 5 --max-time 30 -o /dev/null \
+              "$URL/model/allocation?window=1d&aggregate=cluster&accumulate=true"; then
+            echo "::error::$URL is not responding — integration tests cannot run against it."
+            exit 1
+          fi
+
+      - name: Integration tests
+        run: uv run pytest -m integration -v

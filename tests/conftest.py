@@ -92,6 +92,47 @@ def allocation_response_multi_ns() -> dict:
 
 
 @pytest.fixture
+def allocation_response_daily_buckets() -> dict:
+    """Non-accumulated allocation response: 3 consecutive 1-day buckets x 2 namespaces.
+
+    Mirrors what Kubecost returns for accumulate=false — one bucket per day, each
+    entry carrying that day's own window rather than the whole queried range.
+    """
+
+    def _entry(namespace: str, day: int, total: float) -> dict:
+        return {
+            "name": f"cluster-one/{namespace}",
+            "properties": {"cluster": "cluster-one", "namespace": namespace},
+            "window": {
+                "start": f"2024-01-0{day}T00:00:00Z",
+                "end": f"2024-01-0{day + 1}T00:00:00Z",
+            },
+            "cpuCost": total / 2,
+            "cpuCostIdle": total / 10,
+            "ramCost": total / 2,
+            "ramCostIdle": total / 10,
+            "networkCost": 0.0,
+            "pvCost": 0.0,
+            "gpuCost": 0.0,
+            "gpuCostIdle": 0.0,
+            "loadBalancerCost": 0.0,
+            "sharedCost": 0.0,
+            "totalCost": total,
+            "totalEfficiency": 0.5,
+        }
+
+    return {
+        "data": [
+            {
+                "ns-a": _entry("ns-a", day, 10.0 * day),
+                "ns-b": _entry("ns-b", day, 2.0 * day),
+            }
+            for day in (1, 2, 3)
+        ]
+    }
+
+
+@pytest.fixture
 def savings_api_response() -> dict:
     """Minimal requestSizingV2 API response with two recommendations."""
     return {

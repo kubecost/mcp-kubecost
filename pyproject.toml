@@ -1,11 +1,11 @@
 [project]
 name = "mcp-kubecost"
-version = "0.4.0"
+version = "0.4.3"
 description = "FinOps-first MCP server for Kubecost analytics."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "fastmcp>=3.4.5",
+  "fastmcp>=3.4.6",
   "httpx>=0.28.1",
   "python-dotenv>=1.2.2",
   "py-toon-format>=0.1.0",
@@ -36,7 +36,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-m 'not integration'"
 markers = [
-  "integration: requires a live Kubecost endpoint (deselected by default)",
+  "integration: requires a live kubecost api endpoint (deselected by default)",
 ]
 
 [tool.coverage.run]

@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
@@ -38,9 +38,14 @@ from mcp_kubecost.tools._common import (
     BaseToolResponse,
     McpToolError,
     QueryStatus,
+    ResolvedWindow,
     call_get_api,
+    parse_api_timestamp,
     parse_window_days,
     raise_tool_error,
+    resolve_window,
+    resolved_window_from_api,
+    to_api_window,
 )
 
 logger = logging.getLogger(__name__)
@@ -173,6 +178,66 @@ def _format_date(iso_string: str) -> str:
         return iso_string
 
 
+def _format_end_date(iso_string: str) -> str:
+    """Convert Kubecost's exclusive window end to the inclusive last day it covers.
+
+    Kubecost reports a 7-day window ending on Aug 7 as ``2026-08-08T00:00:00Z``.
+    Stepping back one microsecond — the same way ``ResolvedWindow.display_end`` is
+    derived — keeps row-level ``window_end`` in agreement with ``resolved_window``.
+    """
+    if not iso_string:
+        return ""
+    parsed = parse_api_timestamp(iso_string)
+    if parsed is None:
+        return iso_string
+    return (parsed - timedelta(microseconds=1)).strftime("%Y-%m-%d")
+
+
+def _resolve_window_defensively(window: str) -> ResolvedWindow | None:
+    """Resolve a query window without preventing a valid upstream query."""
+    try:
+        return resolve_window(window)
+    except McpToolError as exc:
+        logger.warning("Could not resolve window '%s' for display: %s", window, exc)
+        return None
+
+
+def _window_from_allocation(response: dict[str, Any], source_expression: str) -> ResolvedWindow | None:
+    """Read the window Kubecost actually queried out of an allocation response.
+
+    Every allocation entry carries the server's own ``window`` object, which is
+    authoritative. Prefer it over the client-side prediction so a divergence
+    can never be reported to the user as fact.
+
+    An accumulated response holds one bucket spanning the whole query, but a
+    non-accumulated one holds a bucket per step — so the queried range is the
+    span from the earliest start to the latest end across every bucket, not the
+    first bucket's own (one-step) window. Entries within a bucket all share that
+    bucket's window, so only the first usable one is read per bucket.
+    """
+    starts: list[datetime] = []
+    ends: list[datetime] = []
+    for bucket in response.get("data") or []:
+        if not isinstance(bucket, dict):
+            continue
+        for entry in bucket.values():
+            if not isinstance(entry, dict):
+                continue
+            window = entry.get("window")
+            if not isinstance(window, dict):
+                continue
+            start = parse_api_timestamp(window.get("start"))
+            end = parse_api_timestamp(window.get("end"))
+            if start is not None and end is not None:
+                starts.append(start)
+                ends.append(end)
+                break
+    if not starts:
+        return None
+    span = {"start": min(starts).isoformat(), "end": max(ends).isoformat()}
+    return resolved_window_from_api(span, source_expression)
+
+
 def _parse_allocation_response(
     response: dict[str, Any],
 ) -> tuple[list[str], list[dict]]:
@@ -217,6 +282,7 @@ def _parse_allocation_response(
 
         window_dict = entry.get("window", {})
         row["window_start"] = _format_date(window_dict.get("start", ""))
+        row["window_end"] = _format_end_date(window_dict.get("end", ""))
 
         for field in COST_FIELDS:
             value = entry.get(field, 0.0)
@@ -228,15 +294,21 @@ def _parse_allocation_response(
 
 
 def _aggregate_by_dimensions(rows: list[dict], dimension_cols: list[str]) -> list[dict]:
-    """Sum cost fields across rows sharing the same dimension values.
+    """Sum cost fields across rows sharing the same dimension values *and* window.
 
-    Returns rows sorted by ``totalCost`` descending with idle-% columns derived
-    from summed idle vs total figures.
+    The window is part of the grouping key so a non-accumulated response keeps
+    its per-step rows instead of collapsing into a single total stamped with one
+    step's date. An accumulated response has one window throughout, so grouping
+    is unchanged for it.
+
+    Returns rows sorted by ``window_start`` ascending then ``totalCost``
+    descending, with idle-% columns derived from summed idle vs total figures.
     """
     groups: dict[tuple, dict[str, Any]] = defaultdict(lambda: defaultdict(float))
 
     for row in rows:
-        key = tuple(row.get(dim, "") for dim in dimension_cols)
+        window = (row.get("window_start", ""), row.get("window_end", ""))
+        key = tuple(row.get(dim, "") for dim in dimension_cols) + window
         for field in COST_FIELDS:
             if field != "totalEfficiency":
                 value = row.get(field, 0)
@@ -244,9 +316,10 @@ def _aggregate_by_dimensions(rows: list[dict], dimension_cols: list[str]) -> lis
                     groups[key][field] += float(value)
         for dim in dimension_cols:
             groups[key][dim] = row.get(dim, "")
+        groups[key]["window_start"], groups[key]["window_end"] = window
 
     aggregated: list[dict] = []
-    for _key, values in groups.items():
+    for values in groups.values():
         row = dict(values)
 
         cpu_total = row.get("cpuCost", 0)
@@ -266,7 +339,10 @@ def _aggregate_by_dimensions(rows: list[dict], dimension_cols: list[str]) -> lis
 
         aggregated.append(row)
 
-    aggregated.sort(key=lambda r: float(r.get("totalCost", 0)), reverse=True)
+    # Chronological first so a per-step breakdown reads as a series and a top_n
+    # slice keeps a contiguous prefix of it; within a step, costliest first. With
+    # a single window (the accumulated case) this is plain totalCost descending.
+    aggregated.sort(key=lambda r: (r.get("window_start", ""), -float(r.get("totalCost", 0))))
 
     for row in aggregated:
         for field in COST_FIELDS:
@@ -668,6 +744,13 @@ class WindowOption(BaseModel):
 
     value: str = Field(description="Window token to pass as the 'window' parameter.")
     label: str = Field(description="Human-readable description of the window.")
+    resolved: ResolvedWindow | None = Field(
+        default=None,
+        description=(
+            "Concrete UTC range this token maps to as of now, including the day count and whether "
+            "the period is still in progress. Null if resolution failed."
+        ),
+    )
 
 
 class WindowOptionsResponse(BaseToolResponse):
@@ -688,7 +771,14 @@ class AllocationRow(BaseModel):
 
     window_start: str = Field(
         default="",
-        description="Start date of the allocation window (YYYY-MM-DD).",
+        description="First date covered by this row (YYYY-MM-DD).",
+    )
+    window_end: str = Field(
+        default="",
+        description=(
+            "Last date covered by this row (YYYY-MM-DD, inclusive). Equals window_start "
+            "for a single-day row. Empty when the upstream response carried no window end."
+        ),
     )
     # --- cost components ---
     cpu_cost: float = Field(
@@ -773,6 +863,10 @@ class KubecostAllocationResponse(BaseToolResponse):
     """Response from get_kubecost_workload_costs."""
 
     window: str | None = Field(description="Time window used for the query.")
+    resolved_window: ResolvedWindow | None = Field(
+        default=None,
+        description="Resolved UTC boundaries and display string for the queried window. Null if resolution failed.",
+    )
     aggregate: str = Field(description="Aggregation dimension(s) requested.")
     dimensions: list[str] = Field(
         default_factory=list,
@@ -783,8 +877,11 @@ class KubecostAllocationResponse(BaseToolResponse):
     rows: list[AllocationRow] = Field(
         default_factory=list,
         description=(
-            "Aggregated allocation rows sorted by totalCost descending. "
-            "Each row contains the requested dimension values (e.g. cluster, namespace) "
+            "Aggregated allocation rows sorted by window_start ascending then totalCost "
+            "descending — with accumulate=true there is a single window, so this is simply "
+            "totalCost descending; with accumulate=false there is one row per dimension key "
+            "per day, in date order. Each row contains the requested dimension values "
+            "(e.g. cluster, namespace), the window_start/window_end dates it covers, "
             "plus cost fields: totalCost, cpuCost, ramCost, networkCost, pvCost, "
             "gpuCost, sharedCost, and idle percentages cpuIdlePct, ramIdlePct, totalIdlePct."
         ),
@@ -897,6 +994,10 @@ class ContainerSavingsResponse(BaseToolResponse):
     """Response from get_container_savings_recommendations."""
 
     window: str = Field(description="Time window used for the query.")
+    resolved_window: ResolvedWindow | None = Field(
+        default=None,
+        description="Resolved UTC boundaries and display string for the queried window. Null if resolution failed.",
+    )
     total_monthly_savings: float = Field(
         description=(
             "Total monthly savings across the FILTERED recommendations (USD) — the same "
@@ -998,6 +1099,10 @@ class PVSizingResponse(BaseToolResponse):
     """Response for get_pv_sizing_recommendations."""
 
     rows: list[PVSizingRow] = Field(default_factory=list, description="PVC right-sizing recommendations.")
+    resolved_window: ResolvedWindow | None = Field(
+        default=None,
+        description="Resolved UTC boundaries and display string for the queried window. Null if resolution failed.",
+    )
     total_monthly_savings: float = Field(
         default=0.0, description="Total monthly savings across all filtered rows (USD)."
     )
@@ -1026,6 +1131,10 @@ class LocalDiskSavingsResponse(BaseToolResponse):
     """Response for get_local_disk_savings."""
 
     rows: list[LocalDiskRow] = Field(default_factory=list, description="Underutilized disk recommendations.")
+    resolved_window: ResolvedWindow | None = Field(
+        default=None,
+        description="Resolved UTC boundaries and display string for the queried window. Null if resolution failed.",
+    )
     total_monthly_savings: float = Field(
         default=0.0, description="Total monthly savings across all filtered rows (USD)."
     )
@@ -1073,6 +1182,10 @@ class ClusterRightsizingResponse(BaseToolResponse):
     cluster: str = Field(default="", description="Cluster ID queried.")
     profile: str = Field(default="production", description="Sizing profile used.")
     window: str = Field(default="", description="Time window used.")
+    resolved_window: ResolvedWindow | None = Field(
+        default=None,
+        description="Resolved UTC boundaries and display string for the queried window. Null if resolution failed.",
+    )
     recommendations: list[NodeGroupRecommendation] = Field(
         default_factory=list, description="Node group recommendations."
     )
@@ -1106,6 +1219,10 @@ class UnclaimedVolumesResponse(BaseToolResponse):
     """Response for get_unclaimed_volumes."""
 
     rows: list[UnclaimedVolumeRow] = Field(default_factory=list, description="Unclaimed volumes.")
+    resolved_window: ResolvedWindow | None = Field(
+        default=None,
+        description="Resolved UTC boundaries and display string for the queried window. Null if resolution failed.",
+    )
     total_monthly_cost: float = Field(default=0.0, description="Total monthly cost of filtered volumes (USD).")
     row_count: int = Field(
         default=0, description="Total number of rows in the filtered population (before top_n slice)."
@@ -1141,6 +1258,10 @@ class ResourceQuotaResponse(BaseToolResponse):
 
     recommendations: list[QuotaNamespaceRecommendation] = Field(
         default_factory=list, description="Namespace quota recommendations."
+    )
+    resolved_window: ResolvedWindow | None = Field(
+        default=None,
+        description="Resolved UTC boundaries and display string for the queried window. Null if resolution failed.",
     )
     item_count: int = Field(
         default=0, description="Total item count reported by the API (may exceed len(recommendations) when paginating)."
@@ -1199,6 +1320,10 @@ class AbandonedWorkloadsResponse(BaseToolResponse):
     """Response from get_abandoned_workloads."""
 
     days: int = Field(description="Lookback window in days used for the query.")
+    resolved_window: ResolvedWindow | None = Field(
+        default=None,
+        description="Resolved UTC boundaries and display string for the queried window. Null if resolution failed.",
+    )
     threshold_bytes_per_second: int = Field(
         description=(
             "Network traffic threshold (bytes/second) used to identify abandoned workloads. "
@@ -1254,6 +1379,14 @@ class CostComparisonResponse(BaseToolResponse):
 
     current_window: str = Field(description="Current-period window as passed by the caller.")
     baseline_window: str = Field(description="Baseline-period window as passed by the caller.")
+    resolved_current_window: ResolvedWindow | None = Field(
+        default=None,
+        description="Resolved UTC boundaries and display string for the current window. Null if resolution failed.",
+    )
+    resolved_baseline_window: ResolvedWindow | None = Field(
+        default=None,
+        description="Resolved UTC boundaries and display string for the baseline window. Null if resolution failed.",
+    )
     aggregate: str = Field(description="Aggregation dimension(s) requested.")
     dimensions: list[str] = Field(
         default_factory=list, description="Resolved dimension columns present in each result row."
@@ -1297,22 +1430,29 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         ),
     )
     async def kubecost_list_windows() -> WindowOptionsResponse:
-        """List the valid time windows for Kubecost cost queries.
+        """List the valid time windows for Kubecost cost queries, each resolved to real dates.
 
         WHAT: Returns the named windows (7d, 30d, month, etc.) accepted by
-        get_kubecost_workload_costs, formatted for user presentation.
+        get_kubecost_workload_costs, each with the concrete UTC date range it maps to
+        right now, its day count, and whether the period is still in progress.
 
-        WHEN TO USE: When the user has not yet specified a time window before
-        calling get_kubecost_workload_costs.
+        WHEN TO USE: When the user has not yet specified a time window, or when they need
+        to confirm what a token like 'lastmonth' actually covers before an expensive query
+        — useful for leadership reports and users outside UTC.
 
         WHEN NOT TO USE: When the user has already stated a window — call
-        get_kubecost_workload_costs directly with their value.
+        get_kubecost_workload_costs directly with their value. Every windowed tool already
+        returns a 'resolved_window' field, so there is no need to call this first purely to
+        learn the dates of a window you are about to query.
         """
         return WindowOptionsResponse(
             status=QueryStatus.OK,
             message="Present these window options to the user and wait for a choice.",
             recommended_action="After the user picks a window, call get_kubecost_workload_costs.",
-            windows=[WindowOption(value=k, label=v) for k, v in _WINDOW_CHOICES.items()],
+            windows=[
+                WindowOption(value=k, label=v, resolved=_resolve_window_defensively(k))
+                for k, v in _WINDOW_CHOICES.items()
+            ],
             note=_WINDOW_RFC3339_NOTE,
         )
 
@@ -1412,6 +1552,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 aggregate=aggregate,
             )
 
+        resolved_window = _resolve_window_defensively(window)
+        window_display = resolved_window.display if resolved_window else window
+
         try:
             response = await _fetch_allocation(
                 aggregate=aggregate,
@@ -1425,16 +1568,22 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 message=str(exc),
                 recommended_action="Check Kubecost connectivity and credentials, then retry.",
                 window=window,
+                resolved_window=resolved_window,
                 aggregate=aggregate,
             )
+
+        # The response carries the range Kubecost actually queried; prefer it.
+        resolved_window = _window_from_allocation(response, window) or resolved_window
+        window_display = resolved_window.display if resolved_window else window
 
         dimension_cols, rows = _parse_allocation_response(response)
         if not rows:
             return KubecostAllocationResponse(
                 status=QueryStatus.EMPTY,
-                message=f"No Kubecost allocation data for window '{window}'.",
+                message=f"No Kubecost allocation data for window {window_display}.",
                 recommended_action="Try a wider window or a different aggregate dimension.",
                 window=window,
+                resolved_window=resolved_window,
                 aggregate=aggregate,
                 dimensions=dimension_cols,
             )
@@ -1452,11 +1601,12 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             return KubecostAllocationResponse(
                 status=QueryStatus.EMPTY,
                 message=(
-                    f"No rows with totalCost >= ${min_total_cost:,.2f} for window '{window}'. "
+                    f"No rows with totalCost >= ${min_total_cost:,.2f} for window {window_display}. "
                     f"({len(aggregated)} rows totaling ${total:,.2f} were below the threshold.)"
                 ),
                 recommended_action="Lower min_total_cost or widen the window to surface more rows.",
                 window=window,
+                resolved_window=resolved_window,
                 aggregate=aggregate,
                 dimensions=dimension_cols,
                 total_cost=round(total, 2),
@@ -1473,19 +1623,31 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             else ""
         )
 
+        # Spell out the row shape when not accumulating so per-day rows are never
+        # read as whole-window totals.
+        breakdown_note = ""
+        if not accumulate:
+            day_count = len({r.get("window_start", "") for r in filtered})
+            breakdown_note = (
+                f" Daily breakdown: one row per {', '.join(dimension_cols) or aggregate} "
+                f"per day across {day_count} day(s)."
+            )
+
         return KubecostAllocationResponse(
             status=QueryStatus.OK,
             message=(
                 f"Kubecost allocation by {', '.join(dimension_cols) or aggregate} "
-                f"for window '{window}': ${filtered_total:,.2f} across {len(filtered)} rows"
+                f"for window {window_display}: ${filtered_total:,.2f} across {len(filtered)} rows"
                 + (f" (showing top {top_n})" if truncated else "")
                 + filtered_note
                 + "."
+                + breakdown_note
             ),
             recommended_action=(
                 "Increase top_n or narrow the aggregate/window to retrieve all rows." if truncated else None
             ),
             window=window,
+            resolved_window=resolved_window,
             aggregate=aggregate,
             dimensions=dimension_cols,
             total_cost=round(filtered_total, 2),
@@ -1571,6 +1733,10 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         they would include partial, in-progress data.
         """
         _validate_comparison_windows(current_window, baseline_window)
+        resolved_current_window = _resolve_window_defensively(current_window)
+        resolved_baseline_window = _resolve_window_defensively(baseline_window)
+        current_display = resolved_current_window.display if resolved_current_window else current_window
+        baseline_display = resolved_baseline_window.display if resolved_baseline_window else baseline_window
 
         try:
             current_response = await _fetch_allocation(
@@ -1592,8 +1758,18 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 recommended_action="Check Kubecost connectivity and credentials, then retry.",
                 current_window=current_window,
                 baseline_window=baseline_window,
+                resolved_current_window=resolved_current_window,
+                resolved_baseline_window=resolved_baseline_window,
                 aggregate=aggregate,
             )
+
+        # Both responses carry the ranges Kubecost actually queried; prefer them.
+        resolved_current_window = _window_from_allocation(current_response, current_window) or resolved_current_window
+        resolved_baseline_window = (
+            _window_from_allocation(baseline_response, baseline_window) or resolved_baseline_window
+        )
+        current_display = resolved_current_window.display if resolved_current_window else current_window
+        baseline_display = resolved_baseline_window.display if resolved_baseline_window else baseline_window
 
         current_dims, current_rows = _parse_allocation_response(current_response)
         baseline_dims, baseline_rows = _parse_allocation_response(baseline_response)
@@ -1602,10 +1778,12 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         if not current_rows and not baseline_rows:
             return CostComparisonResponse(
                 status=QueryStatus.EMPTY,
-                message=(f"No Kubecost allocation data for either window ('{current_window}' or '{baseline_window}')."),
+                message=(f"No Kubecost allocation data for either window ({current_display} or {baseline_display})."),
                 recommended_action="Try different windows or a different aggregate dimension.",
                 current_window=current_window,
                 baseline_window=baseline_window,
+                resolved_current_window=resolved_current_window,
+                resolved_baseline_window=resolved_baseline_window,
                 aggregate=aggregate,
                 dimensions=dimension_cols,
             )
@@ -1628,7 +1806,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         return CostComparisonResponse(
             status=QueryStatus.OK,
             message=(
-                f"Compared {current_window} (${total_current:,.2f}) vs {baseline_window} "
+                f"Compared {current_display} (${total_current:,.2f}) vs {baseline_display} "
                 f"(${total_baseline:,.2f}) by {', '.join(dimension_cols) or aggregate}: "
                 f"{len(diffed)} row(s)" + (f" (showing top {top_n})" if truncated else "") + "." + top_mover_desc
             ),
@@ -1638,6 +1816,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             ),
             current_window=current_window,
             baseline_window=baseline_window,
+            resolved_current_window=resolved_current_window,
+            resolved_baseline_window=resolved_baseline_window,
             aggregate=aggregate,
             dimensions=dimension_cols,
             total_current_cost=round(total_current, 2),
@@ -1766,6 +1946,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             min_monthly_savings=min_monthly_savings,
         )
         resolved_window: str = sizing["window"]
+        resolved_window_display = _resolve_window_defensively(resolved_window)
+        window_display = resolved_window_display.display if resolved_window_display else resolved_window
         resolved_algorithm_cpu: str = sizing["algorithm_cpu"]
         resolved_algorithm_ram: str = sizing["algorithm_ram"]
         resolved_q_cpu: float = sizing["q_cpu"]
@@ -1827,9 +2009,10 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         if not all_rows:
             return ContainerSavingsResponse(
                 status=QueryStatus.EMPTY,
-                message="No container savings recommendations returned.",
+                message=f"No container savings recommendations returned for {window_display}.",
                 recommended_action="Try a wider window or a different filter.",
                 window=resolved_window,
+                resolved_window=resolved_window_display,
                 total_monthly_savings=0.0,
                 container_count=0,
                 summary_aggregate=summary_aggregate,
@@ -1852,6 +2035,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 ),
                 recommended_action="Lower min_monthly_savings or set include_undersized=true.",
                 window=resolved_window,
+                resolved_window=resolved_window_display,
                 total_monthly_savings=0.0,
                 container_count=0,
                 summary_aggregate=summary_aggregate,
@@ -1894,11 +2078,12 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             status=QueryStatus.OK,
             message=(
                 f"Total monthly savings ${filtered_total_savings:,.2f} across "
-                f"{filtered_count} containers{filtered_note}, "
+                f"{filtered_count} containers for {window_display}{filtered_note}, "
                 f"summarized by {summary_aggregate}.{caveat}"
             ),
             recommended_action=("Increase top_n to retrieve more per-container rows." if truncated else None),
             window=resolved_window,
+            resolved_window=resolved_window_display,
             total_monthly_savings=round(float(filtered_total_savings), 2),
             container_count=filtered_count,
             summary_aggregate=summary_aggregate,
@@ -1984,6 +2169,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         use get_container_savings_recommendations. For raw cost by namespace/cluster use
         get_kubecost_workload_costs.
         """
+        resolved_window = _resolve_window_defensively(f"{days}d")
+        window_display = resolved_window.display if resolved_window else f"{days} days"
         try:
             raw = await _fetch_abandoned_workloads(
                 days=days,
@@ -2007,10 +2194,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 status=QueryStatus.EMPTY,
                 message=(
                     f"No abandoned workloads found with threshold={threshold} bytes/s "
-                    f"over {days} day(s)" + (f" in cluster '{cluster}'" if cluster else "") + "."
+                    f"over {window_display}" + (f" in cluster '{cluster}'" if cluster else "") + "."
                 ),
                 recommended_action=("Try lowering 'threshold' or increasing 'days' to surface more workloads."),
                 days=days,
+                resolved_window=resolved_window,
                 threshold_bytes_per_second=threshold,
                 cluster_filter=cluster,
             )
@@ -2024,7 +2212,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 f"Found {len(rows)} abandoned workload(s) with estimated monthly savings "
                 f"of ${total_savings:,.2f}"
                 + (f" in cluster '{cluster}'" if cluster else " across all clusters")
-                + f" (threshold={threshold} bytes/s, {days} day(s))"
+                + f" (threshold={threshold} bytes/s, {window_display})"
                 + (" — result may be truncated, increase limit for more." if truncated else ".")
             ),
             recommended_action=(
@@ -2032,6 +2220,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 "Confirm the pod is truly idle before decommissioning — check with the owning team."
             ),
             days=days,
+            resolved_window=resolved_window,
             threshold_bytes_per_second=threshold,
             cluster_filter=cluster,
             workload_count=len(rows),
@@ -2168,6 +2357,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN NOT TO USE: For unclaimed (unbound) volumes, use get_unclaimed_volumes.
         For node-level local disk savings, use get_local_disk_savings.
         """
+        resolved_window = _resolve_window_defensively(window)
+        window_display = resolved_window.display if resolved_window else window
         try:
             raw = await _fetch_pv_sizing(window=window, overhead_percent=overhead_percent)
         except McpToolError as exc:
@@ -2194,7 +2385,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         return PVSizingResponse(
             status=QueryStatus.OK,
             message=(
-                f"Found {len(filtered)} PV sizing recommendation(s) with total monthly savings "
+                f"Found {len(filtered)} PV sizing recommendation(s) for {window_display} with total monthly savings "
                 f"of ${total_savings:,.2f}" + (f" (showing top {top_n})." if truncated else ".")
             ),
             recommended_action=(
@@ -2221,6 +2412,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             total_monthly_savings=total_savings,
             row_count=len(filtered),
             truncated=truncated,
+            resolved_window=resolved_window,
         )
 
     @mcp.tool(
@@ -2265,6 +2457,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN NOT TO USE: For PVC right-sizing, use get_pv_sizing_recommendations.
         For unclaimed volumes, use get_unclaimed_volumes.
         """
+        resolved_window = _resolve_window_defensively(window)
+        window_display = resolved_window.display if resolved_window else window
         try:
             raw = await _fetch_local_disks(window=window, overhead_percent=overhead_percent)
         except McpToolError as exc:
@@ -2292,7 +2486,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         return LocalDiskSavingsResponse(
             status=QueryStatus.OK,
             message=(
-                f"Found {len(filtered)} underutilized disk(s) with total monthly savings "
+                f"Found {len(filtered)} underutilized disk(s) for {window_display} with total monthly savings "
                 f"of ${total_savings:,.2f}" + (f" (showing top {top_n})." if truncated else ".")
             ),
             recommended_action=(
@@ -2315,6 +2509,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             total_monthly_savings=total_savings,
             row_count=len(filtered),
             truncated=truncated,
+            resolved_window=resolved_window,
         )
 
     @mcp.tool(
@@ -2364,6 +2559,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN NOT TO USE: For container CPU/memory rightsizing, use get_container_savings_recommendations.
         For abandoned pods, use get_abandoned_workloads.
         """
+        resolved_window = _resolve_window_defensively(window)
+        window_display = resolved_window.display if resolved_window else window
         try:
             raw = await _fetch_node_group_sizing(cluster=cluster, window=window, profile=profile)
         except McpToolError as exc:
@@ -2374,6 +2571,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 cluster=cluster,
                 profile=profile,
                 window=window,
+                resolved_window=resolved_window,
             )
 
         recs_raw, was_capped = _cap_raw_rows(raw.get("recommendations", []), "node group sizing")
@@ -2438,7 +2636,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             status=QueryStatus.OK,
             message=(
                 f"Found {len(recommendations)} node group recommendation(s) for cluster '{cluster}' "
-                f"with estimated monthly savings of ${total_savings:,.2f}."
+                f"for {window_display} with estimated monthly savings of ${total_savings:,.2f}."
             ),
             recommended_action=(
                 "Review ScaleIn and ChangeInstanceType recommendations first for quickest savings. "
@@ -2447,6 +2645,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             cluster=cluster,
             profile=profile,
             window=window_str,
+            resolved_window=resolved_window,
             recommendations=recommendations,
             total_savings_per_month=total_savings,
             recommendation_count=len(recommendations),
@@ -2488,6 +2687,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN NOT TO USE: For over-provisioned PVCs that ARE in use, use
         get_pv_sizing_recommendations. For node-local disk savings, use get_local_disk_savings.
         """
+        resolved_window = _resolve_window_defensively(window)
+        window_display = resolved_window.display if resolved_window else window
         try:
             raw = await _fetch_unclaimed_volumes(window=window)
         except McpToolError as exc:
@@ -2520,7 +2721,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         return UnclaimedVolumesResponse(
             status=QueryStatus.OK,
             message=(
-                f"Found {len(filtered)} unclaimed volume(s) with total monthly cost "
+                f"Found {len(filtered)} unclaimed volume(s) for {window_display} with total monthly cost "
                 f"of ${total_cost:,.2f}" + (f" (showing top {top_n})." if truncated else ".")
             ),
             recommended_action=(
@@ -2544,6 +2745,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             total_monthly_cost=total_cost,
             row_count=len(filtered),
             truncated=truncated,
+            resolved_window=resolved_window,
         )
 
     @mcp.tool(
@@ -2604,6 +2806,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         get_container_savings_recommendations. For node-level savings, use
         get_cluster_rightsizing_recommendations.
         """
+        resolved_window = _resolve_window_defensively(window)
+        window_display = resolved_window.display if resolved_window else window
         try:
             raw = await _fetch_resource_quota_recommendations(
                 window=window, profile=profile, limit=limit, offset=offset
@@ -2615,6 +2819,10 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 recommended_action="Check Kubecost connectivity and credentials, then retry.",
             )
 
+        # This endpoint echoes the range it actually queried; prefer it over the prediction.
+        resolved_window = resolved_window_from_api(raw.get("window"), window) or resolved_window
+        window_display = resolved_window.display if resolved_window else window
+
         recs_raw: list[dict[str, Any]] = raw.get("recommendations", [])
         item_count = int(raw.get("itemCount", len(recs_raw)) or len(recs_raw))
         total_monthly_savings = round(float(raw.get("totalMonthlySavings", 0.0) or 0.0), 2)
@@ -2623,10 +2831,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         if not recs_raw:
             return ResourceQuotaResponse(
                 status=QueryStatus.EMPTY,
-                message="No resource quota recommendations found.",
+                message=f"No resource quota recommendations found for {window_display}.",
                 recommended_action="Try a different window or profile, or check the savings overview.",
                 item_count=item_count,
                 total_monthly_savings=total_monthly_savings,
+                resolved_window=resolved_window,
             )
 
         recommendations = [
@@ -2653,7 +2862,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         return ResourceQuotaResponse(
             status=QueryStatus.OK,
             message=(
-                f"Found {item_count} namespace quota recommendation(s)"
+                f"Found {item_count} namespace quota recommendation(s) for {window_display}"
                 + (f" (page offset={offset}, showing {len(recommendations)})." if offset > 0 or truncated else ".")
             ),
             recommended_action=(
@@ -2664,6 +2873,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             item_count=item_count,
             total_monthly_savings=total_monthly_savings,
             truncated=truncated,
+            resolved_window=resolved_window,
         )
 
     # ── Resources (Rule #17) ───────────────────────────────────────────────────
@@ -2958,7 +3168,7 @@ async def _fetch_request_sizing(
         "targetCPUUtilization": target_cpu_utilization,
         "targetRAMUtilization": target_ram_utilization,
         "filter": filter_str,
-        "window": window,
+        "window": to_api_window(window),
         "offset": 0,
         "limit": limit,
     }
@@ -2975,7 +3185,7 @@ async def _fetch_allocation(
 ) -> dict[str, Any]:
     """Fetch allocation data via the shared API wrapper."""
     params: dict[str, Any] = {
-        "window": window,
+        "window": to_api_window(window),
         "aggregate": aggregate,
         "accumulate": str(accumulate).lower(),
         "idle": "true",
@@ -3064,7 +3274,7 @@ async def _fetch_savings_overview() -> dict[str, Any]:
 async def _fetch_pv_sizing(window: str, overhead_percent: int) -> dict[str, Any]:
     """Fetch PV sizing recommendations with a broad fixed limit so callers can sort before slicing."""
     params: dict[str, Any] = {
-        "window": window,
+        "window": to_api_window(window),
         "overheadPercent": overhead_percent,
         "offset": 0,
         "limit": _SAVINGS_API_FETCH_LIMIT,
@@ -3080,7 +3290,7 @@ async def _fetch_pv_sizing(window: str, overhead_percent: int) -> dict[str, Any]
 async def _fetch_local_disks(window: str, overhead_percent: int) -> dict[str, Any]:
     """Fetch local disk savings recommendations."""
     params: dict[str, Any] = {
-        "window": window,
+        "window": to_api_window(window),
         "overheadPercent": overhead_percent,
     }
     path = get_settings().kubecost_local_disks_path
@@ -3096,7 +3306,7 @@ async def _fetch_node_group_sizing(cluster: str, window: str, profile: str) -> d
     """Fetch node group sizing recommendations; unwraps the { code, data } wrapper."""
     params: dict[str, Any] = {
         "cluster": cluster,
-        "window": window,
+        "window": to_api_window(window),
         "profile": profile,
     }
     path = get_settings().kubecost_node_group_sizing_path
@@ -3109,7 +3319,7 @@ async def _fetch_node_group_sizing(cluster: str, window: str, profile: str) -> d
 
 async def _fetch_unclaimed_volumes(window: str) -> dict[str, Any]:
     """Fetch unclaimed volumes; unwraps the { code, data } wrapper."""
-    params: dict[str, Any] = {"window": window}
+    params: dict[str, Any] = {"window": to_api_window(window)}
     path = get_settings().kubecost_unclaimed_volumes_path
     logger.debug("Kubecost unclaimed volumes: path=%s window=%s", path, window)
     result = await call_get_api(path, params=params)
@@ -3126,7 +3336,7 @@ async def _fetch_resource_quota_recommendations(
 ) -> dict[str, Any]:
     """Fetch resource quota recommendations; hardcodes show='all' (only confirmed valid value)."""
     params: dict[str, Any] = {
-        "window": window,
+        "window": to_api_window(window),
         "profile": profile,
         "show": "all",
         "limit": limit,

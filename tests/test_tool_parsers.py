@@ -8,9 +8,11 @@ import mcp_kubecost.tools.kubecost_tools as ktools
 
 _aggregate_by_dimensions = ktools._aggregate_by_dimensions
 _format_date = ktools._format_date
+_format_end_date = ktools._format_end_date
 _format_number = ktools._format_number
 # _parse_allocation_response is module-level (not nested), so direct import works.
 _parse_allocation_response = ktools._parse_allocation_response
+_window_from_allocation = ktools._window_from_allocation
 aggregate_savings_by = ktools.aggregate_savings_by
 compute_savings_notes = ktools.compute_savings_notes
 parse_request_sizing_response = ktools.parse_request_sizing_response
@@ -55,6 +57,31 @@ class TestFormatDate:
 
 
 # ---------------------------------------------------------------------------
+# _format_end_date
+# ---------------------------------------------------------------------------
+
+
+class TestFormatEndDate:
+    """Kubecost's window end is exclusive; rows report the last day it covers."""
+
+    def test_exclusive_midnight_end_steps_back_one_day(self):
+        assert _format_end_date("2024-01-08T00:00:00Z") == "2024-01-07"
+
+    def test_single_day_bucket_end_equals_its_start_day(self):
+        assert _format_end_date("2024-01-02T00:00:00Z") == "2024-01-01"
+
+    def test_mid_day_end_stays_on_that_day(self):
+        # In-progress windows ('week'/'month') end at 'now', not midnight.
+        assert _format_end_date("2024-01-08T13:45:00Z") == "2024-01-08"
+
+    def test_empty_string_returns_empty(self):
+        assert _format_end_date("") == ""
+
+    def test_invalid_string_returned_as_is(self):
+        assert _format_end_date("not-a-date") == "not-a-date"
+
+
+# ---------------------------------------------------------------------------
 # _parse_allocation_response
 # ---------------------------------------------------------------------------
 
@@ -84,6 +111,36 @@ class TestParseAllocationResponse:
     def test_window_start_extracted(self, allocation_response_one_ns):
         _, rows = _parse_allocation_response(allocation_response_one_ns)
         assert rows[0]["window_start"] == "2024-01-01"
+
+    def test_window_end_extracted_as_inclusive_last_day(self, allocation_response_one_ns):
+        # Fixture window is 2024-01-01 -> 2024-01-08 exclusive, i.e. through the 7th.
+        _, rows = _parse_allocation_response(allocation_response_one_ns)
+        assert rows[0]["window_end"] == "2024-01-07"
+
+    def test_window_end_empty_when_api_omits_end(self):
+        resp = {
+            "data": [
+                {
+                    "ns-a": {
+                        "name": "cluster-one/ns-a",
+                        "properties": {"cluster": "cluster-one", "namespace": "ns-a"},
+                        "window": {"start": "2024-01-01T00:00:00Z"},
+                        "totalCost": 1.0,
+                    }
+                }
+            ]
+        }
+        _, rows = _parse_allocation_response(resp)
+        assert rows[0]["window_end"] == ""
+
+    def test_daily_buckets_keep_their_own_windows(self, allocation_response_daily_buckets):
+        _, rows = _parse_allocation_response(allocation_response_daily_buckets)
+        assert len(rows) == 6
+        assert {(r["window_start"], r["window_end"]) for r in rows} == {
+            ("2024-01-01", "2024-01-01"),
+            ("2024-01-02", "2024-01-02"),
+            ("2024-01-03", "2024-01-03"),
+        }
 
     def test_multi_entry_returns_all_rows(self, allocation_response_multi_ns):
         _, rows = _parse_allocation_response(allocation_response_multi_ns)
@@ -166,6 +223,94 @@ class TestAggregateByDimensions:
         ]
         agg = _aggregate_by_dimensions(rows, ["cluster", "namespace"])
         assert agg[0]["cpuIdlePct"] == "0%"
+
+    def test_accumulated_response_keeps_one_row_per_key(self, allocation_response_multi_ns):
+        """A single shared window must not change the accumulated grouping."""
+        _, rows = _parse_allocation_response(allocation_response_multi_ns)
+        aggregated = _aggregate_by_dimensions(rows, ["cluster", "namespace"])
+        assert len(aggregated) == 2
+        assert all(r["window_start"] == "2024-01-01" and r["window_end"] == "2024-01-07" for r in aggregated)
+
+    def test_daily_buckets_are_not_collapsed(self, allocation_response_daily_buckets):
+        """Each (dimension key, day) stays its own row — the documented daily breakdown."""
+        _, rows = _parse_allocation_response(allocation_response_daily_buckets)
+        aggregated = _aggregate_by_dimensions(rows, ["cluster", "namespace"])
+        assert len(aggregated) == 6
+        assert [(r["window_start"], r["namespace"], r["totalCost"]) for r in aggregated] == [
+            ("2024-01-01", "ns-a", 10.0),
+            ("2024-01-01", "ns-b", 2.0),
+            ("2024-01-02", "ns-a", 20.0),
+            ("2024-01-02", "ns-b", 4.0),
+            ("2024-01-03", "ns-a", 30.0),
+            ("2024-01-03", "ns-b", 6.0),
+        ]
+
+    def test_daily_breakdown_preserves_the_full_total(self, allocation_response_daily_buckets):
+        _, rows = _parse_allocation_response(allocation_response_daily_buckets)
+        aggregated = _aggregate_by_dimensions(rows, ["cluster", "namespace"])
+        assert sum(float(r["totalCost"]) for r in aggregated) == 72.0  # (10+2)+(20+4)+(30+6)
+
+    def test_rows_without_window_still_group_by_dimension(self):
+        """Hand-built rows carrying no window keep collapsing on dimensions alone."""
+        rows = [
+            {"cluster": "c", "namespace": "n", "totalCost": 1.0, "cpuCost": 1.0},
+            {"cluster": "c", "namespace": "n", "totalCost": 2.0, "cpuCost": 2.0},
+        ]
+        aggregated = _aggregate_by_dimensions(rows, ["cluster", "namespace"])
+        assert len(aggregated) == 1
+        assert aggregated[0]["totalCost"] == 3.0
+        assert aggregated[0]["window_start"] == ""
+        assert aggregated[0]["window_end"] == ""
+
+
+# ---------------------------------------------------------------------------
+# _window_from_allocation
+# ---------------------------------------------------------------------------
+
+
+class TestWindowFromAllocation:
+    """The queried range spans every bucket, not just the first one."""
+
+    def test_single_bucket_reports_its_window(self, allocation_response_one_ns):
+        resolved = _window_from_allocation(allocation_response_one_ns, "7d")
+        assert resolved is not None
+        assert resolved.days == 7
+        assert resolved.display_start == "2024-01-01"
+        assert resolved.display_end == "2024-01-07"
+
+    def test_daily_buckets_span_first_start_to_last_end(self, allocation_response_daily_buckets):
+        """Regression: previously reported 1 day because only the first bucket was read."""
+        resolved = _window_from_allocation(allocation_response_daily_buckets, "3d")
+        assert resolved is not None
+        assert resolved.days == 3
+        assert resolved.display_start == "2024-01-01"
+        assert resolved.display_end == "2024-01-03"
+        assert resolved.source_expression == "3d"
+
+    def test_buckets_out_of_order_still_span_correctly(self, allocation_response_daily_buckets):
+        reversed_response = {"data": list(reversed(allocation_response_daily_buckets["data"]))}
+        resolved = _window_from_allocation(reversed_response, "3d")
+        assert resolved is not None
+        assert resolved.days == 3
+        assert resolved.display_start == "2024-01-01"
+
+    def test_no_usable_window_returns_none(self):
+        assert _window_from_allocation({"data": [{"ns-a": {"totalCost": 1.0}}]}, "7d") is None
+
+    def test_empty_response_returns_none(self):
+        assert _window_from_allocation({}, "7d") is None
+
+    def test_unparseable_windows_are_skipped(self):
+        resp = {
+            "data": [
+                {"ns-a": {"window": {"start": "nonsense", "end": "also-nonsense"}}},
+                {"ns-a": {"window": {"start": "2024-01-02T00:00:00Z", "end": "2024-01-03T00:00:00Z"}}},
+            ]
+        }
+        resolved = _window_from_allocation(resp, "2d")
+        assert resolved is not None
+        assert resolved.days == 1
+        assert resolved.display_start == "2024-01-02"
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,19 @@
+{
+    "mcpServers": {
+        "mcp-kubecost": {
+            "command": "uv",
+            "args": [
+                "run",
+                "fastmcp",
+                "run",
+                "src/mcp_kubecost/server.py"
+            ],
+            "env": {
+                "KUBECOST_BASE_URL": "https://demo.kubecost.xyz",
+                "FASTMCP_SHOW_SERVER_BANNER": "false",
+                "FASTMCP_LOG_LEVEL": "INFO",
+                "TOON_ENABLED": "false"
+            }
+        }
+    }
+}
