@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastmcp import FastMCP
@@ -40,10 +40,12 @@ from mcp_kubecost.tools._common import (
     QueryStatus,
     ResolvedWindow,
     call_get_api,
+    parse_api_timestamp,
     parse_window_days,
     raise_tool_error,
     resolve_window,
     resolved_window_from_api,
+    to_api_window,
 )
 
 logger = logging.getLogger(__name__)
@@ -176,6 +178,21 @@ def _format_date(iso_string: str) -> str:
         return iso_string
 
 
+def _format_end_date(iso_string: str) -> str:
+    """Convert Kubecost's exclusive window end to the inclusive last day it covers.
+
+    Kubecost reports a 7-day window ending on Aug 7 as ``2026-08-08T00:00:00Z``.
+    Stepping back one microsecond — the same way ``ResolvedWindow.display_end`` is
+    derived — keeps row-level ``window_end`` in agreement with ``resolved_window``.
+    """
+    if not iso_string:
+        return ""
+    parsed = parse_api_timestamp(iso_string)
+    if parsed is None:
+        return iso_string
+    return (parsed - timedelta(microseconds=1)).strftime("%Y-%m-%d")
+
+
 def _resolve_window_defensively(window: str) -> ResolvedWindow | None:
     """Resolve a query window without preventing a valid upstream query."""
     try:
@@ -191,17 +208,34 @@ def _window_from_allocation(response: dict[str, Any], source_expression: str) ->
     Every allocation entry carries the server's own ``window`` object, which is
     authoritative. Prefer it over the client-side prediction so a divergence
     can never be reported to the user as fact.
+
+    An accumulated response holds one bucket spanning the whole query, but a
+    non-accumulated one holds a bucket per step — so the queried range is the
+    span from the earliest start to the latest end across every bucket, not the
+    first bucket's own (one-step) window. Entries within a bucket all share that
+    bucket's window, so only the first usable one is read per bucket.
     """
+    starts: list[datetime] = []
+    ends: list[datetime] = []
     for bucket in response.get("data") or []:
         if not isinstance(bucket, dict):
             continue
         for entry in bucket.values():
             if not isinstance(entry, dict):
                 continue
-            resolved = resolved_window_from_api(entry.get("window"), source_expression)
-            if resolved is not None:
-                return resolved
-    return None
+            window = entry.get("window")
+            if not isinstance(window, dict):
+                continue
+            start = parse_api_timestamp(window.get("start"))
+            end = parse_api_timestamp(window.get("end"))
+            if start is not None and end is not None:
+                starts.append(start)
+                ends.append(end)
+                break
+    if not starts:
+        return None
+    span = {"start": min(starts).isoformat(), "end": max(ends).isoformat()}
+    return resolved_window_from_api(span, source_expression)
 
 
 def _parse_allocation_response(
@@ -248,6 +282,7 @@ def _parse_allocation_response(
 
         window_dict = entry.get("window", {})
         row["window_start"] = _format_date(window_dict.get("start", ""))
+        row["window_end"] = _format_end_date(window_dict.get("end", ""))
 
         for field in COST_FIELDS:
             value = entry.get(field, 0.0)
@@ -259,15 +294,21 @@ def _parse_allocation_response(
 
 
 def _aggregate_by_dimensions(rows: list[dict], dimension_cols: list[str]) -> list[dict]:
-    """Sum cost fields across rows sharing the same dimension values.
+    """Sum cost fields across rows sharing the same dimension values *and* window.
 
-    Returns rows sorted by ``totalCost`` descending with idle-% columns derived
-    from summed idle vs total figures.
+    The window is part of the grouping key so a non-accumulated response keeps
+    its per-step rows instead of collapsing into a single total stamped with one
+    step's date. An accumulated response has one window throughout, so grouping
+    is unchanged for it.
+
+    Returns rows sorted by ``window_start`` ascending then ``totalCost``
+    descending, with idle-% columns derived from summed idle vs total figures.
     """
     groups: dict[tuple, dict[str, Any]] = defaultdict(lambda: defaultdict(float))
 
     for row in rows:
-        key = tuple(row.get(dim, "") for dim in dimension_cols)
+        window = (row.get("window_start", ""), row.get("window_end", ""))
+        key = tuple(row.get(dim, "") for dim in dimension_cols) + window
         for field in COST_FIELDS:
             if field != "totalEfficiency":
                 value = row.get(field, 0)
@@ -275,9 +316,10 @@ def _aggregate_by_dimensions(rows: list[dict], dimension_cols: list[str]) -> lis
                     groups[key][field] += float(value)
         for dim in dimension_cols:
             groups[key][dim] = row.get(dim, "")
+        groups[key]["window_start"], groups[key]["window_end"] = window
 
     aggregated: list[dict] = []
-    for _key, values in groups.items():
+    for values in groups.values():
         row = dict(values)
 
         cpu_total = row.get("cpuCost", 0)
@@ -297,7 +339,10 @@ def _aggregate_by_dimensions(rows: list[dict], dimension_cols: list[str]) -> lis
 
         aggregated.append(row)
 
-    aggregated.sort(key=lambda r: float(r.get("totalCost", 0)), reverse=True)
+    # Chronological first so a per-step breakdown reads as a series and a top_n
+    # slice keeps a contiguous prefix of it; within a step, costliest first. With
+    # a single window (the accumulated case) this is plain totalCost descending.
+    aggregated.sort(key=lambda r: (r.get("window_start", ""), -float(r.get("totalCost", 0))))
 
     for row in aggregated:
         for field in COST_FIELDS:
@@ -726,7 +771,14 @@ class AllocationRow(BaseModel):
 
     window_start: str = Field(
         default="",
-        description="Start date of the allocation window (YYYY-MM-DD).",
+        description="First date covered by this row (YYYY-MM-DD).",
+    )
+    window_end: str = Field(
+        default="",
+        description=(
+            "Last date covered by this row (YYYY-MM-DD, inclusive). Equals window_start "
+            "for a single-day row. Empty when the upstream response carried no window end."
+        ),
     )
     # --- cost components ---
     cpu_cost: float = Field(
@@ -825,8 +877,11 @@ class KubecostAllocationResponse(BaseToolResponse):
     rows: list[AllocationRow] = Field(
         default_factory=list,
         description=(
-            "Aggregated allocation rows sorted by totalCost descending. "
-            "Each row contains the requested dimension values (e.g. cluster, namespace) "
+            "Aggregated allocation rows sorted by window_start ascending then totalCost "
+            "descending — with accumulate=true there is a single window, so this is simply "
+            "totalCost descending; with accumulate=false there is one row per dimension key "
+            "per day, in date order. Each row contains the requested dimension values "
+            "(e.g. cluster, namespace), the window_start/window_end dates it covers, "
             "plus cost fields: totalCost, cpuCost, ramCost, networkCost, pvCost, "
             "gpuCost, sharedCost, and idle percentages cpuIdlePct, ramIdlePct, totalIdlePct."
         ),
@@ -1568,6 +1623,16 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             else ""
         )
 
+        # Spell out the row shape when not accumulating so per-day rows are never
+        # read as whole-window totals.
+        breakdown_note = ""
+        if not accumulate:
+            day_count = len({r.get("window_start", "") for r in filtered})
+            breakdown_note = (
+                f" Daily breakdown: one row per {', '.join(dimension_cols) or aggregate} "
+                f"per day across {day_count} day(s)."
+            )
+
         return KubecostAllocationResponse(
             status=QueryStatus.OK,
             message=(
@@ -1576,6 +1641,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 + (f" (showing top {top_n})" if truncated else "")
                 + filtered_note
                 + "."
+                + breakdown_note
             ),
             recommended_action=(
                 "Increase top_n or narrow the aggregate/window to retrieve all rows." if truncated else None
@@ -2753,6 +2819,10 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 recommended_action="Check Kubecost connectivity and credentials, then retry.",
             )
 
+        # This endpoint echoes the range it actually queried; prefer it over the prediction.
+        resolved_window = resolved_window_from_api(raw.get("window"), window) or resolved_window
+        window_display = resolved_window.display if resolved_window else window
+
         recs_raw: list[dict[str, Any]] = raw.get("recommendations", [])
         item_count = int(raw.get("itemCount", len(recs_raw)) or len(recs_raw))
         total_monthly_savings = round(float(raw.get("totalMonthlySavings", 0.0) or 0.0), 2)
@@ -2761,10 +2831,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         if not recs_raw:
             return ResourceQuotaResponse(
                 status=QueryStatus.EMPTY,
-                message="No resource quota recommendations found.",
+                message=f"No resource quota recommendations found for {window_display}.",
                 recommended_action="Try a different window or profile, or check the savings overview.",
                 item_count=item_count,
                 total_monthly_savings=total_monthly_savings,
+                resolved_window=resolved_window,
             )
 
         recommendations = [
@@ -3097,7 +3168,7 @@ async def _fetch_request_sizing(
         "targetCPUUtilization": target_cpu_utilization,
         "targetRAMUtilization": target_ram_utilization,
         "filter": filter_str,
-        "window": window,
+        "window": to_api_window(window),
         "offset": 0,
         "limit": limit,
     }
@@ -3114,7 +3185,7 @@ async def _fetch_allocation(
 ) -> dict[str, Any]:
     """Fetch allocation data via the shared API wrapper."""
     params: dict[str, Any] = {
-        "window": window,
+        "window": to_api_window(window),
         "aggregate": aggregate,
         "accumulate": str(accumulate).lower(),
         "idle": "true",
@@ -3203,7 +3274,7 @@ async def _fetch_savings_overview() -> dict[str, Any]:
 async def _fetch_pv_sizing(window: str, overhead_percent: int) -> dict[str, Any]:
     """Fetch PV sizing recommendations with a broad fixed limit so callers can sort before slicing."""
     params: dict[str, Any] = {
-        "window": window,
+        "window": to_api_window(window),
         "overheadPercent": overhead_percent,
         "offset": 0,
         "limit": _SAVINGS_API_FETCH_LIMIT,
@@ -3219,7 +3290,7 @@ async def _fetch_pv_sizing(window: str, overhead_percent: int) -> dict[str, Any]
 async def _fetch_local_disks(window: str, overhead_percent: int) -> dict[str, Any]:
     """Fetch local disk savings recommendations."""
     params: dict[str, Any] = {
-        "window": window,
+        "window": to_api_window(window),
         "overheadPercent": overhead_percent,
     }
     path = get_settings().kubecost_local_disks_path
@@ -3235,7 +3306,7 @@ async def _fetch_node_group_sizing(cluster: str, window: str, profile: str) -> d
     """Fetch node group sizing recommendations; unwraps the { code, data } wrapper."""
     params: dict[str, Any] = {
         "cluster": cluster,
-        "window": window,
+        "window": to_api_window(window),
         "profile": profile,
     }
     path = get_settings().kubecost_node_group_sizing_path
@@ -3248,7 +3319,7 @@ async def _fetch_node_group_sizing(cluster: str, window: str, profile: str) -> d
 
 async def _fetch_unclaimed_volumes(window: str) -> dict[str, Any]:
     """Fetch unclaimed volumes; unwraps the { code, data } wrapper."""
-    params: dict[str, Any] = {"window": window}
+    params: dict[str, Any] = {"window": to_api_window(window)}
     path = get_settings().kubecost_unclaimed_volumes_path
     logger.debug("Kubecost unclaimed volumes: path=%s window=%s", path, window)
     result = await call_get_api(path, params=params)
@@ -3265,7 +3336,7 @@ async def _fetch_resource_quota_recommendations(
 ) -> dict[str, Any]:
     """Fetch resource quota recommendations; hardcodes show='all' (only confirmed valid value)."""
     params: dict[str, Any] = {
-        "window": window,
+        "window": to_api_window(window),
         "profile": profile,
         "show": "all",
         "limit": limit,

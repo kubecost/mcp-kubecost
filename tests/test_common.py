@@ -14,6 +14,7 @@ from mcp_kubecost.tools._common import (
     ResolvedWindow,
     extract_list,
     format_tool_error,
+    parse_api_timestamp,
     resolve_window,
     resolved_window_from_api,
     safe_path_segment,
@@ -333,3 +334,79 @@ class TestResolvedWindowFromApi:
     def test_unusable_windows_return_none_rather_than_raising(self, window):
         """Callers fall back to the prediction; a bad window must not lose the response."""
         assert resolved_window_from_api(window, "7d") is None
+
+
+# ---------------------------------------------------------------------------
+# parse_api_timestamp
+# ---------------------------------------------------------------------------
+
+
+class TestParseApiTimestamp:
+    """Shared by resolved_window_from_api and the allocation window-span logic."""
+
+    def test_zulu_suffix(self):
+        assert parse_api_timestamp("2026-08-01T00:00:00Z") == datetime(2026, 8, 1, tzinfo=UTC)
+
+    def test_explicit_offset(self):
+        assert parse_api_timestamp("2026-08-01T02:00:00+02:00") == datetime(2026, 8, 1, tzinfo=UTC)
+
+    def test_naive_timestamp_is_assumed_utc(self):
+        """Results are compared across responses, so everything must be tz-aware."""
+        assert parse_api_timestamp("2026-08-01T00:00:00") == datetime(2026, 8, 1, tzinfo=UTC)
+
+    @pytest.mark.parametrize("value", [None, "", "not-a-date", {}])
+    def test_unusable_values_return_none(self, value):
+        assert parse_api_timestamp(value) is None
+
+
+# ---------------------------------------------------------------------------
+# to_api_window
+# ---------------------------------------------------------------------------
+
+
+class TestToApiWindow:
+    """to_api_window pre-resolves calendar aliases and passes everything else through."""
+
+    @staticmethod
+    def _freeze(monkeypatch, moment):
+        monkeypatch.setattr(_common, "_start_of_utc_day", lambda: moment)
+
+    def test_lastmonth_resolved_to_rfc3339(self, monkeypatch):
+        self._freeze(monkeypatch, datetime(2026, 8, 6, tzinfo=UTC))
+        result = _common.to_api_window("lastmonth")
+        assert result == "2026-07-01T00:00:00Z,2026-08-01T00:00:00Z"
+
+    def test_lastweek_resolved_to_rfc3339(self, monkeypatch):
+        self._freeze(monkeypatch, datetime(2026, 8, 6, tzinfo=UTC))
+        result = _common.to_api_window("lastweek")
+        assert result == "2026-07-26T00:00:00Z,2026-08-02T00:00:00Z"
+
+    def test_month_resolved_to_rfc3339(self, monkeypatch):
+        self._freeze(monkeypatch, datetime(2026, 8, 6, tzinfo=UTC))
+        result = _common.to_api_window("month")
+        # month = 2026-08-01 to 2026-08-07 (end = tomorrow = 2026-08-07)
+        assert result == "2026-08-01T00:00:00Z,2026-08-07T00:00:00Z"
+
+    def test_week_resolved_to_rfc3339(self, monkeypatch):
+        self._freeze(monkeypatch, datetime(2026, 8, 6, tzinfo=UTC))
+        result = _common.to_api_window("week")
+        # Kubecost weeks start Sunday; 2026-08-06 is Thursday so week opened 2026-08-02
+        assert result == "2026-08-02T00:00:00Z,2026-08-07T00:00:00Z"
+
+    def test_7d_passthrough(self):
+        assert _common.to_api_window("7d") == "7d"
+
+    def test_30d_passthrough(self):
+        assert _common.to_api_window("30d") == "30d"
+
+    def test_today_passthrough(self):
+        assert _common.to_api_window("today") == "today"
+
+    def test_explicit_rfc3339_range_passthrough(self):
+        expr = "2026-07-01T00:00:00Z,2026-08-01T00:00:00Z"
+        assert _common.to_api_window(expr) == expr
+
+    def test_mixed_case_lastmonth_normalised(self, monkeypatch):
+        self._freeze(monkeypatch, datetime(2026, 8, 6, tzinfo=UTC))
+        result = _common.to_api_window("LastMonth")
+        assert result == "2026-07-01T00:00:00Z,2026-08-01T00:00:00Z"

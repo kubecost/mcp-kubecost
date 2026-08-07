@@ -45,12 +45,14 @@ __all__ = [
     "call_post_api",
     "extract_list",
     "format_tool_error",
+    "parse_api_timestamp",
     "parse_window_days",
     "raise_tool_error",
     "resolve_window",
     "resolved_window_from_api",
     "safe_path_segment",
     "summarize_exception",
+    "to_api_window",
     "validate_response",
 ]
 
@@ -164,6 +166,21 @@ def _window_result(
     )
 
 
+def parse_api_timestamp(value: Any) -> datetime | None:
+    """Parse an RFC3339 timestamp returned by Kubecost, or ``None`` if unusable.
+
+    Accepts the ``Z`` suffix Kubecost uses and normalises naive timestamps to UTC
+    so callers can compare results from different responses directly.
+    """
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
+
+
 def resolved_window_from_api(window: Any, source_expression: str) -> ResolvedWindow | None:
     """Build a ``ResolvedWindow`` from the window Kubecost echoed in its response.
 
@@ -180,16 +197,10 @@ def resolved_window_from_api(window: Any, source_expression: str) -> ResolvedWin
     raw_start, raw_end = window.get("start"), window.get("end")
     if not raw_start or not raw_end:
         return None
-    try:
-        start = datetime.fromisoformat(str(raw_start).replace("Z", "+00:00"))
-        end = datetime.fromisoformat(str(raw_end).replace("Z", "+00:00"))
-    except ValueError:
+    start, end = parse_api_timestamp(raw_start), parse_api_timestamp(raw_end)
+    if start is None or end is None:
         logger.warning("Kubecost returned an unparseable window: %r", window)
         return None
-    if start.tzinfo is None:
-        start = start.replace(tzinfo=UTC)
-    if end.tzinfo is None:
-        end = end.replace(tzinfo=UTC)
     if end <= start:
         logger.warning("Kubecost returned a non-positive window: %r", window)
         return None
@@ -269,6 +280,28 @@ def resolve_window(window: str) -> ResolvedWindow:
         retryable=False,
         suggested_action="Use a named window such as '15d', 'lastmonth', or an RFC3339 start,end range.",
     )
+
+
+# Calendar aliases that Kubecost resolves incorrectly server-side.
+# These must be pre-resolved to explicit RFC3339 ranges before the API call.
+_CALENDAR_ALIASES: frozenset[str] = frozenset({"lastmonth", "lastweek", "month", "week"})
+
+
+def to_api_window(window: str) -> str:
+    """Return a Kubecost-safe window string for use in API call parameters.
+
+    Calendar aliases (``"lastmonth"``, ``"lastweek"``, ``"month"``, ``"week"``) are
+    pre-resolved to explicit RFC3339 date pairs because Kubecost's own server-side
+    resolution of these aliases is broken (e.g. ``"lastmonth"`` becomes a single day).
+    All other values — rolling windows like ``"7d"`` and already-explicit RFC3339 ranges
+    — are returned unchanged.
+    """
+    normalised = window.strip().lower()
+    if normalised not in _CALENDAR_ALIASES:
+        return window
+    resolved = resolve_window(window)
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    return f"{resolved.start_utc.strftime(fmt)},{resolved.end_utc.strftime(fmt)}"
 
 
 # ---------------------------------------------------------------------------
