@@ -9,9 +9,20 @@ They call the real MCP server tools via the fastmcp CLI, matching the commands:
     fastmcp call ./.bob/mcp.json get_container_savings_recommendations --input-json '{"window": "15d"}'
     fastmcp call ./.bob/mcp.json get_kubecost_workload_costs --input-json '{"window": "15d"}'
 
+Which instance is queried comes from the MCP config file, since the fastmcp CLI
+starts the server with the env block declared there — not from the ambient
+environment. By default that is the developer's own ``.bob/mcp.json`` (gitignored);
+set ``MCP_KUBECOST_CONFIG`` to point somewhere else. To run against the public demo,
+the same target CI uses:
+
+    MCP_KUBECOST_CONFIG=tests/mcp-demo.json uv run pytest -m integration
+
+Every test skips when the config file is missing, so a checkout without one is not
+a failure.
+
 Prerequisites:
-  - KUBECOST_BASE_URL must point to a live instance (or demo.kubecost.xyz is used).
-  - Optionally set KUBECOST_API_KEY for authenticated endpoints.
+  - The config's KUBECOST_BASE_URL must point to a live instance.
+  - Optionally set KUBECOST_API_KEY there for authenticated endpoints.
 """
 
 from __future__ import annotations
@@ -25,7 +36,8 @@ from typing import Any
 
 import pytest
 
-MCP_CONFIG = os.path.join(os.path.dirname(__file__), "..", ".bob", "mcp.json")
+DEFAULT_MCP_CONFIG = os.path.join(os.path.dirname(__file__), "..", ".bob", "mcp.json")
+MCP_CONFIG = os.environ.get("MCP_KUBECOST_CONFIG") or DEFAULT_MCP_CONFIG
 
 pytestmark = pytest.mark.integration
 
@@ -61,7 +73,7 @@ def _call_tool(config_path: str, tool: str, payload: dict[str, Any]) -> dict[str
 def mcp_config_path() -> str:
     path = os.path.abspath(MCP_CONFIG)
     if not os.path.isfile(path):
-        pytest.skip(f"MCP config not found at {path}")
+        pytest.skip(f"MCP config not found at {path} (set MCP_KUBECOST_CONFIG to choose another)")
     return path
 
 
