@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 from dataclasses import dataclass
 from functools import lru_cache
@@ -34,6 +35,13 @@ class Settings:
     http_port: int
     show_banner: bool
     log_level: str
+
+    def to_loggable_dict(self) -> dict:
+        """Return a copy of settings safe for logging (sensitive fields redacted)."""
+        d = dataclasses.asdict(self)
+        if d.get("KUBECOST_API_KEY") is not None:
+            d["KUBECOST_API_KEY"] = "***"
+        return d
 
 
 def _get_required_env(name: str) -> str:
