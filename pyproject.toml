@@ -36,7 +36,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-m 'not integration'"
 markers = [
-  "integration: requires a live Kubecost endpoint (deselected by default)",
+  "integration: requires a live kubecost api endpoint (deselected by default)",
 ]
 
 [tool.coverage.run]
