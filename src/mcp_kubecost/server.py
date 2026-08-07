@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -70,11 +71,14 @@ def _build_headers(api_key: str | None) -> dict[str, str]:
 
 # When using the fastmcp cli, all project wide initialization must be outside the main() function.
 load_dotenv(".env")  # reads variables from a .env file and sets them in os.environ
-logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+import mcp_kubecost.logging_fastmcp  # noqa: E402,F401 -- must follow load_dotenv so FASTMCP_LOG_LEVEL is set
+
 logging.getLogger("mcp_kubecost").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+if logger.isEnabledFor(logging.DEBUG):
+    logger.debug("Effective settings:\n%s", json.dumps(settings.to_loggable_dict(), indent=2))
 mcp_server_name = os.getenv("MCP_SERVER_NAME", "mcp-kubecost")
 os.environ["FASTMCP_SHOW_SERVER_BANNER"] = "false"
 version = pkg_version(distribution_name="mcp-kubecost")
