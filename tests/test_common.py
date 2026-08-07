@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastmcp.exceptions import ToolError as McpToolError
 
 from mcp_kubecost.client import KubecostClientError
 from mcp_kubecost.errors import ErrorCode, ToolError
-from mcp_kubecost.tools._common import extract_list, format_tool_error, safe_path_segment, summarize_exception
+from mcp_kubecost.tools import _common
+from mcp_kubecost.tools._common import (
+    ResolvedWindow,
+    extract_list,
+    format_tool_error,
+    resolve_window,
+    resolved_window_from_api,
+    safe_path_segment,
+    summarize_exception,
+)
 
 # ---------------------------------------------------------------------------
 # format_tool_error
@@ -143,3 +154,182 @@ class TestSummarizeException:
         assert summary["code"] == ErrorCode.DATA_UNAVAILABLE.value
         assert "RuntimeError" in summary["message"]
         assert summary["retryable"] is True
+
+
+class TestResolveWindow:
+    @pytest.mark.parametrize(("expression", "days"), [("7d", 7), ("15d", 15), ("30d", 30)])
+    def test_duration_aliases(self, expression, days):
+        result = resolve_window(expression)
+        assert isinstance(result, ResolvedWindow)
+        assert result.days == days
+        assert result.end_utc - result.start_utc == timedelta(days=days)
+        assert result.display.endswith(f"({days} days, partial)")
+
+    @pytest.mark.parametrize("expression", ["7d", "15d", "30d"])
+    def test_duration_aliases_include_today(self, expression):
+        """Kubecost counts back N days including today, ending at the close of
+        the current day — verified against /model/allocation on the demo cluster."""
+        result = resolve_window(expression)
+        today = _common._start_of_utc_day()
+        assert result.end_utc == today + timedelta(days=1)
+        assert result.display_end == today.strftime("%Y-%m-%d")
+
+    def test_lastmonth_is_a_calendar_month(self):
+        result = resolve_window("lastmonth")
+        assert result.start_utc.day == 1
+        assert result.end_utc.day == 1
+        assert result.end_utc.month != result.start_utc.month
+        assert result.days in {28, 29, 30, 31}
+
+    def test_lastweek_is_a_full_sunday_to_sunday_week(self):
+        # Kubecost weeks start on Sunday; weekday() is Monday=0..Sunday=6.
+        result = resolve_window("lastweek")
+        assert result.start_utc.weekday() == 6
+        assert result.end_utc.weekday() == 6
+        assert result.days == 7
+
+    def test_rfc3339_range(self):
+        result = resolve_window("2026-07-01T00:00:00Z,2026-07-08T00:00:00Z")
+        assert result.start_utc.isoformat() == "2026-07-01T00:00:00+00:00"
+        assert result.end_utc.isoformat() == "2026-07-08T00:00:00+00:00"
+        assert result.display == "2026-07-01 to 2026-07-07 (7 days)"
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            "not-a-window",
+            "2026-07-01T00:00:00Z,not-a-date",
+            "2026-07-08T00:00:00Z,2026-07-01T00:00:00Z",
+        ],
+    )
+    def test_invalid_window_raises_tool_error(self, expression):
+        with pytest.raises(McpToolError):
+            resolve_window(expression)
+
+
+class TestResolveWindowPartialPeriods:
+    """Period-to-date windows must never report days that have not happened yet."""
+
+    @staticmethod
+    def _freeze(monkeypatch, moment):
+        monkeypatch.setattr(_common, "_start_of_utc_day", lambda: moment)
+
+    @pytest.mark.parametrize("expression", ["today", "week", "month", "7d", "30d"])
+    def test_windows_covering_today_are_flagged_partial(self, expression):
+        result = resolve_window(expression)
+        assert result.is_partial is True
+        assert ", partial" in result.display
+
+    @pytest.mark.parametrize("expression", ["lastweek", "lastmonth"])
+    def test_completed_windows_are_not_partial(self, expression):
+        result = resolve_window(expression)
+        assert result.is_partial is False
+        assert "partial" not in result.display
+
+    @pytest.mark.parametrize("expression", ["today", "week", "month", "7d", "30d"])
+    def test_windows_never_extend_past_today(self, expression):
+        tomorrow = _common._start_of_utc_day() + timedelta(days=1)
+        assert resolve_window(expression).end_utc <= tomorrow
+
+    def test_month_mid_period_reports_elapsed_days_only(self, monkeypatch):
+        # Regression: 'month' previously returned the full calendar month, so on
+        # 06-AUG it claimed 31 days when only 6 days of data existed.
+        self._freeze(monkeypatch, datetime(2026, 8, 6, tzinfo=UTC))
+        result = resolve_window("month")
+        assert result.days == 6
+        assert result.start_utc == datetime(2026, 8, 1, tzinfo=UTC)
+        assert result.end_utc == datetime(2026, 8, 7, tzinfo=UTC)
+        assert result.display == "2026-08-01 to 2026-08-06 (6 days, partial)"
+
+    def test_week_mid_period_reports_elapsed_days_only(self, monkeypatch):
+        # Kubecost weeks start Sunday. 2026-08-06 is a Thursday, so the week
+        # opened Sunday 2026-08-02: five elapsed days, not four.
+        self._freeze(monkeypatch, datetime(2026, 8, 6, tzinfo=UTC))
+        result = resolve_window("week")
+        assert result.days == 5
+        assert result.start_utc == datetime(2026, 8, 2, tzinfo=UTC)
+        assert result.display == "2026-08-02 to 2026-08-06 (5 days, partial)"
+
+    def test_week_on_a_sunday_is_a_single_elapsed_day(self, monkeypatch):
+        # Edge case for the Sunday anchor: on Sunday itself the week has just
+        # opened, so 'week' must not reach back into the prior week.
+        self._freeze(monkeypatch, datetime(2026, 8, 2, tzinfo=UTC))
+        result = resolve_window("week")
+        assert result.start_utc == datetime(2026, 8, 2, tzinfo=UTC)
+        assert result.days == 1
+
+    def test_lastweek_runs_sunday_through_saturday(self, monkeypatch):
+        self._freeze(monkeypatch, datetime(2026, 8, 6, tzinfo=UTC))
+        result = resolve_window("lastweek")
+        assert result.start_utc == datetime(2026, 7, 26, tzinfo=UTC)
+        assert result.end_utc == datetime(2026, 8, 2, tzinfo=UTC)
+        assert result.display == "2026-07-26 to 2026-08-01 (7 days)"
+
+    def test_lastweek_on_a_sunday_is_the_prior_full_week(self, monkeypatch):
+        self._freeze(monkeypatch, datetime(2026, 8, 2, tzinfo=UTC))
+        result = resolve_window("lastweek")
+        assert result.start_utc == datetime(2026, 7, 26, tzinfo=UTC)
+        assert result.end_utc == datetime(2026, 8, 2, tzinfo=UTC)
+        assert result.days == 7
+
+    def test_today_is_a_single_day(self, monkeypatch):
+        self._freeze(monkeypatch, datetime(2026, 8, 6, tzinfo=UTC))
+        result = resolve_window("today")
+        assert result.days == 1
+        assert result.display == "2026-08-06 (1 day, partial)"
+
+    def test_lastmonth_spans_the_whole_prior_month(self, monkeypatch):
+        self._freeze(monkeypatch, datetime(2026, 8, 6, tzinfo=UTC))
+        result = resolve_window("lastmonth")
+        assert result.days == 31
+        assert result.display == "2026-07-01 to 2026-07-31 (31 days)"
+
+    def test_lastmonth_in_january_wraps_to_december(self, monkeypatch):
+        self._freeze(monkeypatch, datetime(2026, 1, 15, tzinfo=UTC))
+        result = resolve_window("lastmonth")
+        assert result.start_utc == datetime(2025, 12, 1, tzinfo=UTC)
+        assert result.end_utc == datetime(2026, 1, 1, tzinfo=UTC)
+        assert result.days == 31
+
+    def test_lastmonth_handles_leap_february(self, monkeypatch):
+        self._freeze(monkeypatch, datetime(2028, 3, 10, tzinfo=UTC))
+        assert resolve_window("lastmonth").days == 29
+
+
+class TestResolvedWindowFromApi:
+    """Ground truth taken from the window Kubecost echoes in its response.
+
+    Boundaries below were captured from a live /model/allocation call on
+    demo.kubecost.xyz on 2026-08-06.
+    """
+
+    def test_uses_the_servers_own_boundaries(self):
+        result = resolved_window_from_api({"start": "2026-07-31T00:00:00Z", "end": "2026-08-07T00:00:00Z"}, "7d")
+        assert result is not None
+        assert result.start_utc == datetime(2026, 7, 31, tzinfo=UTC)
+        assert result.end_utc == datetime(2026, 8, 7, tzinfo=UTC)
+        assert result.days == 7
+        assert result.source_expression == "7d"
+
+    def test_accepts_an_in_progress_end_that_is_not_midnight(self):
+        # Kubecost ends 'week'/'month' at the current instant, not a day
+        # boundary. That must not be rejected as a non-whole-day span.
+        result = resolved_window_from_api({"start": "2026-08-01T00:00:00Z", "end": "2026-08-06T19:26:48Z"}, "month")
+        assert result is not None
+        assert result.days == 6
+        assert result.display_end == "2026-08-06"
+
+    @pytest.mark.parametrize(
+        "window",
+        [
+            None,
+            {},
+            "not-a-dict",
+            {"start": "2026-08-01T00:00:00Z"},
+            {"start": "bogus", "end": "2026-08-07T00:00:00Z"},
+            {"start": "2026-08-07T00:00:00Z", "end": "2026-08-01T00:00:00Z"},
+        ],
+    )
+    def test_unusable_windows_return_none_rather_than_raising(self, window):
+        """Callers fall back to the prediction; a bad window must not lose the response."""
+        assert resolved_window_from_api(window, "7d") is None

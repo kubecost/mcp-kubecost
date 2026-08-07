@@ -79,6 +79,42 @@ class TestKubecostListWindows:
         result = await tool.run({})
         assert "RFC3339" in _sc(result)["note"]
 
+    @pytest.mark.asyncio
+    async def test_every_option_carries_a_resolved_range(self, mcp_app):
+        """Discovery doubles as window preview, so no option may resolve to null."""
+        tool = await mcp_app.get_tool("kubecost_list_windows")
+        result = await tool.run({})
+        for option in _sc(result)["windows"]:
+            resolved = option["resolved"]
+            assert resolved is not None, f"{option['value']} failed to resolve"
+            assert resolved["days"] >= 1
+            assert resolved["source_expression"] == option["value"]
+            assert resolved["display_start"] in resolved["display"]
+
+    @pytest.mark.asyncio
+    async def test_to_date_options_are_marked_partial(self, mcp_app):
+        tool = await mcp_app.get_tool("kubecost_list_windows")
+        result = await tool.run({})
+        by_value = {o["value"]: o["resolved"] for o in _sc(result)["windows"]}
+        assert by_value["month"]["is_partial"] is True
+        assert by_value["week"]["is_partial"] is True
+        # Kubecost's Nd windows run through the close of today, so they are
+        # partial too; only the 'last*' aliases cover a completed period.
+        assert by_value["30d"]["is_partial"] is True
+        assert by_value["lastmonth"]["is_partial"] is False
+        assert by_value["lastweek"]["is_partial"] is False
+
+
+# ── removed tools ─────────────────────────────────────────────────────────────
+
+
+class TestRemovedTools:
+    @pytest.mark.asyncio
+    async def test_standalone_resolve_window_tool_is_not_registered(self, mcp_app):
+        """Window resolution is served by kubecost_list_windows and the
+        resolved_window field on every windowed response, not its own tool."""
+        assert "resolve_window" not in {tool.name for tool in await mcp_app.list_tools()}
+
 
 # ── get_kubecost_workload_costs ───────────────────────────────────────────────
 
