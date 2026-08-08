@@ -23,8 +23,6 @@ class Settings:
     request_timeout_seconds: float
     retry_count: int
     default_window: str
-    http_host: str
-    http_port: int
     show_banner: bool
     log_level: str
 
@@ -103,8 +101,6 @@ def get_settings() -> Settings:
         request_timeout_seconds=_get_float_env("REQUEST_TIMEOUT_SECONDS", 15.0),
         retry_count=_get_int_env("REQUEST_RETRY_COUNT", 2),
         default_window=os.getenv("DEFAULT_WINDOW", "15d").strip(),
-        http_host=os.getenv("MCP_HTTP_HOST", "127.0.0.1").strip(),
-        http_port=_get_int_env("MCP_HTTP_PORT", 8000),
         show_banner=False,
         log_level=os.getenv("FASTMCP_LOG_LEVEL", "INFO").upper(),
         use_cac_views=_get_bool_env("USE_CAC_VIEWS", False),

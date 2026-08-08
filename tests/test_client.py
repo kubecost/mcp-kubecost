@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 from unittest.mock import patch
 
 import pytest
@@ -68,7 +69,7 @@ class TestKubecostClientErrorToToolError:
 # _build_params — USE_CAC_VIEWS injection
 # ---------------------------------------------------------------------------
 
-_BASE_SETTINGS = dict(
+_BASE_SETTINGS: dict[str, Any] = dict(
     kubecost_base_url="http://localhost:9090",
     kubecost_api_base_path="/model",
     KUBECOST_API_KEY=None,
@@ -76,8 +77,6 @@ _BASE_SETTINGS = dict(
     request_timeout_seconds=15.0,
     retry_count=2,
     default_window="15d",
-    http_host="127.0.0.1",
-    http_port=8000,
     show_banner=False,
     log_level="INFO",
 )
@@ -140,6 +139,7 @@ async def test_get_sends_view_id_when_cac_views_enabled(httpx_mock: HTTPXMock):
         await get("/model/allocation", params={"window": "7d"})
 
     request = httpx_mock.get_request()
+    assert request is not None
     assert "viewId=0" in str(request.url)
 
 
@@ -154,4 +154,5 @@ async def test_get_omits_view_id_when_cac_views_disabled(httpx_mock: HTTPXMock):
         await get("/model/allocation", params={"window": "7d"})
 
     request = httpx_mock.get_request()
+    assert request is not None
     assert "viewId" not in str(request.url)
