@@ -11,8 +11,7 @@
             "env": {
                 "KUBECOST_BASE_URL": "https://demo.kubecost.xyz",
                 "FASTMCP_SHOW_SERVER_BANNER": "false",
-                "FASTMCP_LOG_LEVEL": "INFO",
-                "TOON_ENABLED": "false"
+                "FASTMCP_LOG_LEVEL": "INFO"
             }
         }
     }

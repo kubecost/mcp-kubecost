@@ -62,11 +62,7 @@ def _call_tool(config_path: str, tool: str, payload: dict[str, Any]) -> dict[str
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        pytest.fail(
-            f"Could not parse {tool} output as JSON ({exc}). ToonMiddleware rewrites the response body to "
-            f"TOON unless TOON_ENABLED=false — check the env block in {config_path}.\n"
-            f"stdout was:\n{result.stdout[:500]}"
-        )
+        pytest.fail(f"Could not parse {tool} output as JSON ({exc}).\nstdout was:\n{result.stdout[:500]}")
 
 
 @pytest.fixture(scope="module")

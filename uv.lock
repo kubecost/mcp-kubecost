@@ -736,7 +736,6 @@ source = { editable = "." }
 dependencies = [
     { name = "fastmcp" },
     { name = "httpx" },
-    { name = "py-toon-format" },
     { name = "python-dotenv" },
 ]
 
@@ -753,7 +752,6 @@ dev = [
 requires-dist = [
     { name = "fastmcp", specifier = ">=3.4.6" },
     { name = "httpx", specifier = ">=0.28.1" },
-    { name = "py-toon-format", specifier = ">=0.1.0" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },
     { name = "pytest-cov", marker = "extra == 'dev'" },
@@ -864,15 +862,6 @@ keyring = [
 ]
 memory = [
     { name = "cachetools" },
-]
-
-[[package]]
-name = "py-toon-format"
-version = "0.1.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/7c/6f/0d6b0399c1047e8176aa7c3028160369d34007e7415e0372d8ea6d44a023/py_toon_format-0.1.0.tar.gz", hash = "sha256:b338c30a41c328e4078451d2c0e87c68e9cdf34fae783ffdde60daea7824fd66", size = 21701, upload-time = "2025-11-14T09:12:58.705Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fb/0c/d6bb9ce61011a5e0aaede19d22ed73c474191d7650e6b82f72633a82fa8e/py_toon_format-0.1.0-py3-none-any.whl", hash = "sha256:52a14061be79d25e3fc0231aac9e5daaff156844c3f1e2232f87b2672922e88b", size = 17657, upload-time = "2025-11-14T09:12:57.527Z" },
 ]
 
 [[package]]
