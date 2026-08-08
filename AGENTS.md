@@ -35,6 +35,13 @@ Use the existing `.venv` when running Python commands. Run `ruff format` and `ru
 
 Current MCP surface: 11 tools (`kubecost_list_windows`, `get_kubecost_workload_costs`, `get_kubecost_cost_comparison`, `get_container_savings_recommendations`, `get_abandoned_workloads`, `get_savings_overview`, `get_pv_sizing_recommendations`, `get_local_disk_savings`, `get_cluster_rightsizing_recommendations`, `get_unclaimed_volumes`, `get_resource_quota_recommendations`), inline prompts/resources in `kubecost_tools.py`, and 2 skills in `skills/`.
 
+### `get_kubecost_cost_comparison` — window rules
+
+- Both windows must be **explicit RFC3339 ranges** ending before today (UTC).
+- **All named aliases are rejected** (`lastweek`, `lastmonth`, `7d`, `today`, etc.) — there is no alias for "the period before lastmonth", making aliases a dead end for comparisons.
+- RFC3339 ranges of **different lengths are allowed**; a `warnings` field in the response will flag the mismatch (e.g. `"The comparison periods have a different number of days (7 vs 30)."`).
+- Default windows are computed at server startup as a **rolling 7-day window**: `current_window` = the 7 days ending yesterday UTC; `baseline_window` = the 7 days before that.
+
 ## Response Limits Pattern
 
 All tools follow a consistent pattern for bounding response size and filtering noise:

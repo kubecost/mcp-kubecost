@@ -17,6 +17,7 @@ from fastmcp.exceptions import ToolError as FastMcpToolError
 from pytest_httpx import HTTPXMock
 
 from mcp_kubecost.tools.kubecost_tools import (
+    _default_wow_windows,
     _diff_allocation_rows,
     _validate_comparison_windows,
     register_kubecost_tools,
@@ -792,31 +793,40 @@ class TestGetResourceQuotaRecommendations:
 # ── _validate_comparison_windows (Task 1) ────────────────────────────────────
 
 
+_RFC3339_BASELINE = "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z"
+
+
 class TestComparisonWindowValidation:
     @pytest.mark.parametrize("window", ["7d", "15d", "30d", "1d"])
     def test_bare_relative_window_rejected(self, window):
         with pytest.raises(FastMcpToolError, match="invalid_input"):
-            _validate_comparison_windows(window, "lastweek")
+            _validate_comparison_windows(window, _RFC3339_BASELINE)
 
-    @pytest.mark.parametrize("window", ["today", "week", "month"])
-    def test_relative_alias_rejected(self, window):
+    @pytest.mark.parametrize("window", ["today", "week", "month", "lastweek", "lastmonth"])
+    def test_named_alias_rejected(self, window):
+        """All named aliases are rejected — use explicit RFC3339 ranges."""
         with pytest.raises(FastMcpToolError, match="invalid_input"):
-            _validate_comparison_windows(window, "lastweek")
+            _validate_comparison_windows(window, _RFC3339_BASELINE)
 
-    def test_mismatched_aliases_rejected(self):
+    def test_alias_as_baseline_rejected(self):
         with pytest.raises(FastMcpToolError, match="invalid_input"):
-            _validate_comparison_windows("lastweek", "lastmonth")
+            _validate_comparison_windows(_RFC3339_BASELINE, "lastweek")
 
-    def test_mixed_alias_and_rfc3339_rejected(self):
-        with pytest.raises(FastMcpToolError, match="invalid_input"):
-            _validate_comparison_windows("lastweek", "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z")
+    def test_unequal_duration_rfc3339_accepted(self):
+        current_days, baseline_days = _validate_comparison_windows(
+            "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",  # 7 days
+            "2020-01-01T00:00:00Z,2020-01-06T00:00:00Z",  # 5 days
+        )
+        assert current_days == 7
+        assert baseline_days == 5
 
-    def test_unequal_duration_rfc3339_rejected(self):
-        with pytest.raises(FastMcpToolError, match="invalid_input"):
-            _validate_comparison_windows(
-                "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
-                "2020-01-01T00:00:00Z,2020-01-06T00:00:00Z",
-            )
+    def test_equal_duration_rfc3339_returns_day_counts(self):
+        current_days, baseline_days = _validate_comparison_windows(
+            "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
+            "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z",
+        )
+        assert current_days == 7
+        assert baseline_days == 7
 
     def test_rfc3339_range_including_today_rejected(self):
         from datetime import datetime, timedelta
@@ -830,20 +840,7 @@ class TestComparisonWindowValidation:
 
     def test_malformed_rfc3339_rejected(self):
         with pytest.raises(FastMcpToolError, match="invalid_input"):
-            _validate_comparison_windows("not-a-date,also-not-a-date", "lastweek")
-
-    def test_lastweek_vs_lastweek_accepted(self):
-        _validate_comparison_windows("lastweek", "lastweek")  # should not raise
-
-    def test_lastmonth_vs_lastmonth_accepted(self):
-        _validate_comparison_windows("lastmonth", "lastmonth")  # should not raise
-
-    def test_equal_duration_rfc3339_ranges_accepted(self):
-        # Both 7-day ranges, well in the past — should not raise
-        _validate_comparison_windows(
-            "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
-            "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z",
-        )
+            _validate_comparison_windows("not-a-date,also-not-a-date", _RFC3339_BASELINE)
 
 
 # ── _diff_allocation_rows (Task 2) ───────────────────────────────────────────
@@ -975,8 +972,8 @@ class TestGetKubecostCostComparison:
         tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
         result = await tool.run(
             {
-                "current_window": "lastweek",
-                "baseline_window": "lastweek",
+                "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
+                "baseline_window": "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z",
             }
         )
         assert _sc(result)["status"] == "empty"
@@ -987,8 +984,8 @@ class TestGetKubecostCostComparison:
         tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
         result = await tool.run(
             {
-                "current_window": "lastweek",
-                "baseline_window": "lastweek",
+                "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
+                "baseline_window": "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z",
             }
         )
         assert _sc(result)["status"] == "error"
@@ -1000,6 +997,82 @@ class TestGetKubecostCostComparison:
             await tool.run(
                 {
                     "current_window": "7d",
-                    "baseline_window": "lastweek",
+                    "baseline_window": "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z",
                 }
             )
+
+    @pytest.mark.asyncio
+    async def test_unequal_duration_produces_warning(self, httpx_mock: HTTPXMock, mcp_app):
+        """Mismatched window lengths succeed but carry a warning in the response."""
+        httpx_mock.add_response(
+            method="GET",
+            url=_allocation_url(),
+            json=_comparison_allocation_response("ns-a", 100.0),
+        )
+        httpx_mock.add_response(
+            method="GET",
+            url=_allocation_url(),
+            json=_comparison_allocation_response("ns-a", 80.0),
+        )
+        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        result = await tool.run(
+            {
+                "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",  # 7 days
+                "baseline_window": "2020-01-01T00:00:00Z,2020-01-06T00:00:00Z",  # 5 days
+            }
+        )
+        sc = _sc(result)
+        assert sc["status"] == "ok"
+        warnings = sc.get("warnings", [])
+        assert any("different number of days" in w for w in warnings), (
+            f"Expected a duration-mismatch warning, got warnings={warnings!r}"
+        )
+        assert any("7" in w and "5" in w for w in warnings), (
+            f"Warning should mention the actual day counts (7 vs 5), got warnings={warnings!r}"
+        )
+
+
+# ── _default_wow_windows ──────────────────────────────────────────────────────
+
+
+class TestDefaultWowWindows:
+    """Unit tests for the week-over-week default window calculator."""
+
+    _RFC3339_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T00:00:00Z$")
+
+    def _parse(self, window: str):
+        from datetime import date
+
+        start, end = window.split(",")
+        return date.fromisoformat(start[:10]), date.fromisoformat(end[:10])
+
+    def test_returns_two_rfc3339_ranges(self):
+        current, baseline = _default_wow_windows()
+        for part in (*current.split(","), *baseline.split(",")):
+            assert self._RFC3339_RE.match(part), f"Not an RFC3339 date-time: {part!r}"
+
+    def test_each_window_spans_exactly_7_days(self):
+        current, baseline = _default_wow_windows()
+        cur_start, cur_end = self._parse(current)
+        base_start, base_end = self._parse(baseline)
+        assert (cur_end - cur_start).days == 7
+        assert (base_end - base_start).days == 7
+
+    def test_windows_are_contiguous(self):
+        current, baseline = _default_wow_windows()
+        cur_start, _ = self._parse(current)
+        _, base_end = self._parse(baseline)
+        assert base_end == cur_start, "baseline_window must end exactly where current_window begins"
+
+    def test_current_window_ends_at_today(self):
+        """The exclusive end of current_window is today midnight — yesterday is the last full day covered."""
+        from datetime import date
+
+        current, _ = _default_wow_windows()
+        _, cur_end = self._parse(current)
+        assert cur_end == date.today(), "current_window exclusive end must be today (yesterday is the last full day)"
+
+    def test_windows_pass_validation(self):
+        """The computed defaults must survive _validate_comparison_windows without raising."""
+        current, baseline = _default_wow_windows()
+        _validate_comparison_windows(current, baseline)  # should not raise
