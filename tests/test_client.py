@@ -70,15 +70,7 @@ class TestKubecostClientErrorToToolError:
 
 _BASE_SETTINGS = dict(
     kubecost_base_url="http://localhost:9090",
-    kubecost_base_path="/model/allocation",
-    kubecost_container_savings_path="/model/savings/requestSizingV2",
-    kubecost_abandoned_workloads_path="/model/savings/abandonedWorkloads",
-    kubecost_savings_overview_path="/model/savings",
-    kubecost_pv_sizing_path="/model/savings/persistentVolumeSizing",
-    kubecost_local_disks_path="/model/savings/localLowDisks",
-    kubecost_node_group_sizing_path="/model/savings/nodeGroupSizing/recommendations",
-    kubecost_unclaimed_volumes_path="/model/savings/unclaimedVolumes",
-    kubecost_resource_quota_path="/model/savings/resourceQuotaSizing/recommendations",
+    kubecost_api_base_path="/model",
     KUBECOST_API_KEY=None,
     ssl_verify=True,
     request_timeout_seconds=15.0,

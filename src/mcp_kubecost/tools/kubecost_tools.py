@@ -52,6 +52,20 @@ logger = logging.getLogger(__name__)
 
 _VERSION = "3.0"
 
+# ---------------------------------------------------------------------------
+# API path segments — combined with get_settings().kubecost_api_base_path at call time
+# ---------------------------------------------------------------------------
+
+_SEG_ALLOCATION = "/allocation"
+_SEG_CONTAINER_SAVINGS = "/savings/requestSizingV2"
+_SEG_ABANDONED_WORKLOADS = "/savings/abandonedWorkloads"
+_SEG_SAVINGS_OVERVIEW = "/savings"
+_SEG_PV_SIZING = "/savings/persistentVolumeSizing"
+_SEG_LOCAL_DISKS = "/savings/localLowDisks"
+_SEG_NODE_GROUP_SIZING = "/savings/nodeGroupSizing/recommendations"
+_SEG_UNCLAIMED_VOLUMES = "/savings/unclaimedVolumes"
+_SEG_RESOURCE_QUOTA = "/savings/resourceQuotaSizing/recommendations"
+
 
 def _read_only(title: str) -> ToolAnnotations:
     return ToolAnnotations(
@@ -3172,7 +3186,7 @@ async def _fetch_request_sizing(
         "offset": 0,
         "limit": limit,
     }
-    path = get_settings().kubecost_container_savings_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_CONTAINER_SAVINGS}"
     logger.debug("Kubecost request sizing: path=%s window=%s", path, window)
     return await call_get_api(path, params=params)
 
@@ -3195,7 +3209,7 @@ async def _fetch_allocation(
         "sortByOrder": "desc",
         "limit": limit,
     }
-    path = get_settings().kubecost_base_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_ALLOCATION}"
     logger.debug("Kubecost allocation: path=%s window=%s", path, window)
     return await call_get_api(path, params=params)
 
@@ -3214,7 +3228,7 @@ async def _fetch_abandoned_workloads(
         "limit": limit,
         "filter": f'cluster:"{cluster}"' if cluster else "",
     }
-    path = get_settings().kubecost_abandoned_workloads_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_ABANDONED_WORKLOADS}"
     logger.debug("Kubecost abandoned workloads: path=%s days=%s threshold=%s", path, days, threshold)
     result = await call_get_api(path, params=params)
     # API returns a bare JSON array
@@ -3262,7 +3276,7 @@ def _parse_abandoned_workloads_response(raw: list[dict[str, Any]]) -> list[dict[
 
 async def _fetch_savings_overview() -> dict[str, Any]:
     """Fetch the savings overview from GET /model/savings."""
-    path = get_settings().kubecost_savings_overview_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_SAVINGS_OVERVIEW}"
     logger.debug("Kubecost savings overview: path=%s", path)
     result = await call_get_api(path, params={})
     # API returns { code, data, meta } — unwrap data
@@ -3279,7 +3293,7 @@ async def _fetch_pv_sizing(window: str, overhead_percent: int) -> dict[str, Any]
         "offset": 0,
         "limit": _SAVINGS_API_FETCH_LIMIT,
     }
-    path = get_settings().kubecost_pv_sizing_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_PV_SIZING}"
     logger.debug("Kubecost PV sizing: path=%s window=%s", path, window)
     result = await call_get_api(path, params=params)
     if isinstance(result, dict) and "data" in result:
@@ -3293,7 +3307,7 @@ async def _fetch_local_disks(window: str, overhead_percent: int) -> dict[str, An
         "window": to_api_window(window),
         "overheadPercent": overhead_percent,
     }
-    path = get_settings().kubecost_local_disks_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_LOCAL_DISKS}"
     logger.debug("Kubecost local disks: path=%s window=%s", path, window)
     result = await call_get_api(path, params=params)
     # API returns { unutilizedDisks: [...] } directly (no code/data wrapper)
@@ -3309,7 +3323,7 @@ async def _fetch_node_group_sizing(cluster: str, window: str, profile: str) -> d
         "window": to_api_window(window),
         "profile": profile,
     }
-    path = get_settings().kubecost_node_group_sizing_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_NODE_GROUP_SIZING}"
     logger.debug("Kubecost node group sizing: path=%s cluster=%s", path, cluster)
     result = await call_get_api(path, params=params)
     if isinstance(result, dict) and "data" in result:
@@ -3320,7 +3334,7 @@ async def _fetch_node_group_sizing(cluster: str, window: str, profile: str) -> d
 async def _fetch_unclaimed_volumes(window: str) -> dict[str, Any]:
     """Fetch unclaimed volumes; unwraps the { code, data } wrapper."""
     params: dict[str, Any] = {"window": to_api_window(window)}
-    path = get_settings().kubecost_unclaimed_volumes_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_UNCLAIMED_VOLUMES}"
     logger.debug("Kubecost unclaimed volumes: path=%s window=%s", path, window)
     result = await call_get_api(path, params=params)
     if isinstance(result, dict) and "data" in result:
@@ -3342,7 +3356,7 @@ async def _fetch_resource_quota_recommendations(
         "limit": limit,
         "offset": offset,
     }
-    path = get_settings().kubecost_resource_quota_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_RESOURCE_QUOTA}"
     logger.debug("Kubecost resource quota: path=%s window=%s", path, window)
     result = await call_get_api(path, params=params)
     if isinstance(result, dict) and "data" in result:
