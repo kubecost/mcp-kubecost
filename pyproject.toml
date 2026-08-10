@@ -1,6 +1,6 @@
 [project]
 name = "mcp-kubecost"
-version = "0.4.4"
+version = "0.4.6"
 description = "FinOps-first MCP server for Kubecost analytics."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -61,3 +61,10 @@ ignore = []
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+
+[tool.basedpyright]
+reportUnknownVariableType = "none"
+reportAny = "none"
+reportExplicitAny = "none"
+typeCheckingMode = "basic"
+reportAttributeAccessIssue = "none"
