@@ -122,7 +122,7 @@ probes:
 
 config:
   # config.kubecostBaseUrl is the required base URL of the Kubecost API.
-  kubecostBaseUrl: http://localhost:9090
+  kubecostBaseUrl: http://kubecost-frontend:9090
   # config.kubecostApiBasePath is the path prefix used for Kubecost API calls.
   kubecostApiBasePath: /model
   # config.kubecostApiKey.value optionally creates a Secret containing the API key; prefer existingSecret.

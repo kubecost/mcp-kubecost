@@ -200,7 +200,7 @@
           "required": ["verify", "caBundle"]
         }
       },
-      "required": ["kubecostBaseUrl", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "defaultWindow", "fastmcpLogLevel", "fastmcpEnableRichLogging", "useCacViews", "fastmcpHttpAllowedHosts", "mcpServerName", "telemetryMode", "otelServiceName", "otelExporterOtlpEndpoint", "otelMetricsExporter", "otelLogsExporter", "ssl"]
+      "required": ["kubecostBaseUrl", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "defaultWindow", "fastmcpLogLevel", "fastmcpEnableRichLogging", "useCacViews", "fastmcpHttpAllowedHosts", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "ssl"]
     },
     "nodeSelector": { "type": "object" },
     "tolerations": { "type": "array" },

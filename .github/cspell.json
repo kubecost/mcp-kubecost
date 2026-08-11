@@ -79,6 +79,7 @@
         "lookback",
         "statefulset",
         "daemonset",
+        "distroless",
         "nullglob",
         "PVC",
         "PVCs",
