@@ -406,7 +406,7 @@ class TestToApiWindow:
         expr = "2026-07-01T00:00:00Z,2026-08-01T00:00:00Z"
         assert _common.to_api_window(expr) == expr
 
-    def test_mixed_case_lastmonth_normalised(self, monkeypatch):
+    def test_mixed_case_lastmonth_normalized(self, monkeypatch):
         self._freeze(monkeypatch, datetime(2026, 8, 6, tzinfo=UTC))
         result = _common.to_api_window("LastMonth")
         assert result == "2026-07-01T00:00:00Z,2026-08-01T00:00:00Z"

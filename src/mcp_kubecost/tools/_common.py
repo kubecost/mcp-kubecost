@@ -169,7 +169,7 @@ def _window_result(
 def parse_api_timestamp(value: Any) -> datetime | None:
     """Parse an RFC3339 timestamp returned by Kubecost, or ``None`` if unusable.
 
-    Accepts the ``Z`` suffix Kubecost uses and normalises naive timestamps to UTC
+    Accepts the ``Z`` suffix Kubecost uses and normalizes naive timestamps to UTC
     so callers can compare results from different responses directly.
     """
     if not value:
@@ -296,8 +296,8 @@ def to_api_window(window: str) -> str:
     All other values — rolling windows like ``"7d"`` and already-explicit RFC3339 ranges
     — are returned unchanged.
     """
-    normalised = window.strip().lower()
-    if normalised not in _CALENDAR_ALIASES:
+    normalized = window.strip().lower()
+    if normalized not in _CALENDAR_ALIASES:
         return window
     resolved = resolve_window(window)
     fmt = "%Y-%m-%dT%H:%M:%SZ"
