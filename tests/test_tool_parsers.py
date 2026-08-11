@@ -12,6 +12,7 @@ _format_end_date = ktools._format_end_date
 _format_number = ktools._format_number
 # _parse_allocation_response is module-level (not nested), so direct import works.
 _parse_allocation_response = ktools._parse_allocation_response
+_dimension_columns_for_aggregate = ktools._dimension_columns_for_aggregate
 _window_from_allocation = ktools._window_from_allocation
 aggregate_savings_by = ktools.aggregate_savings_by
 compute_savings_notes = ktools.compute_savings_notes
@@ -173,6 +174,123 @@ class TestParseAllocationResponse:
         dims, rows = _parse_allocation_response(resp)
         assert dims[0].startswith("dim_")
         assert len(rows) == 1
+
+
+def _alloc(*entries: dict) -> dict:
+    """Build a single-bucket allocation response from (name, properties) entries."""
+    return {
+        "data": [
+            {
+                e["name"]: {
+                    "name": e["name"],
+                    "properties": e.get("properties", {}),
+                    "window": {"start": "2024-01-01T00:00:00Z", "end": "2024-01-08T00:00:00Z"},
+                    "totalCost": e.get("totalCost", 1.0),
+                }
+                for e in entries
+            }
+        ]
+    }
+
+
+class TestDimensionColumnsForAggregate:
+    def test_single_dimension(self):
+        assert _dimension_columns_for_aggregate("namespace") == [("namespace", None)]
+
+    def test_multiple_dimensions_keep_order(self):
+        assert _dimension_columns_for_aggregate("cluster,namespace") == [
+            ("cluster", None),
+            ("namespace", None),
+        ]
+
+    def test_whitespace_and_empties_ignored(self):
+        assert _dimension_columns_for_aggregate(" cluster , , namespace ") == [
+            ("cluster", None),
+            ("namespace", None),
+        ]
+
+    def test_label_maps_to_nested_group(self):
+        assert _dimension_columns_for_aggregate("label:app") == [("app", "labels")]
+
+    def test_annotation_maps_to_nested_group(self):
+        assert _dimension_columns_for_aggregate("annotation:team") == [("team", "annotations")]
+
+    def test_empty_string(self):
+        assert _dimension_columns_for_aggregate("") == []
+
+
+class TestParseAllocationResponseWithAggregate:
+    def test_single_dimension_named_from_aggregate(self):
+        """The reported bug: aggregate='namespace' must not yield a 'dim_0' column."""
+        resp = _alloc({"name": "kube-system", "properties": {}})
+        dims, rows = _parse_allocation_response(resp, "namespace")
+        assert dims == ["namespace"]
+        assert rows[0]["namespace"] == "kube-system"
+
+    def test_multi_dimension_named_from_aggregate(self):
+        resp = _alloc({"name": "cluster-one/ns-a", "properties": {}})
+        dims, rows = _parse_allocation_response(resp, "cluster,namespace")
+        assert dims == ["cluster", "namespace"]
+        assert rows[0]["cluster"] == "cluster-one"
+        assert rows[0]["namespace"] == "ns-a"
+
+    def test_properties_take_precedence_over_name(self):
+        resp = _alloc({"name": "ignored", "properties": {"namespace": "ns-a"}})
+        _, rows = _parse_allocation_response(resp, "namespace")
+        assert rows[0]["namespace"] == "ns-a"
+
+    def test_propertyless_idle_entry_keeps_its_name(self):
+        """An __idle__ entry sorted first must not poison discovery or blank its own row."""
+        resp = _alloc(
+            {"name": "__idle__", "properties": {}},
+            {"name": "ns-a", "properties": {"namespace": "ns-a"}},
+        )
+        dims, rows = _parse_allocation_response(resp, "namespace")
+        assert dims == ["namespace"]
+        assert [r["namespace"] for r in rows] == ["__idle__", "ns-a"]
+
+    def test_label_aggregate_reads_nested_property(self):
+        resp = _alloc({"name": "aggregator", "properties": {"labels": {"app": "aggregator"}}})
+        dims, rows = _parse_allocation_response(resp, "label:app")
+        assert dims == ["app"]
+        assert rows[0]["app"] == "aggregator"
+
+    def test_label_aggregate_falls_back_to_name_when_unallocated(self):
+        resp = _alloc({"name": "__unallocated__", "properties": {}})
+        _, rows = _parse_allocation_response(resp, "label:app")
+        assert rows[0]["app"] == "__unallocated__"
+
+    def test_name_with_wrong_part_count_does_not_shift_columns(self):
+        """A name that doesn't split into one part per column must not misalign values."""
+        resp = _alloc({"name": "only-one-part", "properties": {}})
+        dims, rows = _parse_allocation_response(resp, "cluster,namespace")
+        assert dims == ["cluster", "namespace"]
+        assert rows[0] == {**rows[0], "cluster": "", "namespace": ""}
+
+    def test_list_valued_property_is_joined(self):
+        resp = _alloc({"name": "svc", "properties": {"services": ["svc-a", "svc-b"]}})
+        _, rows = _parse_allocation_response(resp, "services")
+        assert rows[0]["services"] == "svc-a|svc-b"
+
+
+class TestParseAllocationResponseWithoutAggregate:
+    def test_dimensions_unioned_across_entries(self):
+        """Discovery must not depend on the first entry alone."""
+        resp = _alloc(
+            {"name": "__idle__", "properties": {}},
+            {"name": "cluster-one/ns-a", "properties": {"cluster": "cluster-one", "namespace": "ns-a"}},
+        )
+        dims, rows = _parse_allocation_response(resp)
+        assert dims == ["cluster", "namespace"]
+        assert rows[1]["namespace"] == "ns-a"
+
+    def test_partial_first_entry_does_not_drop_dimensions(self):
+        resp = _alloc(
+            {"name": "cluster-one/", "properties": {"cluster": "cluster-one"}},
+            {"name": "cluster-one/ns-a", "properties": {"cluster": "cluster-one", "namespace": "ns-a"}},
+        )
+        dims, _ = _parse_allocation_response(resp)
+        assert dims == ["cluster", "namespace"]
 
 
 # ---------------------------------------------------------------------------
