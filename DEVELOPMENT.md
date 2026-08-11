@@ -8,6 +8,7 @@
 - [Testing and Quality](#testing-and-quality)
 - [Docker / Kubernetes](#docker--kubernetes)
 - [Telemetry](#telemetry)
+  - [On the "beta" version numbers](#on-the-beta-version-numbers)
 - [Security](#security)
 
 ## AI Coding Agents
@@ -108,4 +109,4 @@ Dropping the distro would forfeit automatic httpx spans on every Kubecost API ca
 - Never hardcode credentials; use environment variables only.
 - Do not commit `.env` files or token files.
 - CI includes a lightweight secret-pattern scan and large-file safety check.
-- The Docker image strips `pip` (and `ensurepip`) from the uv-managed CPython before the distroless copy. The runtime never installs packages, and leaving pip in the image makes Trivy report its vendored `msgpack` 1.1.2 (`GHSA-6v7p-g79w-8964`) and `setuptools` 70.3.0 (`CVE-2025-47273`, `CVE-2026-59890`). Those are not project dependencies — they are not in `uv.lock`.
+- The Docker image strips `pip` (and `ensurepip`) from the uv-managed CPython before the distroless copy. The runtime never installs packages, and leaving pip in the image makes Trivy report its vendored `msgpack` 1.1.2 and `setuptools` 70.3.0 (`CVE-2025-47273`, `CVE-2026-59890`). Those are not project dependencies — they are not in `uv.lock`.

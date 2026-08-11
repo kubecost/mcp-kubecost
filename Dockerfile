@@ -26,8 +26,7 @@ RUN --mount=type=bind,source=uv.lock,target=uv.lock \
     uv sync --locked --no-editable --extra otel
 
 # Distroless runtime never installs packages. Drop unused pip that ships
-# with uv-managed CPython so scanners do not flag its vendored copies of
-# msgpack 1.1.2 (GHSA-6v7p-g79w-8964) and setuptools 70.3.0.
+# with uv-managed CPython so scanners do not flag its vendored copies
 RUN rm -rf \
       /python/cpython-*/lib/python*/ensurepip \
       /python/cpython-*/lib/python*/site-packages/pip \
