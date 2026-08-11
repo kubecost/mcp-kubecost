@@ -173,6 +173,36 @@ _KNOWN_DIMENSIONS: list[str] = [
     "annotation",
 ]
 
+# Aggregate token prefixes whose values live in a nested properties sub-dict.
+_NESTED_DIMENSION_GROUPS: dict[str, str] = {
+    "label": "labels",
+    "annotation": "annotations",
+}
+
+
+def _dimension_columns_for_aggregate(aggregate: str) -> list[tuple[str, str | None]]:
+    """Split a Kubecost ``aggregate`` string into ordered (column, property_group) pairs.
+
+    The requested aggregate is the authoritative source of dimension names — the
+    response alone cannot be trusted, since synthetic entries (``__idle__``,
+    ``__unallocated__``) carry no usable ``properties``.
+
+    ``"cluster,namespace"`` -> ``[("cluster", None), ("namespace", None)]``
+    ``"label:app"``         -> ``[("app", "labels")]``, i.e. ``properties["labels"]["app"]``
+    """
+    columns: list[tuple[str, str | None]] = []
+    for token in aggregate.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        prefix, sep, key = token.partition(":")
+        group = _NESTED_DIMENSION_GROUPS.get(prefix) if sep else None
+        if group and key:
+            columns.append((key, group))
+        else:
+            columns.append((token, None))
+    return columns
+
 
 def _format_number(value: float) -> int | float:
     """Return an int if the value is whole, otherwise round to 2 decimal places."""
@@ -254,11 +284,18 @@ def _window_from_allocation(response: dict[str, Any], source_expression: str) ->
 
 def _parse_allocation_response(
     response: dict[str, Any],
+    aggregate: str = "",
 ) -> tuple[list[str], list[dict]]:
     """Parse a Kubecost allocation API response into (dimension_columns, rows).
 
-    Inspects ``properties`` of the first entry to discover dimensions; falls back
-    to splitting ``name`` by ``/`` when no known property keys are present.
+    Dimension names come from the requested ``aggregate`` when given. Without it,
+    they are discovered from the union of ``properties`` keys across all entries,
+    falling back to splitting ``name`` by ``/`` when no known property keys appear
+    anywhere.
+
+    Each row resolves a dimension from ``properties`` first, then from the entry's
+    ``name`` — so synthetic entries such as ``__idle__``, whose ``properties`` are
+    empty, still report their name instead of collapsing into a blank key.
     """
     data_list: list[dict] = response.get("data", [])
     if not data_list:
@@ -271,28 +308,39 @@ def _parse_allocation_response(
     if not all_entries:
         return [], []
 
-    first_props: dict = all_entries[0].get("properties", {})
-    dimension_cols = [k for k in _KNOWN_DIMENSIONS if k in first_props]
+    columns = _dimension_columns_for_aggregate(aggregate)
 
-    if not dimension_cols:
+    if not columns:
+        # No aggregate to go by: take every known dimension present on any entry.
+        seen_props: set[str] = set()
+        for entry in all_entries:
+            seen_props.update(entry.get("properties", {}))
+        columns = [(k, None) for k in _KNOWN_DIMENSIONS if k in seen_props]
+
+    if not columns:
         parts = all_entries[0].get("name", "").split("/")
-        dimension_cols = [f"dim_{i}" for i in range(len(parts))]
+        columns = [(f"dim_{i}", None) for i in range(len(parts))]
+
+    dimension_cols = [col for col, _ in columns]
 
     rows: list[dict] = []
     for entry in all_entries:
         row: dict = {}
         props = entry.get("properties", {})
+        name_parts = entry.get("name", "").split("/")
+        # Positional fallback only lines up when the name has one part per column.
+        positional = name_parts if len(name_parts) == len(columns) else []
 
-        if dimension_cols and not dimension_cols[0].startswith("dim_"):
-            for col in dimension_cols:
-                val = props.get(col, "")
-                if isinstance(val, list):
-                    val = "|".join(val)
-                row[col] = val
-        else:
-            parts = entry.get("name", "").split("/")
-            for i, col in enumerate(dimension_cols):
-                row[col] = parts[i] if i < len(parts) else ""
+        for i, (col, group) in enumerate(columns):
+            if group:
+                val = (props.get(group) or {}).get(col)
+            else:
+                val = props.get(col)
+            if val is None or val == "":
+                val = positional[i] if positional else ""
+            if isinstance(val, list):
+                val = "|".join(val)
+            row[col] = val
 
         window_dict = entry.get("window", {})
         row["window_start"] = _format_date(window_dict.get("start", ""))
@@ -1581,7 +1629,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         resolved_window = _window_from_allocation(response, window) or resolved_window
         window_display = resolved_window.display if resolved_window else window
 
-        dimension_cols, rows = _parse_allocation_response(response)
+        dimension_cols, rows = _parse_allocation_response(response, aggregate)
         if not rows:
             return KubecostAllocationResponse(
                 status=QueryStatus.EMPTY,
@@ -1781,8 +1829,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         current_display = resolved_current_window.display if resolved_current_window else current_window
         baseline_display = resolved_baseline_window.display if resolved_baseline_window else baseline_window
 
-        current_dims, current_rows = _parse_allocation_response(current_response)
-        baseline_dims, baseline_rows = _parse_allocation_response(baseline_response)
+        current_dims, current_rows = _parse_allocation_response(current_response, aggregate)
+        baseline_dims, baseline_rows = _parse_allocation_response(baseline_response, aggregate)
         dimension_cols = current_dims or baseline_dims
 
         if not current_rows and not baseline_rows:
