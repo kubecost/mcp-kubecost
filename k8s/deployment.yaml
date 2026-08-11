@@ -26,15 +26,11 @@ spec:
       enableServiceLinks: false
       containers:
         - name: mcp-kubecost
-          image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:0.4.3
+          image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:0.4.9
           imagePullPolicy: IfNotPresent
-          env:
-          - name: KUBECOST_BASE_URL
-            value: "https://demo.kubecost.xyz"
-          - name: FASTMCP_HTTP_ALLOWED_HOSTS
-            value: '["mcp.demo.kubecost.cloud"]'
-          - name: USE_CAC_VIEWS
-            value: "false"
+          envFrom:
+            - configMapRef:
+                name: mcp-kubecost
           ports:
           - containerPort: 3030
             protocol: TCP
