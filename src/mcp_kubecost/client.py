@@ -181,8 +181,10 @@ async def get(path: str, params: dict[str, Any] | None = None) -> Any:
 async def post(path: str, json: dict[str, Any] | None = None, params: dict[str, Any] | None = None) -> Any:
     """Make a POST request to the Kubecost API.
 
-    Authentication is optional. If no credentials are configured, the request
-    will be made without authentication headers.
+    Unlike :func:`get`, this **requires** a key from either source: a POST
+    mutates state, so it is never sent unauthenticated. No tool calls this
+    today — the MCP surface is read-only — but the guard stands for whenever
+    a write tool is added.
 
     Args:
         path: API path relative to the base URL (e.g., "/rightsizing/aws/recommendations/ec2/snooze").
@@ -193,6 +195,7 @@ async def post(path: str, json: dict[str, Any] | None = None, params: dict[str, 
         Parsed JSON response.
 
     Raises:
+        ValueError: If neither an X-API-KEY header nor KUBECOST_API_KEY supplies a key.
         KubecostClientError: If the API returns a non-2xx status.
     """
     base_url = _get_base_url()
