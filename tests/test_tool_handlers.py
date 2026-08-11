@@ -1064,13 +1064,18 @@ class TestDefaultWowWindows:
         _, base_end = self._parse(baseline)
         assert base_end == cur_start, "baseline_window must end exactly where current_window begins"
 
-    def test_current_window_ends_at_today(self):
-        """The exclusive end of current_window is today midnight — yesterday is the last full day covered."""
-        from datetime import date
+    def test_current_window_ends_at_today_utc(self):
+        """The exclusive end of current_window is today midnight — yesterday is the last full day covered.
+
+        Compared against UTC, not local time: _default_wow_windows works in UTC, so
+        `date.today()` here would fail whenever the local date differs from the UTC one.
+        """
+        from datetime import datetime
 
         current, _ = _default_wow_windows()
         _, cur_end = self._parse(current)
-        assert cur_end == date.today(), "current_window exclusive end must be today (yesterday is the last full day)"
+        today_utc = datetime.now(UTC).date()
+        assert cur_end == today_utc, "current_window exclusive end must be today UTC (yesterday is the last full day)"
 
     def test_windows_pass_validation(self):
         """The computed defaults must survive _validate_comparison_windows without raising."""
