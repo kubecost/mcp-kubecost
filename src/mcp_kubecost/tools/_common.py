@@ -322,6 +322,19 @@ class QueryStatus(StrEnum):
     """The query could not be completed; see ``message`` / ``recommended_action``."""
 
 
+class CostRowStatus(StrEnum):
+    """How a dimension's cost changed between the baseline and current window."""
+
+    NEW = "new"
+    """Absent from the baseline window and present in the current one."""
+    REMOVED = "removed"
+    """Present in the baseline window and gone from the current one."""
+    UNCHANGED = "unchanged"
+    """Cost is identical across both windows (including zero in both)."""
+    CHANGED = "changed"
+    """Present in both windows at a different cost."""
+
+
 class BaseToolResponse(BaseModel):
     """Common envelope every tool response inherits.
 
