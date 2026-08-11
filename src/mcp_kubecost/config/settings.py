@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from urllib.parse import urlparse
 
 from mcp_kubecost.errors import ConfigError
+
+_HTTP_TRANSPORTS = frozenset({"http", "sse", "streamable-http"})
 
 
 @dataclass(frozen=True)
@@ -25,6 +29,7 @@ class Settings:
     default_window: str
     show_banner: bool
     log_level: str
+    enable_rich_logging: bool
 
     def to_loggable_dict(self) -> dict:
         """Return a copy of settings safe for logging (sensitive fields redacted)."""
@@ -32,6 +37,45 @@ class Settings:
         if d.get("KUBECOST_API_KEY") is not None:
             d["KUBECOST_API_KEY"] = "***"
         return d
+
+
+def is_http_mode(argv: Sequence[str] | None = None) -> bool:
+    """Return True when this process is (or will be) serving Streamable HTTP.
+
+    FastMCP's CLI applies ``transport`` from ``fastmcp-http.json`` only when it
+    calls ``run_async``, so ``fastmcp.settings.transport`` is still ``stdio``
+    while ``server.py`` is imported. Detect HTTP from ``FASTMCP_TRANSPORT`` or
+    the CLI argv instead.
+    """
+    transport = os.getenv("FASTMCP_TRANSPORT", "").strip().lower()
+    if transport in _HTTP_TRANSPORTS:
+        return True
+    args = list(sys.argv if argv is None else argv)
+    if any("fastmcp-http.json" in arg for arg in args):
+        return True
+    for i, arg in enumerate(args):
+        if arg.startswith("--transport="):
+            return arg.split("=", 1)[1].strip().lower() in _HTTP_TRANSPORTS
+        if arg in {"--transport", "-t"} and i + 1 < len(args):
+            return args[i + 1].strip().lower() in _HTTP_TRANSPORTS
+    return False
+
+
+def apply_http_rich_logging() -> None:
+    """Disable FastMCP Rich/ANSI logs when serving HTTP.
+
+    FastMCP configures its logger at import time. The CLI imports FastMCP
+    before ``server.py``, so we both set the env var and reconfigure the
+    already-created singleton. Call after ``import fastmcp``.
+    """
+    if not is_http_mode():
+        return
+    os.environ["FASTMCP_ENABLE_RICH_LOGGING"] = "false"
+    import fastmcp
+    from fastmcp.utilities.logging import configure_logging
+
+    fastmcp.settings.enable_rich_logging = False
+    configure_logging(level=fastmcp.settings.log_level)
 
 
 def _get_required_env(name: str) -> str:
@@ -51,7 +95,7 @@ def _get_url_env(name: str) -> str:
 
 
 def _get_ssl_verify_env() -> bool | str:
-    """Return the httpx ssl verify value from SSL_VERIFY / SSL_CA_BUNDLE.
+    """Return the httpx ssl verify value from KUBECOST_SSL_VERIFY / SSL_CA_BUNDLE.
 
     SSL_CA_BUNDLE=/path/to/ca.crt  → use that bundle (implies verify=True)
     KUBECOST_SSL_VERIFY=false               → disable verification (insecure)
@@ -103,5 +147,6 @@ def get_settings() -> Settings:
         default_window=os.getenv("DEFAULT_WINDOW", "15d").strip(),
         show_banner=False,
         log_level=os.getenv("FASTMCP_LOG_LEVEL", "INFO").upper(),
+        enable_rich_logging=False if is_http_mode() else _get_bool_env("FASTMCP_ENABLE_RICH_LOGGING", True),
         use_cac_views=_get_bool_env("USE_CAC_VIEWS", False),
     )
