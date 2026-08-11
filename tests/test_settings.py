@@ -73,3 +73,33 @@ class TestEnableRichLoggingSetting:
             assert get_settings().enable_rich_logging is False
         finally:
             get_settings.cache_clear()
+
+
+class TestRequireClientApiKeySetting:
+    def test_defaults_off(self, monkeypatch):
+        """Off by default — an unset flag must not change existing behavior."""
+        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+        monkeypatch.delenv("REQUIRE_CLIENT_API_KEY", raising=False)
+        get_settings.cache_clear()
+        try:
+            assert get_settings().require_client_api_key is False
+        finally:
+            get_settings.cache_clear()
+
+    def test_reads_env(self, monkeypatch):
+        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+        monkeypatch.setenv("REQUIRE_CLIENT_API_KEY", "true")
+        get_settings.cache_clear()
+        try:
+            assert get_settings().require_client_api_key is True
+        finally:
+            get_settings.cache_clear()
+
+    def test_api_key_is_redacted_in_logs(self, monkeypatch):
+        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+        monkeypatch.setenv("KUBECOST_API_KEY", "super-secret")
+        get_settings.cache_clear()
+        try:
+            assert get_settings().to_loggable_dict()["KUBECOST_API_KEY"] == "***"
+        finally:
+            get_settings.cache_clear()

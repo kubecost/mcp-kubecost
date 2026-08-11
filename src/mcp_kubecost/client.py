@@ -5,6 +5,7 @@ from typing import Any
 
 import httpx
 
+from mcp_kubecost.auth import KUBECOST_API_KEY_HEADER, resolve_api_key
 from mcp_kubecost.config.settings import get_settings
 from mcp_kubecost.errors import ErrorCode, ToolError
 
@@ -33,7 +34,10 @@ class KubecostClientError(Exception):
                 code=ErrorCode.AUTHENTICATION_FAILED,
                 message="Authentication failed. The API key is invalid or expired.",
                 retryable=False,
-                suggested_action="Verify that KUBECOST_API_KEY is correctly configured.",
+                suggested_action=(
+                    "Verify the X-API-KEY sent with the request, or that KUBECOST_API_KEY "
+                    "is correctly configured on the server."
+                ),
                 context={"status_code": self.status_code},
             )
         elif self.status_code == 403:
@@ -85,13 +89,17 @@ def _get_base_url() -> str:
     return base_url
 
 
-def _get_auth() -> tuple[str, str] | None:
-    """Return basic auth tuple if API key is configured."""
-    api_key = get_settings().KUBECOST_API_KEY
+def _build_headers() -> dict[str, str]:
+    """Return outbound request headers, including the API key when one resolves.
+
+    The key comes from the caller's ``X-API-KEY`` header when present, else
+    from ``KUBECOST_API_KEY``. See :mod:`mcp_kubecost.auth`.
+    """
+    headers = {"User-Agent": "Kubecost-MCPServer"}
+    api_key = resolve_api_key()
     if api_key:
-        logger.debug("Using KUBECOST_API_KEY authentication")
-        return (api_key, "")
-    return None
+        headers[KUBECOST_API_KEY_HEADER] = api_key
+    return headers
 
 
 def wrap_list(data: list, key: str) -> dict[str, Any]:
@@ -140,14 +148,12 @@ async def get(path: str, params: dict[str, Any] | None = None) -> Any:
     """
     base_url = _get_base_url()
     url = f"{base_url}{path}"
-    auth = _get_auth()
 
     async with httpx.AsyncClient(timeout=60.0, verify=get_settings().ssl_verify) as client:
         response = await client.get(
             url,
             params=_build_params(params),
-            auth=auth,
-            headers={"User-Agent": "Kubecost-MCPServer"},
+            headers=_build_headers(),
         )
 
     if response.status_code >= 400:
@@ -191,18 +197,20 @@ async def post(path: str, json: dict[str, Any] | None = None, params: dict[str, 
     """
     base_url = _get_base_url()
     url = f"{base_url}{path}"
-    auth = _get_auth()
+    headers = _build_headers()
 
-    if not auth:
-        raise ValueError("No authentication configured. Set KUBECOST_API_KEY environment variable.")
+    if KUBECOST_API_KEY_HEADER not in headers:
+        raise ValueError(
+            "No authentication configured. Set the KUBECOST_API_KEY environment variable "
+            f"or send an {KUBECOST_API_KEY_HEADER} header with the request."
+        )
 
     async with httpx.AsyncClient(timeout=60.0, verify=get_settings().ssl_verify) as client:
         response = await client.post(
             url,
             json=json,
             params=_build_params(params),
-            auth=auth,
-            headers={"User-Agent": "Kubecost-MCPServer"},
+            headers=headers,
         )
 
     if response.status_code >= 400:

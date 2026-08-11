@@ -133,9 +133,24 @@ FastMCP serializes each returned Pydantic model **twice** — once as a JSON `Te
 
 All configuration flows through `get_settings()` in [`config/settings.py`](src/mcp_kubecost/config/settings.py) — `client.py` reads no environment variables directly. [`.env.example`](.env.example) is the complete, accurate template; copy it to `.env`.
 
-`KUBECOST_BASE_URL` is the only required variable. The rest have defaults: `KUBECOST_API_BASE_PATH`, `KUBECOST_API_KEY`, `KUBECOST_SSL_VERIFY`, `SSL_CA_BUNDLE`, `REQUEST_TIMEOUT_SECONDS`, `REQUEST_RETRY_COUNT`, `DEFAULT_WINDOW`, `USE_CAC_VIEWS`, `FASTMCP_LOG_LEVEL`, `FASTMCP_ENABLE_RICH_LOGGING` (forced off in HTTP mode), `FASTMCP_TELEMETRY_MODE`, `OTEL_*`. `MCP_SERVER_NAME` is read in `server.py` and is not in `.env.example`.
+`KUBECOST_BASE_URL` is the only required variable. The rest have defaults: `KUBECOST_API_BASE_PATH`, `KUBECOST_API_KEY`, `REQUIRE_CLIENT_API_KEY`, `KUBECOST_SSL_VERIFY`, `SSL_CA_BUNDLE`, `REQUEST_TIMEOUT_SECONDS`, `REQUEST_RETRY_COUNT`, `DEFAULT_WINDOW`, `USE_CAC_VIEWS`, `FASTMCP_LOG_LEVEL`, `FASTMCP_ENABLE_RICH_LOGGING` (forced off in HTTP mode), `FASTMCP_TELEMETRY_MODE`, `OTEL_*`. `MCP_SERVER_NAME` is read in `server.py` and is not in `.env.example`.
 
 Add new settings to `Settings` and `.env.example` together; do not read `os.getenv` from a tool or client module.
+
+## Kubecost Authentication
+
+OPTIONAL
+The key is sent to Kubecost as an **`X-API-KEY` request header**. There is no Basic auth — it was tried, does not work against Kubecost, and was removed. Do not reintroduce an `auth=` tuple in `client.py`.
+
+[`auth.py`](src/mcp_kubecost/auth.py) resolves the key per request, header first:
+
+1. An `X-API-KEY` header on the incoming MCP request (HTTP transport only)
+2. `KUBECOST_API_KEY` from the environment
+3. Neither — the request goes out unauthenticated, which is a supported default
+
+The per-request read uses FastMCP's `get_http_headers()`, which returns `{}` when there is no active HTTP request. That is why this works unchanged on STDIO and why no tool handler needs a `Context` — resolution lives at the client boundary, not in the tool layer. Do not thread a key parameter through `call_get_api()` or the `_fetch_*` helpers.
+
+`REQUIRE_CLIENT_API_KEY=true` rejects HTTP requests with no header, raising `MissingClientApiKeyError` → `ErrorCode.AUTHENTICATION_FAILED`. The check sits *between* steps 1 and 2, so a configured `KUBECOST_API_KEY` does not satisfy it. It is skipped entirely on STDIO, where a client cannot send headers.
 
 ## Transport / Local Verification
 

@@ -174,6 +174,7 @@
         "fastmcpLogLevel": { "type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] },
         "fastmcpEnableRichLogging": { "type": "boolean" },
         "useCacViews": { "type": "boolean" },
+        "requireClientApiKey": { "type": "boolean" },
         "fastmcpHttpAllowedHosts": { "type": "string" },
         "mcpServerName": { "type": "string", "minLength": 1 },
         "telemetryMode": { "type": "string", "minLength": 1 },
@@ -200,7 +201,7 @@
           "required": ["verify", "caBundle"]
         }
       },
-      "required": ["kubecostBaseUrl", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "defaultWindow", "fastmcpLogLevel", "fastmcpEnableRichLogging", "useCacViews", "fastmcpHttpAllowedHosts", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "ssl"]
+      "required": ["kubecostBaseUrl", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "defaultWindow", "fastmcpLogLevel", "fastmcpEnableRichLogging", "useCacViews", "requireClientApiKey", "fastmcpHttpAllowedHosts", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "ssl"]
     },
     "nodeSelector": { "type": "object" },
     "tolerations": { "type": "array" },

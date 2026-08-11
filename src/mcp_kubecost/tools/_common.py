@@ -27,6 +27,7 @@ import httpx
 from fastmcp.exceptions import ToolError as McpToolError
 from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
 
+from mcp_kubecost.auth import MissingClientApiKeyError
 from mcp_kubecost.client import KubecostClientError, get, post
 from mcp_kubecost.errors import ErrorCode, ToolError
 
@@ -438,13 +439,21 @@ def _handle_call_failure(exc: Exception, path: str) -> NoReturn:
         te = exc.to_tool_error()
         logger.warning("Kubecost API error at %s: [%s]", path, te.code.value)
         raise McpToolError(format_tool_error(te)) from exc
+    if isinstance(exc, MissingClientApiKeyError):
+        logger.warning("Kubecost API call rejected: no client-supplied API key")
+        raise_tool_error(
+            ErrorCode.AUTHENTICATION_FAILED,
+            "This server requires each caller to supply its own Kubecost API key.",
+            retryable=False,
+            suggested_action="Send an X-API-KEY header with the MCP request.",
+        )
     if isinstance(exc, ValueError) and "No authentication configured" in str(exc):
         logger.warning("Kubecost API call attempted without auth configuration")
         raise_tool_error(
             ErrorCode.CONFIGURATION_ERROR,
             str(exc),
             retryable=False,
-            suggested_action="Set KUBECOST_API_KEY in the environment.",
+            suggested_action="Set KUBECOST_API_KEY in the environment, or send an X-API-KEY header.",
         )
     if isinstance(exc, httpx.ConnectError):
         logger.warning("Kubecost API unreachable at %s: %s", path, exc)

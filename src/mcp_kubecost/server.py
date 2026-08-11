@@ -59,12 +59,6 @@ def create_server(server_name) -> FastMCP:
     return mcp
 
 
-def _build_headers(api_key: str | None) -> dict[str, str]:
-    if not api_key:
-        return {}
-    return {"Authorization": f"Bearer {api_key}"}
-
-
 # When using the fastmcp cli, all project wide initialization must be outside the main() function.
 load_dotenv(".env")  # reads variables from a .env file and sets them in os.environ
 apply_http_rich_logging()  # HTTP: fastmcp.settings.enable_rich_logging = False

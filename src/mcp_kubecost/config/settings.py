@@ -22,6 +22,7 @@ class Settings:
     kubecost_base_url: str
     kubecost_api_base_path: str
     KUBECOST_API_KEY: str | None
+    require_client_api_key: bool
     use_cac_views: bool
     ssl_verify: bool | str  # passed directly to httpx verify=
     request_timeout_seconds: float
@@ -141,6 +142,7 @@ def get_settings() -> Settings:
         kubecost_base_url=kubecost_base_url,
         kubecost_api_base_path=os.getenv("KUBECOST_API_BASE_PATH", "/model").strip().rstrip("/"),
         KUBECOST_API_KEY=os.getenv("KUBECOST_API_KEY", "").strip() or None,
+        require_client_api_key=_get_bool_env("REQUIRE_CLIENT_API_KEY", False),
         ssl_verify=_get_ssl_verify_env(),
         request_timeout_seconds=_get_float_env("REQUEST_TIMEOUT_SECONDS", 15.0),
         retry_count=_get_int_env("REQUEST_RETRY_COUNT", 2),
