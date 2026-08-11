@@ -1,0 +1,90 @@
+name: Helm chart validation
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  push:
+    branches: [main]
+
+concurrency:
+  group: helm-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CHART_DIR: charts/mcp-kubecost
+  KUBERNETES_VERSION: 1.34.0
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        # use latest
+        # with:
+        #   version: v4.2.0
+
+      - name: Lint chart and validate values schema
+        run: helm lint "$CHART_DIR"
+
+      - name: Render default chart
+        run: |
+          mkdir -p .helm-render
+          helm template mcp-kubecost "$CHART_DIR" --namespace mcp-kubecost > .helm-render/mcp-kubecost-default.yaml
+
+      - name: Render ingress and Secret-backed configuration
+        run: >-
+          helm template mcp-kubecost "$CHART_DIR"
+          --namespace mcp-kubecost
+          --set ingress.enabled=true
+          --set config.kubecostApiKey.existingSecret=kubecost-api-key
+          --set config.ssl.caBundle.existingSecret=kubecost-ca
+          > .helm-render/mcp-kubecost-secure.yaml
+
+      - name: Render preferred HTTPRoute configuration
+        run: >-
+          helm template mcp-kubecost "$CHART_DIR"
+          --namespace mcp-kubecost
+          --set httpRoute.enabled=true
+          --set 'httpRoute.parentRefs[0].name=mcp-gateway'
+          --set 'httpRoute.parentRefs[0].sectionName=https'
+          --set config.kubecostApiKey.existingSecret=kubecost-api-key
+          > .helm-render/mcp-kubecost-httproute.yaml
+
+      - name: Validate rendered Kubernetes resources
+        run: >-
+          docker run --rm
+          -v "$PWD:/work:ro"
+          ghcr.io/yannh/kubeconform:v0.8.0
+          -strict -summary -kubernetes-version "$KUBERNETES_VERSION"
+          /work/.helm-render/mcp-kubecost-default.yaml /work/.helm-render/mcp-kubecost-secure.yaml
+
+      - name: Validate core resources in HTTPRoute render
+        run: >-
+          docker run --rm
+          -v "$PWD:/work:ro"
+          ghcr.io/yannh/kubeconform:v0.8.0
+          -strict -ignore-missing-schemas -summary -kubernetes-version "$KUBERNETES_VERSION"
+          /work/.helm-render/mcp-kubecost-httproute.yaml
+
+      - name: Run Kubernetes best-practice linter
+        run: >-
+          docker run --rm
+          -v "$PWD:/work:ro"
+          ghcr.io/stackrox/kube-linter:v0.8.3
+          lint /work/$CHART_DIR
+
+      - name: Lint rendered HTTPRoute
+        run: >-
+          docker run --rm
+          -v "$PWD:/work:ro"
+          ghcr.io/stackrox/kube-linter:v0.8.3
+          lint /work/.helm-render/mcp-kubecost-httproute.yaml
+
+      - name: Package chart
+        run: helm package "$CHART_DIR" --destination /tmp/helm-package

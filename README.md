@@ -86,7 +86,7 @@ Outside Docker, tracing is an **optional extra** — install it with `uv sync --
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint. Required when telemetry is enabled (not set in the image). |
 | `OTEL_METRICS_EXPORTER` / `OTEL_LOGS_EXPORTER` | Set both to `none` when the endpoint is a traces-only backend — see below. |
 
-When enabled, traces include FastMCP MCP operation spans (tools, prompts, resources) plus HTTP client/server spans from auto-instrumentation. Set these in your deployment ConfigMap / `.env` — see [`.env.example`](.env.example).
+When enabled, traces include FastMCP MCP operation spans (tools, prompts, resources) plus HTTP client/server spans from auto-instrumentation. Set these in the Helm chart's `config` values or `.env` — see [`.env.example`](.env.example) and [`charts/mcp-kubecost/values.yaml`](charts/mcp-kubecost/values.yaml).
 
 > [!NOTE]
 > On FastMCP 3.4.x, `FASTMCP_TELEMETRY_MODE` is **not** read by FastMCP itself. This server reuses that name so the same env var will keep working after a FastMCP 4 upgrade. STDIO local runs are not wrapped unless you invoke `opentelemetry-instrument` yourself.

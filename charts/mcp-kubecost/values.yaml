@@ -1,0 +1,174 @@
+# nameOverride replaces the chart name portion of generated resource names.
+nameOverride: ""
+
+# fullnameOverride replaces the full generated resource name.
+fullnameOverride: ""
+
+# replicaCount is the number of MCP server pods to run.
+replicaCount: 1
+
+image:
+  # image.repository is the container image repository.
+  repository: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost
+  # image.tag is the container image tag. Defaults to the chart appVersion when empty.
+  tag: "0.4.13"
+  # image.pullPolicy controls when Kubernetes pulls the image.
+  pullPolicy: IfNotPresent
+  # image.pullSecrets is a list of Secret names for private image registries.
+  pullSecrets: []
+
+# podAnnotations are annotations added to the MCP server pod template.
+podAnnotations: {}
+
+# podLabels are additional labels added to the MCP server pod template.
+podLabels: {}
+
+podSecurityContext:
+  # podSecurityContext.runAsUser is the non-root UID used by the container.
+  runAsUser: 65532
+  # podSecurityContext.runAsGroup is the non-root GID used by the container.
+  runAsGroup: 65532
+  # podSecurityContext.runAsNonRoot prevents the container from running as root.
+  runAsNonRoot: true
+  # podSecurityContext.seccompProfile applies the Kubernetes runtime seccomp profile.
+  seccompProfile:
+    type: RuntimeDefault
+  # podSecurityContext.fsGroup is intentionally unset because the container has no writable volume.
+  fsGroup: null
+
+containerSecurityContext:
+  # containerSecurityContext.allowPrivilegeEscalation prevents gaining extra privileges.
+  allowPrivilegeEscalation: false
+  # containerSecurityContext.readOnlyRootFilesystem prevents writes to the image filesystem.
+  readOnlyRootFilesystem: true
+  # containerSecurityContext.capabilitiesDrop removes all ambient Linux capabilities.
+  capabilitiesDrop:
+    - ALL
+
+# automountServiceAccountToken controls whether the pod receives a Kubernetes API token.
+automountServiceAccountToken: false
+
+service:
+  # service.type is the Kubernetes Service type.
+  type: ClusterIP
+  # service.port is the Service port exposed to other pods and ingress controllers.
+  port: 3030
+  # service.annotations are annotations added to the Service.
+  annotations: {}
+
+httpRoute:
+  # httpRoute.enabled controls whether a Gateway API HTTPRoute is rendered.
+  enabled: false
+  # httpRoute.annotations are annotations added to the HTTPRoute.
+  annotations: {}
+  # httpRoute.parentRefs identifies the existing Gateway and optional listener to attach to.
+  parentRefs:
+    - name: mcp-gateway
+      sectionName: https
+  # httpRoute.hostnames are the hostnames matched by the Gateway listener.
+  hostnames:
+    - mcp.demo.kubecost.cloud
+  # httpRoute.rules defines Gateway API matches, filters, timeouts, and backendRefs.
+  # If backendRefs is omitted from a rule, this chart routes it to its own Service.
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+
+ingress:
+  # ingress.enabled controls whether the legacy Kubernetes Ingress is rendered.
+  # Prefer httpRoute.enabled when the cluster has Gateway API support.
+  enabled: false
+  # ingress.className is the IngressClass name.
+  className: nginx
+  # ingress.annotations are annotations added to the Ingress.
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-http
+  # ingress.hosts configures hostnames and paths routed to the MCP server.
+  hosts:
+    - host: mcp.demo.kubecost.cloud
+      paths:
+        - path: /
+          pathType: Prefix
+  # ingress.tls configures TLS secrets and their hostnames.
+  tls:
+    - secretName: kubecost-mcp-server-tls
+      hosts:
+        - mcp.demo.kubecost.cloud
+
+resources:
+  # resources.requests and resources.limits define the pod's CPU and memory budget.
+  requests:
+    cpu: 250m
+    memory: 1Gi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+probes:
+  # probes.enabled enables HTTP startup, readiness, and liveness checks.
+  enabled: true
+  # probes.path is an unauthenticated health endpoint exposed by the server.
+  path: /version
+  # probes.initialDelaySeconds delays the first liveness/readiness checks.
+  initialDelaySeconds: 5
+  # probes.periodSeconds is the interval between probe requests.
+  periodSeconds: 10
+  # probes.timeoutSeconds is the probe request timeout.
+  timeoutSeconds: 3
+  # probes.failureThreshold is the number of failures before the container is considered unhealthy.
+  failureThreshold: 3
+
+config:
+  # config.kubecostBaseUrl is the required base URL of the Kubecost API.
+  kubecostBaseUrl: http://kubecost-frontend:9090
+  # config.kubecostApiBasePath is the path prefix used for Kubecost API calls.
+  kubecostApiBasePath: /model
+  # config.kubecostApiKey.value optionally creates a Secret containing the API key; prefer existingSecret.
+  kubecostApiKey:
+    value: ""
+    # config.kubecostApiKey.existingSecret is the name of a pre-created Secret containing the API key.
+    existingSecret: ""
+    # config.kubecostApiKey.key is the key in the existing or generated API-key Secret.
+    key: KUBECOST_API_KEY
+  # config.requestTimeoutSeconds is the Kubecost HTTP request timeout in seconds.
+  requestTimeoutSeconds: 15
+  # config.requestRetryCount is the number of configured HTTP retries.
+  requestRetryCount: 2
+  # config.defaultWindow is the default Kubecost query window.
+  defaultWindow: 15d
+  # config.fastmcpLogLevel is the FastMCP log level.
+  fastmcpLogLevel: INFO
+  # config.fastmcpEnableRichLogging enables rich terminal formatting when not in HTTP mode.
+  fastmcpEnableRichLogging: true
+  # config.useCacViews enables Kubecost CAC views.
+  useCacViews: false
+  # config.fastmcpHttpAllowedHosts is a JSON array string of permitted HTTP Host headers; empty disables the allowlist.
+  fastmcpHttpAllowedHosts: ""
+  # config.mcpServerName overrides the MCP server name exposed by FastMCP.
+  mcpServerName: mcp-kubecost
+  # config.telemetryMode controls the OpenTelemetry wrapper; off disables it.
+  telemetryMode: "off"
+  # config.otelServiceName is the OpenTelemetry service name.
+  otelServiceName: mcp-kubecost
+  # config.otelExporterOtlpEndpoint is the OTLP endpoint used when telemetry is enabled.
+  otelExporterOtlpEndpoint: ""
+  # config.otelMetricsExporter selects the OTEL metrics exporter, such as none.
+  otelMetricsExporter: none
+  # config.otelLogsExporter selects the OTEL logs exporter, such as none.
+  otelLogsExporter: none
+  ssl:
+    # config.ssl.verify controls Kubecost TLS certificate verification.
+    verify: true
+    caBundle:
+      # config.ssl.caBundle.existingSecret is the Secret containing a custom CA certificate.
+      existingSecret: ""
+      # config.ssl.caBundle.key is the key in the custom CA Secret.
+      key: ca.crt
+      # config.ssl.caBundle.mountPath is the file path passed to SSL_CA_BUNDLE.
+      mountPath: /etc/mcp-kubecost/ca/ca.crt
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

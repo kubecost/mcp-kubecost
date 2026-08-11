@@ -20,9 +20,9 @@ _update_version_refs:
     VERSION=$(uv version --short)
     echo "Updating version references to $VERSION..."
 
-    # Update deployment manifest image tag
-    just _sed "s|image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:.*|image: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:$VERSION|" k8s/deployment.yaml
-    echo "Updated k8s/deployment.yaml image tag to $VERSION"
+    # Update the canonical Helm chart image tag.
+    just _sed 's|^  tag:.*|  tag: "'"$VERSION"'"|' charts/mcp-kubecost/values.yaml
+    echo "Updated charts/mcp-kubecost/values.yaml image tag to $VERSION"
 
 docker-build-run:
     #!/usr/bin/env bash

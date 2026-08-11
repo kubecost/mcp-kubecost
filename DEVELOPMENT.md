@@ -81,12 +81,38 @@ CI runs on Python 3.12 (`.github/workflows/ci.yml`), matching `requires-python`.
 ```bash
 just docker-build-run       # build the image locally and run it on port 3030
 just docker-build-push      # bump the patch version, build multi-arch, push to ECR,
-                            # and update the k8s/deployment.yaml image tag
+                            # and update the Helm chart image tag
 ```
 
-Apply the manifests in [`k8s/`](k8s/) with `kubectl apply -f k8s/`.
+Install or upgrade the application with the Helm chart:
 
-The Docker image's `CMD` is `/app/.venv/bin/mcp-kubecost-http` ([`otel_entrypoint.py`](src/mcp_kubecost/otel_entrypoint.py)), which wraps the server with `opentelemetry-instrument` unless `FASTMCP_TELEMETRY_MODE=off`, and listens on port 3030. Demo ingress: `https://mcp.demo.kubecost.cloud/mcp` ([`k8s/ingress.yaml`](k8s/ingress.yaml)).
+```bash
+helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
+  --namespace mcp-kubecost --create-namespace \
+  --set config.kubecostBaseUrl=https://kubecost.example.com \
+  --set config.kubecostApiKey.existingSecret=kubecost-api-key
+```
+
+For external HTTP access, prefer Gateway API. The cluster must provide a
+Gateway API implementation and an existing Gateway:
+
+```bash
+helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
+  --namespace mcp-kubecost --create-namespace \
+  --set config.kubecostBaseUrl=https://kubecost.example.com \
+  --set httpRoute.enabled=true \
+  --set 'httpRoute.parentRefs[0].name=mcp-gateway' \
+  --set 'httpRoute.parentRefs[0].sectionName=https'
+```
+
+Kubernetes Ingress remains available as a fallback with
+`--set ingress.enabled=true` when Gateway API is not available.
+
+The chart's [`values.yaml`](charts/mcp-kubecost/values.yaml) documents the
+deployment and runtime configuration. The debug Caddy proxy remains available
+as the development-only [`k8s/debug-pod.yaml`](k8s/debug-pod.yaml) manifest.
+
+The Docker image's `CMD` is `/app/.venv/bin/mcp-kubecost-http` ([`otel_entrypoint.py`](src/mcp_kubecost/otel_entrypoint.py)), which wraps the server with `opentelemetry-instrument` unless `FASTMCP_TELEMETRY_MODE=off`, and listens on port 3030. The chart's example HTTPRoute hostname is `mcp.demo.kubecost.cloud`; configure it explicitly before using it.
 
 ## Telemetry
 

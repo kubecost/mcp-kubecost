@@ -3,6 +3,7 @@ temp/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+.helm-render/
 .coverage
 dist/
 build/
