@@ -79,6 +79,7 @@ _BASE_SETTINGS: dict[str, Any] = dict(
     default_window="15d",
     show_banner=False,
     log_level="INFO",
+    enable_rich_logging=True,
 )
 
 
