@@ -36,10 +36,12 @@ COPY --from=builder /app/ /app/
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    FASTMCP_SHOW_SERVER_BANNER=false
+    FASTMCP_SHOW_SERVER_BANNER=false \
+    FASTMCP_TELEMETRY_MODE=off \
+    OTEL_SERVICE_NAME=mcp-kubecost
 
 WORKDIR /app
 
 EXPOSE 3030
 
-CMD ["/app/.venv/bin/fastmcp", "run", "fastmcp-http.json", "--skip-env"]
+CMD ["/app/.venv/bin/mcp-kubecost-http"]
