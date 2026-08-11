@@ -20,13 +20,21 @@ def _telemetry_enabled() -> bool:
 
 def main() -> None:
     if _telemetry_enabled():
-        argv = ["opentelemetry-instrument", *_FASTMCP_ARGS]
-    else:
-        argv = list(_FASTMCP_ARGS)
+        try:
+            os.execvp("opentelemetry-instrument", ["opentelemetry-instrument", *_FASTMCP_ARGS])
+        except OSError as exc:
+            # opentelemetry-instrument ships in the optional 'otel' extra. Serving
+            # without traces beats refusing to start over a missing exporter.
+            print(
+                f"Could not exec 'opentelemetry-instrument' ({exc}); starting without telemetry. "
+                "Install the 'otel' extra (uv sync --extra otel) to enable tracing.",
+                file=sys.stderr,
+            )
+
     try:
-        os.execvp(argv[0], argv)
+        os.execvp(_FASTMCP_ARGS[0], list(_FASTMCP_ARGS))
     except OSError as exc:
-        print(f"Failed to exec {argv[0]!r}: {exc}", file=sys.stderr)
+        print(f"Failed to exec {_FASTMCP_ARGS[0]!r}: {exc}", file=sys.stderr)
         sys.exit(1)
 
 
