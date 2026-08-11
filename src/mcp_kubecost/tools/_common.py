@@ -169,7 +169,7 @@ def _window_result(
 def parse_api_timestamp(value: Any) -> datetime | None:
     """Parse an RFC3339 timestamp returned by Kubecost, or ``None`` if unusable.
 
-    Accepts the ``Z`` suffix Kubecost uses and normalises naive timestamps to UTC
+    Accepts the ``Z`` suffix Kubecost uses and normalizes naive timestamps to UTC
     so callers can compare results from different responses directly.
     """
     if not value:
@@ -296,8 +296,8 @@ def to_api_window(window: str) -> str:
     All other values — rolling windows like ``"7d"`` and already-explicit RFC3339 ranges
     — are returned unchanged.
     """
-    normalised = window.strip().lower()
-    if normalised not in _CALENDAR_ALIASES:
+    normalized = window.strip().lower()
+    if normalized not in _CALENDAR_ALIASES:
         return window
     resolved = resolve_window(window)
     fmt = "%Y-%m-%dT%H:%M:%SZ"
@@ -320,6 +320,19 @@ class QueryStatus(StrEnum):
     """Some endpoints/sources succeeded and others failed (see ``skipped``)."""
     ERROR = "error"
     """The query could not be completed; see ``message`` / ``recommended_action``."""
+
+
+class CostRowStatus(StrEnum):
+    """How a dimension's cost changed between the baseline and current window."""
+
+    NEW = "new"
+    """Absent from the baseline window and present in the current one."""
+    REMOVED = "removed"
+    """Present in the baseline window and gone from the current one."""
+    UNCHANGED = "unchanged"
+    """Cost is identical across both windows (including zero in both)."""
+    CHANGED = "changed"
+    """Present in both windows at a different cost."""
 
 
 class BaseToolResponse(BaseModel):

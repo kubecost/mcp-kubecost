@@ -45,7 +45,7 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
 |------|-------------|
 | `kubecost_list_windows` | List the valid time windows for Kubecost cost queries. |
 | `get_kubecost_workload_costs` | Return Kubernetes cost allocation from Kubecost grouped by chosen dimensions. |
-| `get_kubecost_cost_comparison` | Compare Kubernetes cost allocation between two equal-length windows to find cost spikes. |
+| `get_kubecost_cost_comparison` | Compare Kubernetes cost allocation between two time windows to find cost changes and spikes. |
 | `get_container_savings_recommendations` | Return Kubernetes container rightsizing recommendations and potential savings. |
 | `get_abandoned_workloads` | Return pods with abnormally low network traffic — likely abandoned workloads. |
 | `get_savings_overview` | Return a ranked summary of all Kubecost savings categories. |
@@ -73,20 +73,37 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
 
 ## Telemetry (OpenTelemetry)
 
-HTTP deployments can export traces via OpenTelemetry. The Docker image always includes the OTEL SDK and httpx/starlette auto-instrumentation; export is gated at runtime.
+HTTP deployments can export traces via OpenTelemetry. The Docker image includes the OTEL SDK by default and httpx/starlette auto-instrumentation; export is gated at runtime. This can be removed by omitting `--extra otel` in [Dockerfile](Dockerfile).
+
+Outside Docker, tracing is an **optional extra** — install it with `uv sync --extra otel` or `pip install 'mcp-kubecost[otel]'`. Without it the server runs normally; enabling `FASTMCP_TELEMETRY_MODE` logs a warning and starts untraced rather than failing.
 
 ### Current behavior (FastMCP 3.4.x)
 
 | Variable | Role |
 |----------|------|
-| `FASTMCP_TELEMETRY_MODE` | Process-wide switch. `off` (image default) runs bare `fastmcp`. Any other value (e.g. `native`) wraps the process with `opentelemetry-instrument`. |
-| `OTEL_SERVICE_NAME` | Service name on exported spans (image default: `mcp-kubecost`). |
+| `FASTMCP_TELEMETRY_MODE` | Process-wide switch. `off` (the default when unset) runs bare `fastmcp`. Any other value (e.g. `native`) wraps the process with `opentelemetry-instrument`. |
+| `OTEL_SERVICE_NAME` | Service name on exported spans. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint. Required when telemetry is enabled (not set in the image). |
+| `OTEL_METRICS_EXPORTER` / `OTEL_LOGS_EXPORTER` | Set both to `none` when the endpoint is a traces-only backend — see below. |
 
 When enabled, traces include FastMCP MCP operation spans (tools, prompts, resources) plus HTTP client/server spans from auto-instrumentation. Set these in your deployment ConfigMap / `.env` — see [`.env.example`](.env.example).
 
 > [!NOTE]
 > On FastMCP 3.4.x, `FASTMCP_TELEMETRY_MODE` is **not** read by FastMCP itself. This server reuses that name so the same env var will keep working after a FastMCP 4 upgrade. STDIO local runs are not wrapped unless you invoke `opentelemetry-instrument` yourself.
+
+> [!IMPORTANT]
+> `opentelemetry-distro` turns on **all three** signals by default — traces, metrics, and logs all
+> go to `OTEL_EXPORTER_OTLP_ENDPOINT`. Traces-only backends such as Tempo and Jaeger implement only
+> the OTLP `TraceService`, so metrics and logs fail there with
+> `StatusCode.UNIMPLEMENTED: unknown service opentelemetry.proto.collector.metrics.v1.MetricsService`.
+> When pointing at one of those, also set:
+>
+> ```
+> OTEL_METRICS_EXPORTER=none
+> OTEL_LOGS_EXPORTER=none
+> ```
+>
+> Leave them unset only if the endpoint is a full collector that accepts every signal.
 
 ### FastMCP 4.0 (when GA)
 

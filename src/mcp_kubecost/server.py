@@ -17,7 +17,7 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from mcp_kubecost.config.settings import get_settings
+from mcp_kubecost.config.settings import apply_http_rich_logging, get_settings
 from mcp_kubecost.skills import register_all_skills
 from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
 
@@ -27,7 +27,7 @@ _SERVER_INSTRUCTIONS = (
     "on any general savings question; kubecost_list_windows to discover valid time "
     "windows; get_kubecost_workload_costs for cost allocation by cluster, namespace, "
     "or controller; get_kubecost_cost_comparison as the entry point for 'why did costs "
-    "change' or spike-investigation questions, diffing two equal-length periods. "
+    "change' or spike-investigation questions, diffing two periods. "
     "Drill-down tools: get_container_savings_recommendations for container rightsizing, "
     "get_abandoned_workloads to identify idle workloads and estimate decommission savings, "
     "get_pv_sizing_recommendations for PVC storage right-sizing, "
@@ -67,6 +67,7 @@ def _build_headers(api_key: str | None) -> dict[str, str]:
 
 # When using the fastmcp cli, all project wide initialization must be outside the main() function.
 load_dotenv(".env")  # reads variables from a .env file and sets them in os.environ
+apply_http_rich_logging()  # HTTP: fastmcp.settings.enable_rich_logging = False
 import mcp_kubecost.logging_fastmcp  # noqa: E402,F401 -- must follow load_dotenv so FASTMCP_LOG_LEVEL is set
 
 logging.getLogger("mcp_kubecost").setLevel(logging.DEBUG)

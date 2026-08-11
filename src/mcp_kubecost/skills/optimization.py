@@ -98,9 +98,12 @@ or diagnosing why costs changed (spikes, drops, anomalies).
 3. Identify the top mover(s) by absolute `change` in the sorted diff table
 4. Drill into the matching tool based on which dimension moved most:
    - Container/pod-level cost increase → `get_container_savings_recommendations`
-   - A newly idle/dormant workload (`is_new` in reverse, or low traffic) → `get_abandoned_workloads`
+   - A newly idle/dormant workload (`row_status=removed`, or low traffic) → `get_abandoned_workloads`
    - Node/cluster-level shift → `get_cluster_rightsizing_recommendations`
-5. Rows with `is_new=true` had zero cost in the baseline period -- flag these as newly appeared workloads
+5. Read each row's `row_status`: `new` had zero cost in the baseline period (a newly appeared
+   workload), `removed` has zero cost now (it disappeared), `unchanged` cost the same in both
+6. When the response warns the periods differ in length, rank by `daily_change` and quote
+   `normalized_pct_change` -- a 31-day month costs more than a 30-day one at identical daily spend
 """
 
 

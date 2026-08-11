@@ -14,7 +14,7 @@ WORKDIR /app
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --locked --no-install-project --no-editable
+    uv sync --locked --no-install-project --no-editable --extra otel
 
 COPY src/ /app/src/
 COPY fastmcp-http.json /app/fastmcp-http.json
@@ -23,12 +23,23 @@ COPY fastmcp-http.json /app/fastmcp-http.json
 RUN --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
     --mount=type=bind,source=README.md,target=README.md \
-    uv sync --locked --no-editable
+    uv sync --locked --no-editable --extra otel
+
+# Distroless runtime never installs packages. Drop unused pip that ships
+# with uv-managed CPython so scanners do not flag its vendored copies
+RUN rm -rf \
+      /python/cpython-*/lib/python*/ensurepip \
+      /python/cpython-*/lib/python*/site-packages/pip \
+      /python/cpython-*/lib/python*/site-packages/pip-*.dist-info \
+      /python/cpython-*/bin/pip*
 
 # ── Runtime stage ────────────────────────────────────────────────────────────
 # distroless/base has libc + libssl but no Python, no shell, no pebble.
 # We bring our own Python (uv-managed) and venv from the builder.
 FROM gcr.io/distroless/cc-debian12:nonroot
+
+# needed to disable Cannot read termcap database; error messages
+COPY --from=builder /usr/share/terminfo /usr/share/terminfo
 
 # Copy the uv-managed Python runtime (venv symlinks point into here)
 COPY --from=builder /python /python
@@ -36,6 +47,8 @@ COPY --from=builder /app/ /app/
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
+    TERM=xterm-256color \
+    TERMINFO=/usr/share/terminfo \
     FASTMCP_SHOW_SERVER_BANNER=false \
     FASTMCP_TELEMETRY_MODE=off \
     OTEL_SERVICE_NAME=mcp-kubecost

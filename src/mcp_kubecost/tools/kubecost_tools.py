@@ -6,7 +6,7 @@ result sets are bounded via a ``top_n`` parameter with a ``truncated`` flag
 (client-side sort+slice), or true server-side ``limit``/``offset`` pagination
 where the upstream API supports it (e.g. ``get_resource_quota_recommendations``).
 
-Contract version: 3.0
+Contract version: 4.0
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from mcp_kubecost.tools._common import (
     DEFAULT_WINDOW,
     MIN_QUANTILE_WINDOW,
     BaseToolResponse,
+    CostRowStatus,
     McpToolError,
     QueryStatus,
     ResolvedWindow,
@@ -50,7 +51,7 @@ from mcp_kubecost.tools._common import (
 
 logger = logging.getLogger(__name__)
 
-_VERSION = "3.0"
+_VERSION = "4.0"
 
 # ---------------------------------------------------------------------------
 # API path segments — combined with get_settings().kubecost_api_base_path at call time
@@ -577,18 +578,98 @@ def _default_wow_windows() -> tuple[str, str]:
     return current, baseline
 
 
+# Kubecost's bucket for cost that carries no value for the requested dimension.
+_UNALLOCATED = "__unallocated__"
+
+# Idle capacity is shared into every row (see _fetch_allocation), which the caller cannot infer.
+_IDLE_SHARED_NOTE = (
+    "Idle (unused but provisioned) capacity is distributed proportionally into each row's cost, "
+    "so the rows will not sum to a separate idle line."
+)
+
+
+def _window_days(resolved: ResolvedWindow | None, fallback: int | None) -> float:
+    """Return a window's length in days as a positive float, for use as a divisor.
+
+    Prefers the resolved window, whose boundaries come back from Kubecost itself,
+    and measures the exact span rather than ``ResolvedWindow.days`` — that field
+    is an int and rounds a sub-day span down to 0. Falls back to the caller's
+    validated day count, then to 1.0, so a per-day figure is never a division by zero.
+    """
+    if resolved is not None:
+        span = (resolved.end_utc - resolved.start_utc).total_seconds() / 86400
+        if span > 0:
+            return span
+    if fallback is not None and fallback > 0:
+        return float(fallback)
+    return 1.0
+
+
+def _unallocated_note(diffed: list[dict[str, Any]], dimension_cols: list[str]) -> str | None:
+    """Describe the cost that Kubecost could not attribute to a requested dimension.
+
+    Returns None when no row is unallocated, so the note only appears where it
+    is relevant.
+    """
+    current_total = 0.0
+    baseline_total = 0.0
+    unallocated_dims: list[str] = []
+    for row in diffed:
+        hit = [dim for dim in dimension_cols if row.get(dim) == _UNALLOCATED]
+        if not hit:
+            continue
+        current_total += float(row.get("current_cost", 0) or 0)
+        baseline_total += float(row.get("baseline_cost", 0) or 0)
+        unallocated_dims.extend(dim for dim in hit if dim not in unallocated_dims)
+
+    if not unallocated_dims:
+        return None
+
+    dims = ", ".join(f"'{dim}'" for dim in unallocated_dims)
+    return (
+        f"${current_total:,.2f} (current) and ${baseline_total:,.2f} (baseline) have no value for "
+        f"{dims} and are grouped under {_UNALLOCATED}. That bucket is real spend, not an error — "
+        "it cannot be attributed further at this aggregation."
+    )
+
+
+def _classify_cost_row(current_cost: float, baseline_cost: float) -> CostRowStatus:
+    """Describe how a dimension's cost moved between the two windows.
+
+    A dimension absent from one side arrives here as a 0.0 cost, so "appeared"
+    and "disappeared" are both expressed as a zero on the opposite side. A row
+    that is zero in *both* windows is ``UNCHANGED``, not ``NEW`` — nothing
+    appeared.
+    """
+    if baseline_cost == 0 and current_cost > 0:
+        return CostRowStatus.NEW
+    if baseline_cost > 0 and current_cost == 0:
+        return CostRowStatus.REMOVED
+    if current_cost == baseline_cost:
+        return CostRowStatus.UNCHANGED
+    return CostRowStatus.CHANGED
+
+
 def _diff_allocation_rows(
     current_rows: list[dict[str, Any]],
     baseline_rows: list[dict[str, Any]],
     dimension_cols: list[str],
+    current_days: float = 1.0,
+    baseline_days: float = 1.0,
 ) -> list[dict[str, Any]]:
     """Join current and baseline aggregated allocation rows on their dimension tuple.
 
     Returns one dict per dimension key present in either input, each with the
     dimension values, ``current_cost``, ``baseline_cost``, ``change``
-    (current - baseline), and ``pct_change`` (None when baseline_cost is 0,
-    in which case the row is also flagged with ``is_new=True``). Sorted by
-    absolute ``change`` descending.
+    (current - baseline), ``pct_change`` (None when baseline_cost is 0, since a
+    percentage of nothing is undefined), and a ``row_status`` describing the
+    move. Sorted by absolute ``change`` descending.
+
+    ``current_days``/``baseline_days`` are the lengths of the two windows, used
+    to derive the per-day figures that make unequal-length periods comparable:
+    a 31-day month costing more than a 30-day one has not necessarily got more
+    expensive. Sorting deliberately stays on raw ``change`` so the common
+    equal-length comparison keeps its familiar ordering.
     """
 
     def _key(row: dict[str, Any]) -> tuple:
@@ -608,10 +689,15 @@ def _diff_allocation_rows(
         baseline_cost = float((baseline_row or {}).get("totalCost", 0) or 0)
         change = current_cost - baseline_cost
 
-        is_new = baseline_cost == 0
         pct_change: float | None = None
-        if not is_new:
+        if baseline_cost != 0:
             pct_change = round((change / baseline_cost) * 100, 2)
+
+        current_daily = current_cost / current_days if current_days > 0 else 0.0
+        baseline_daily = baseline_cost / baseline_days if baseline_days > 0 else 0.0
+        normalized_pct_change: float | None = None
+        if baseline_daily != 0:
+            normalized_pct_change = round(((current_daily - baseline_daily) / baseline_daily) * 100, 2)
 
         source_row = current_row or baseline_row or {}
         row: dict[str, Any] = {dim: source_row.get(dim, "") for dim in dimension_cols}
@@ -621,7 +707,11 @@ def _diff_allocation_rows(
                 "baseline_cost": _format_number(baseline_cost),
                 "change": _format_number(change),
                 "pct_change": pct_change,
-                "is_new": is_new,
+                "row_status": _classify_cost_row(current_cost, baseline_cost),
+                "current_daily_cost": _format_number(current_daily),
+                "baseline_daily_cost": _format_number(baseline_daily),
+                "daily_change": _format_number(current_daily - baseline_daily),
+                "normalized_pct_change": normalized_pct_change,
             }
         )
         diffed.append(row)
@@ -1414,12 +1504,37 @@ class CostComparisonRow(BaseModel):
         default=None,
         description=(
             "Percent change from baseline to current. Null when baseline_cost is 0 "
-            "(see is_new) since percent change is undefined."
+            "(see row_status) since percent change is undefined."
         ),
     )
-    is_new: bool = Field(
-        default=False,
-        description="True when this dimension had zero cost in the baseline window (newly appeared).",
+    row_status: CostRowStatus = Field(
+        default=CostRowStatus.UNCHANGED,
+        description=(
+            "How this dimension moved: 'new' (zero baseline cost, non-zero current), "
+            "'removed' (non-zero baseline cost, zero current), 'unchanged' (identical "
+            "cost in both windows, including zero in both), or 'changed'."
+        ),
+    )
+    current_daily_cost: float = Field(
+        default=0.0, description="current_cost divided by the number of days in the current window (USD/day)."
+    )
+    baseline_daily_cost: float = Field(
+        default=0.0, description="baseline_cost divided by the number of days in the baseline window (USD/day)."
+    )
+    daily_change: float = Field(
+        default=0.0,
+        description=(
+            "current_daily_cost - baseline_daily_cost (USD/day). Use this instead of `change` "
+            "when the two windows differ in length."
+        ),
+    )
+    normalized_pct_change: float | None = Field(
+        default=None,
+        description=(
+            "Percent change between the per-day costs, so periods of unequal length are "
+            "comparable. Equals pct_change when both windows are the same length. Null when "
+            "baseline_daily_cost is 0."
+        ),
     )
 
 
@@ -1449,7 +1564,8 @@ class CostComparisonResponse(BaseToolResponse):
         description=(
             "Diff rows sorted by absolute change descending, capped at top_n. "
             "Each row contains the requested dimension values plus current_cost, "
-            "baseline_cost, change, pct_change, and is_new."
+            "baseline_cost, change, pct_change, row_status, and the per-day figures "
+            "(current_daily_cost, baseline_daily_cost, daily_change, normalized_pct_change)."
         ),
     )
     truncated: bool = Field(
@@ -1459,6 +1575,13 @@ class CostComparisonResponse(BaseToolResponse):
     warnings: list[str] = Field(
         default_factory=list,
         description="Non-fatal warnings about this comparison (e.g. unequal period lengths).",
+    )
+    notes: list[str] = Field(
+        default_factory=list,
+        description=(
+            "How to read these numbers — idle-cost handling and, when present, what the "
+            "__unallocated__ rows represent. Not problems with the comparison; see warnings for those."
+        ),
     )
 
 
@@ -1772,7 +1895,10 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
         WHAT: Fetches allocation data for current_window and baseline_window separately, aggregates
         each by the chosen dimension(s), and returns a per-dimension diff (current_cost, baseline_cost,
-        change, pct_change) sorted by absolute change descending.
+        change, pct_change, row_status) sorted by absolute change descending. Each row also carries
+        per-day figures (current_daily_cost, baseline_daily_cost, daily_change, normalized_pct_change)
+        — use those whenever the two windows differ in length, since a 31-day month costs more than a
+        30-day one at identical daily spend.
 
         WHEN TO USE: Investigating "why did costs change" or "what spiked." Once you've identified the
         responsible dimension, drill into get_container_savings_recommendations, get_abandoned_workloads,
@@ -1788,6 +1914,10 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         aliases ("lastweek", "lastmonth") and bare relative windows ("7d", "today", "week", "month") are
         rejected — use explicit dates. Windows may differ in length; a warning is added to the response
         when they do.
+
+        IDLE: Idle (unused but provisioned) capacity is shared proportionally into every row, so the
+        rows never sum to a separate idle line. Cost with no value for a requested dimension is
+        grouped under __unallocated__ and explained in the response notes.
 
         """
         current_days, baseline_days = _validate_comparison_windows(current_window, baseline_window)
@@ -1849,7 +1979,15 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         current_aggregated = _aggregate_by_dimensions(current_rows, dimension_cols) if current_rows else []
         baseline_aggregated = _aggregate_by_dimensions(baseline_rows, dimension_cols) if baseline_rows else []
 
-        diffed = _diff_allocation_rows(current_aggregated, baseline_aggregated, dimension_cols)
+        current_span_days = _window_days(resolved_current_window, current_days)
+        baseline_span_days = _window_days(resolved_baseline_window, baseline_days)
+        diffed = _diff_allocation_rows(
+            current_aggregated,
+            baseline_aggregated,
+            dimension_cols,
+            current_days=current_span_days,
+            baseline_days=baseline_span_days,
+        )
 
         total_current = sum(float(r.get("current_cost", 0) or 0) for r in diffed)
         total_baseline = sum(float(r.get("baseline_cost", 0) or 0) for r in diffed)
@@ -1864,8 +2002,14 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         response_warnings: list[str] = []
         if current_days is not None and baseline_days is not None and current_days != baseline_days:
             response_warnings.append(
-                f"The comparison periods have a different number of days: ({current_days} vs {baseline_days})."
+                f"The comparison periods have a different number of days: ({current_days} vs {baseline_days}). "
+                "Compare daily_change and normalized_pct_change rather than change and pct_change."
             )
+
+        response_notes: list[str] = [_IDLE_SHARED_NOTE]
+        unallocated_note = _unallocated_note(diffed, dimension_cols)
+        if unallocated_note:
+            response_notes.append(unallocated_note)
 
         return CostComparisonResponse(
             status=QueryStatus.OK,
@@ -1891,6 +2035,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             rows=[CostComparisonRow.model_validate(r) for r in diffed[:top_n]],
             truncated=truncated,
             warnings=response_warnings,
+            notes=response_notes,
         )
 
     @mcp.tool(
@@ -2765,7 +2910,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
         data = raw if isinstance(raw, dict) else {}
         volumes, was_capped = _cap_raw_rows(data.get("volumes", []), "unclaimed volume")
-        total_monthly_cost_api = round(float(data.get("monthlyCost", 0.0) or 0.0), 2)
+        total_monthly_cost_api = round(_float_field(data, "monthlyCost"), 2)
 
         filtered = [v for v in volumes if float(v.get("monthlyCost", 0.0) or 0.0) >= min_monthly_cost]
         filtered.sort(key=lambda v: float(v.get("monthlyCost", 0.0) or 0.0), reverse=True)
@@ -3125,7 +3270,9 @@ baseline_window, and aggregate.
 
 Then present:
 1. A 2-3 bullet Executive Summary highlighting the biggest movers (largest absolute change).
-2. A summary table sorted by change descending, calling out any `is_new` dimensions.
+2. A summary table sorted by change descending, calling out any dimension whose `row_status`
+   is `new` or `removed`. When the response warns that the periods differ in length, quote
+   `daily_change` and `normalized_pct_change` instead of `change` and `pct_change`.
 3. Based on which dimension changed most, suggest the matching drill-down tool:
    - Container/pod-level increase → `get_container_savings_recommendations`
    - Idle/dormant workload appeared → `get_abandoned_workloads`
@@ -3244,13 +3391,18 @@ async def _fetch_allocation(
     accumulate: bool,
     limit: int,
 ) -> dict[str, Any]:
-    """Fetch allocation data via the shared API wrapper."""
+    """Fetch allocation data via the shared API wrapper.
+
+    ``shareIdle`` distributes idle cost across the returned rows, so no separate
+    ``__idle__`` row is produced. ``splitIdle`` — which only controls how a
+    *standalone* idle row is broken up — is therefore not sent; alongside
+    ``shareIdle`` it is a no-op.
+    """
     params: dict[str, Any] = {
         "window": to_api_window(window),
         "aggregate": aggregate,
         "accumulate": str(accumulate).lower(),
         "idle": "true",
-        "splitIdle": "true",
         "shareIdle": "true",
         "sortBy": "totalCost",
         "sortByOrder": "desc",
@@ -3283,7 +3435,9 @@ async def _fetch_abandoned_workloads(
         return result
     # Defensive: handle unexpected dict wrapper
     if isinstance(result, dict):
-        return result.get("data", result.get("workloads", []))
+        wrapped_rows = result.get("data", result.get("workloads", []))
+        if isinstance(wrapped_rows, list):
+            return [row for row in wrapped_rows if isinstance(row, dict)]
     return []
 
 

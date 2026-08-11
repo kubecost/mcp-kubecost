@@ -1,6 +1,6 @@
 [project]
 name = "mcp-kubecost"
-version = "0.4.9"
+version = "0.4.13"
 description = "FinOps-first MCP server for Kubecost analytics."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -8,13 +8,21 @@ dependencies = [
   "fastmcp>=3.4.7",
   "httpx>=0.28.1",
   "python-dotenv>=1.2.2",
-  "opentelemetry-distro[otlp]",
-  "opentelemetry-instrumentation-httpx",
-  "opentelemetry-instrumentation-starlette",
 ]
 
 [project.optional-dependencies]
+# Tracing is opt-in: the Docker image installs this extra, plain installs do not.
+# The 0.x "b0" versions are not a maturity signal — OpenTelemetry Python versions
+# every instrumentation package on a permanent prerelease track (see its
+# RELEASING.md), and stable opentelemetry-sdk itself pins
+# opentelemetry-semantic-conventions==0.65b0. There is no non-beta alternative.
+otel = [
+  "opentelemetry-distro[otlp]>=0.65b0",
+  "opentelemetry-instrumentation-httpx>=0.65b0",
+  "opentelemetry-instrumentation-starlette>=0.65b0",
+]
 dev = [
+  "pyrefly>=1.2.0",
   "pytest",
   "pytest-asyncio",
   "pytest-cov",
@@ -60,15 +68,23 @@ combine-as-imports = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-ignore = []
 
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
 
+# Pyrefly is the project's type checker — the one CI and agents run.
+[tool.pyrefly]
+project-includes = ["src", "tests"]
+search-path = ["src"]
+python-version = "3.12"
+
+
+# basedpyright here for for IDEs without Pyrefly language-server support. Not an enforced gate;
+# if the two ever disagree, Pyrefly wins.
 [tool.basedpyright]
+typeCheckingMode = "basic"
 reportUnknownVariableType = "none"
 reportAny = "none"
 reportExplicitAny = "none"
-typeCheckingMode = "basic"
 reportAttributeAccessIssue = "none"

@@ -856,7 +856,7 @@ class TestDiffAllocationRows:
         assert row["namespace"] == "new-ns"
         assert row["current_cost"] == 50.0
         assert row["baseline_cost"] == 0
-        assert row["is_new"] is True
+        assert row["row_status"] == "new"
         assert row["pct_change"] is None
 
     def test_dimension_dropped_in_baseline_only(self):
@@ -869,7 +869,7 @@ class TestDiffAllocationRows:
         assert row["current_cost"] == 0
         assert row["baseline_cost"] == 30.0
         assert row["change"] == -30.0
-        assert row["is_new"] is False
+        assert row["row_status"] == "removed"
 
     def test_normal_increase(self):
         current = [{"namespace": "ns-a", "totalCost": 120.0}]
@@ -878,7 +878,7 @@ class TestDiffAllocationRows:
         row = result[0]
         assert row["change"] == 20.0
         assert row["pct_change"] == 20.0
-        assert row["is_new"] is False
+        assert row["row_status"] == "changed"
 
     def test_normal_decrease(self):
         current = [{"namespace": "ns-a", "totalCost": 80.0}]
@@ -894,7 +894,24 @@ class TestDiffAllocationRows:
         result = _diff_allocation_rows(current, baseline, ["namespace"])
         row = result[0]
         assert row["pct_change"] is None
-        assert row["is_new"] is True
+        assert row["row_status"] == "new"
+
+    def test_zero_in_both_windows_is_not_new(self):
+        """A dimension that cost nothing in either window has not appeared."""
+        current = [{"namespace": "ns-a", "totalCost": 0.0}]
+        baseline = [{"namespace": "ns-a", "totalCost": 0.0}]
+        result = _diff_allocation_rows(current, baseline, ["namespace"])
+        row = result[0]
+        assert row["row_status"] == "unchanged"
+        assert row["pct_change"] is None
+        assert row["normalized_pct_change"] is None
+
+    def test_identical_nonzero_cost_is_unchanged(self):
+        current = [{"namespace": "ns-a", "totalCost": 100.0}]
+        baseline = [{"namespace": "ns-a", "totalCost": 100.0}]
+        result = _diff_allocation_rows(current, baseline, ["namespace"])
+        assert result[0]["row_status"] == "unchanged"
+        assert result[0]["pct_change"] == 0.0
 
     def test_sorted_by_absolute_change_desc(self):
         current = [
@@ -908,6 +925,46 @@ class TestDiffAllocationRows:
         result = _diff_allocation_rows(current, baseline, ["namespace"])
         assert result[0]["namespace"] == "big-drop"
         assert result[1]["namespace"] == "small-change"
+
+
+class TestDiffAllocationRowsNormalization:
+    """Per-day figures make windows of unequal length comparable."""
+
+    def test_equal_length_windows_normalize_to_the_same_pct(self):
+        current = [{"namespace": "ns-a", "totalCost": 120.0}]
+        baseline = [{"namespace": "ns-a", "totalCost": 100.0}]
+        row = _diff_allocation_rows(current, baseline, ["namespace"], current_days=7, baseline_days=7)[0]
+        assert row["normalized_pct_change"] == row["pct_change"] == 20.0
+        # Per-day costs round to 2dp like every other cost field in the response.
+        assert row["current_daily_cost"] == pytest.approx(120.0 / 7, abs=0.005)
+        assert row["baseline_daily_cost"] == pytest.approx(100.0 / 7, abs=0.005)
+
+    def test_longer_month_at_identical_daily_spend_is_flat(self):
+        """31 days at $10/day vs 30 days at $10/day is a $10 rise but no real change."""
+        current = [{"namespace": "ns-a", "totalCost": 310.0}]
+        baseline = [{"namespace": "ns-a", "totalCost": 300.0}]
+        row = _diff_allocation_rows(current, baseline, ["namespace"], current_days=31, baseline_days=30)[0]
+        assert row["change"] == 10.0
+        assert row["pct_change"] == pytest.approx(3.33, abs=0.01)
+        assert row["daily_change"] == 0
+        assert row["normalized_pct_change"] == 0.0
+
+    def test_shorter_period_hides_a_real_increase(self):
+        """A 30-day period costing the same as a 31-day one is a genuine daily rise."""
+        current = [{"namespace": "ns-a", "totalCost": 300.0}]
+        baseline = [{"namespace": "ns-a", "totalCost": 300.0}]
+        row = _diff_allocation_rows(current, baseline, ["namespace"], current_days=30, baseline_days=31)[0]
+        assert row["change"] == 0
+        assert row["pct_change"] == 0.0
+        assert row["normalized_pct_change"] == pytest.approx(3.33, abs=0.01)
+
+    def test_zero_day_window_does_not_divide_by_zero(self):
+        current = [{"namespace": "ns-a", "totalCost": 50.0}]
+        baseline = [{"namespace": "ns-a", "totalCost": 25.0}]
+        row = _diff_allocation_rows(current, baseline, ["namespace"], current_days=0, baseline_days=0)[0]
+        assert row["current_daily_cost"] == 0
+        assert row["baseline_daily_cost"] == 0
+        assert row["normalized_pct_change"] is None
 
 
 # ── get_kubecost_cost_comparison (Task 3, end-to-end) ────────────────────────
@@ -1030,6 +1087,62 @@ class TestGetKubecostCostComparison:
         assert any("7" in w and "5" in w for w in warnings), (
             f"Warning should mention the actual day counts (7 vs 5), got warnings={warnings!r}"
         )
+
+
+class TestCostComparisonNotes:
+    """The response explains its own idle and __unallocated__ semantics."""
+
+    @staticmethod
+    async def _run(httpx_mock: HTTPXMock, mcp_app, current: dict, baseline: dict) -> dict:
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json=current)
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json=baseline)
+        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        result = await tool.run(
+            {
+                "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
+                "baseline_window": "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z",
+                "aggregate": "namespace",
+            }
+        )
+        return _sc(result)
+
+    @pytest.mark.asyncio
+    async def test_idle_sharing_is_always_explained(self, httpx_mock: HTTPXMock, mcp_app):
+        sc = await self._run(
+            httpx_mock,
+            mcp_app,
+            _comparison_allocation_response("ns-a", 200.0),
+            _comparison_allocation_response("ns-a", 50.0),
+        )
+        notes = sc.get("notes", [])
+        assert any("Idle" in n and "distributed" in n for n in notes), (
+            f"Expected an idle-sharing note, got notes={notes!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_unallocated_note_absent_when_no_such_row(self, httpx_mock: HTTPXMock, mcp_app):
+        sc = await self._run(
+            httpx_mock,
+            mcp_app,
+            _comparison_allocation_response("ns-a", 200.0),
+            _comparison_allocation_response("ns-a", 50.0),
+        )
+        assert not any("__unallocated__" in n for n in sc.get("notes", []))
+
+    @pytest.mark.asyncio
+    async def test_unallocated_note_names_dimension_and_amount(self, httpx_mock: HTTPXMock, mcp_app):
+        sc = await self._run(
+            httpx_mock,
+            mcp_app,
+            _comparison_allocation_response("__unallocated__", 125.33),
+            _comparison_allocation_response("__unallocated__", 100.0),
+        )
+        notes = sc.get("notes", [])
+        unallocated = [n for n in notes if "__unallocated__" in n]
+        assert unallocated, f"Expected an __unallocated__ note, got notes={notes!r}"
+        assert "'namespace'" in unallocated[0]
+        assert "125.33" in unallocated[0]
+        assert "100.00" in unallocated[0]
 
 
 # ── _default_wow_windows ──────────────────────────────────────────────────────

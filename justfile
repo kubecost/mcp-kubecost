@@ -37,8 +37,6 @@ docker-build-run:
     docker run --rm \
       --name mcp-kubecost \
       -p 3030:3030 \
-      -e USE_CAC_VIEWS=true \
-      -e FASTMCP_LOG_LEVEL=debug \
       -e KUBECOST_BASE_URL=http://host.docker.internal:9090  \
       mcp-kubecost
 

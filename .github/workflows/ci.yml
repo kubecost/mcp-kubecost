@@ -18,6 +18,8 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: uv sync --extra dev
+      - name: Type check
+        run: uv run pyrefly check
       - name: Tests
         env:
           KUBECOST_BASE_URL: https://demo.kubecost.xyz

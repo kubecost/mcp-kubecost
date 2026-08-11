@@ -269,8 +269,8 @@ def build_result_interpretation(
     ]
 
     preset = params.get("preset")
-    q_cpu = params.get("q_cpu", DEFAULT_SIZING_PARAMS["q_cpu"])
-    q_ram = params.get("q_ram", DEFAULT_SIZING_PARAMS["q_ram"])
+    q_cpu = float(params.get("q_cpu") or DEFAULT_SIZING_PARAMS["q_cpu"])
+    q_ram = float(params.get("q_ram") or DEFAULT_SIZING_PARAMS["q_ram"])
     window = params.get("window", DEFAULT_SIZING_PARAMS["window"])
     algorithm_cpu = params.get("algorithm_cpu", DEFAULT_SIZING_PARAMS["algorithm_cpu"])
     algorithm_ram = params.get("algorithm_ram", DEFAULT_SIZING_PARAMS["algorithm_ram"])
