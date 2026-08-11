@@ -6,10 +6,11 @@ import re
 from typing import Any
 from unittest.mock import patch
 
+import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-from mcp_kubecost.client import KubecostClientError, _build_params, get
+from mcp_kubecost.client import KubecostClientError, _build_params, get, post
 from mcp_kubecost.config.settings import Settings
 from mcp_kubecost.errors import ErrorCode
 
@@ -73,6 +74,7 @@ _BASE_SETTINGS: dict[str, Any] = dict(
     kubecost_base_url="http://localhost:9090",
     kubecost_api_base_path="/model",
     KUBECOST_API_KEY=None,
+    require_client_api_key=False,
     ssl_verify=True,
     request_timeout_seconds=15.0,
     retry_count=2,
@@ -157,3 +159,115 @@ async def test_get_omits_view_id_when_cac_views_disabled(httpx_mock: HTTPXMock):
     request = httpx_mock.get_request()
     assert request is not None
     assert "viewId" not in str(request.url)
+
+
+# ---------------------------------------------------------------------------
+# Integration: the API key travels as an X-API-KEY header
+# ---------------------------------------------------------------------------
+
+
+def _auth_settings(**overrides: Any) -> Settings:
+    """Settings for the auth path; overrides apply on top of the base dict."""
+    merged: dict[str, Any] = {**_BASE_SETTINGS, "use_cac_views": False, **overrides}
+    return Settings(**merged)
+
+
+async def _get_with(headers: dict[str, str], settings: Settings) -> Any:
+    """Run a GET with a stubbed inbound header set and stubbed settings."""
+    with (
+        patch("mcp_kubecost.auth.get_http_headers", return_value=headers),
+        patch("mcp_kubecost.auth.get_settings", return_value=settings),
+        patch("mcp_kubecost.client.get_settings", return_value=settings),
+    ):
+        return await get("/model/allocation")
+
+
+def _stub_allocation(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=re.compile(r"http://localhost:9090/model/allocation"),
+        json={"data": []},
+    )
+
+
+def _sent_headers(httpx_mock: HTTPXMock) -> httpx.Headers:
+    """Headers of the request that actually went out."""
+    request = httpx_mock.get_request()
+    assert request is not None
+    return request.headers
+
+
+@pytest.mark.asyncio
+async def test_env_api_key_is_sent_as_x_api_key_header(httpx_mock: HTTPXMock):
+    """KUBECOST_API_KEY goes out as X-API-KEY, never as Basic auth."""
+    _stub_allocation(httpx_mock)
+    await _get_with({}, _auth_settings(KUBECOST_API_KEY="env-key"))
+
+    headers = _sent_headers(httpx_mock)
+    assert headers["X-API-KEY"] == "env-key"
+    assert "authorization" not in headers
+
+
+@pytest.mark.asyncio
+async def test_client_header_overrides_env_api_key(httpx_mock: HTTPXMock):
+    _stub_allocation(httpx_mock)
+    await _get_with({"x-api-key": "caller-key"}, _auth_settings(KUBECOST_API_KEY="env-key"))
+
+    assert _sent_headers(httpx_mock)["X-API-KEY"] == "caller-key"
+
+
+@pytest.mark.asyncio
+async def test_client_header_used_when_no_env_key(httpx_mock: HTTPXMock):
+    _stub_allocation(httpx_mock)
+    await _get_with({"x-api-key": "caller-key"}, _auth_settings())
+
+    assert _sent_headers(httpx_mock)["X-API-KEY"] == "caller-key"
+
+
+@pytest.mark.asyncio
+async def test_no_key_anywhere_sends_no_auth_header(httpx_mock: HTTPXMock):
+    """The unconfigured default: an unauthenticated request, as before."""
+    _stub_allocation(httpx_mock)
+    await _get_with({}, _auth_settings())
+
+    headers = _sent_headers(httpx_mock)
+    assert "x-api-key" not in headers
+    assert "authorization" not in headers
+
+
+@pytest.mark.asyncio
+async def test_blank_client_header_falls_back_to_env_key(httpx_mock: HTTPXMock):
+    _stub_allocation(httpx_mock)
+    await _get_with({"x-api-key": "   "}, _auth_settings(KUBECOST_API_KEY="env-key"))
+
+    assert _sent_headers(httpx_mock)["X-API-KEY"] == "env-key"
+
+
+# ---------------------------------------------------------------------------
+# post() requires a key from either source
+# ---------------------------------------------------------------------------
+
+
+async def _post_with(headers: dict[str, str], settings: Settings) -> Any:
+    with (
+        patch("mcp_kubecost.auth.get_http_headers", return_value=headers),
+        patch("mcp_kubecost.auth.get_settings", return_value=settings),
+        patch("mcp_kubecost.client.get_settings", return_value=settings),
+    ):
+        return await post("/model/snooze", json={"id": 1})
+
+
+@pytest.mark.asyncio
+async def test_post_accepts_client_supplied_key(httpx_mock: HTTPXMock):
+    """A caller-supplied key satisfies post()'s auth requirement."""
+    httpx_mock.add_response(method="POST", url=re.compile(r"http://localhost:9090/model/snooze"), json={"ok": True})
+    await _post_with({"x-api-key": "caller-key"}, _auth_settings())
+
+    assert _sent_headers(httpx_mock)["X-API-KEY"] == "caller-key"
+
+
+@pytest.mark.asyncio
+async def test_post_raises_when_no_key_available():
+    """_common.py matches on this message prefix, so it must not drift."""
+    with pytest.raises(ValueError, match="^No authentication configured"):
+        await _post_with({}, _auth_settings())

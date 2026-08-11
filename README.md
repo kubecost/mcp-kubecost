@@ -7,6 +7,7 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
   - [Cost Visibility](#cost-visibility)
   - [Savings Opportunities](#savings-opportunities)
 - [Tools](#tools)
+- [Authentication to Kubecost](#authentication-to-kubecost)
 - [Telemetry (OpenTelemetry)](#telemetry-opentelemetry)
   - [Current behavior (FastMCP 3.4.x)](#current-behavior-fastmcp-34x)
   - [FastMCP 4.0 (when GA)](#fastmcp-40-when-ga)
@@ -70,6 +71,21 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
 | `explore_abandoned_workloads` | Start a guided abandoned-workload investigation. Walks the user through threshold and scope choices. |
 | `optimization` | Guidance for rightsizing resources and diagnosing Kubernetes cost anomalies. |
 | `kubecost_cost_allocation` | Guidance for investigating Kubernetes cluster costs and container allocation. |
+
+## Authentication to Kubecost
+
+By default, the server calls Kubecost unauthenticated. This is fine for testing or when another layer of authentication is in place.
+
+Kubecost Enterprise can be configured with SAML/OIDC authentication. When enabled, the MCP server will require an API key to be sent in the `X-API-KEY` request header or the `KUBECOST_API_KEY` environment variable.
+
+The API key is sent to Kubecost as an `X-API-KEY` request header. Two sources feed it, header first:
+
+| Source | Scope |
+|--------|-------|
+| `X-API-KEY` header on the incoming MCP request | Per request — HTTP transport only |
+| `KUBECOST_API_KEY` environment variable | Process-wide fallback |
+
+Set `REQUIRE_CLIENT_API_KEY=true` to reject HTTP requests that arrive without the header. The check runs before the environment fallback, so a configured `KUBECOST_API_KEY` will not satisfy it. STDIO runs are never gated, since a STDIO client has no way to send headers.
 
 ## Telemetry (OpenTelemetry)
 
