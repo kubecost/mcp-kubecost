@@ -62,11 +62,7 @@ def _call_tool(config_path: str, tool: str, payload: dict[str, Any]) -> dict[str
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        pytest.fail(
-            f"Could not parse {tool} output as JSON ({exc}). ToonMiddleware rewrites the response body to "
-            f"TOON unless TOON_ENABLED=false — check the env block in {config_path}.\n"
-            f"stdout was:\n{result.stdout[:500]}"
-        )
+        pytest.fail(f"Could not parse {tool} output as JSON ({exc}).\nstdout was:\n{result.stdout[:500]}")
 
 
 @pytest.fixture(scope="module")
@@ -281,3 +277,43 @@ class TestIntegrationGetAbandonedWorkloads:
         # Default limit is 20 — message should reflect a bounded workload count
         if '"ok"' in output:
             assert re.search(r"Found \d+ abandoned workload", output), f"Expected workload count in output:\n{output}"
+
+
+_RFC3339_RANGE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T00:00:00Z,\d{4}-\d{2}-\d{2}T00:00:00Z$")
+
+
+class TestIntegrationGetKubecostCostComparison:
+    def test_defaults_to_week_over_week(self, mcp_config_path):
+        """Calling with no args should compute RFC3339 week-over-week defaults and return ok or empty."""
+        result = _fastmcp("call", mcp_config_path, "get_kubecost_cost_comparison", "--input-json", "{}")
+        assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
+        response = json.loads(result.stdout)
+        assert response.get("status") in {"ok", "empty"}, f"Unexpected status: {response.get('status')}"
+        # Defaults must be concrete RFC3339 date ranges, not a named alias
+        assert _RFC3339_RANGE_RE.match(response.get("current_window", "")), (
+            f"current_window should be an RFC3339 range, got: {response.get('current_window')}"
+        )
+        assert _RFC3339_RANGE_RE.match(response.get("baseline_window", "")), (
+            f"baseline_window should be an RFC3339 range, got: {response.get('baseline_window')}"
+        )
+        # The two windows must be exactly 7 days each and contiguous
+        cur_start, cur_end = response["current_window"].split(",")
+        base_start, base_end = response["baseline_window"].split(",")
+        assert base_end == cur_start, "baseline_window must end where current_window begins (contiguous weeks)"
+        cur_days = (date.fromisoformat(cur_end[:10]) - date.fromisoformat(cur_start[:10])).days
+        base_days = (date.fromisoformat(base_end[:10]) - date.fromisoformat(base_start[:10])).days
+        assert cur_days == 7, f"current_window should span 7 days, got {cur_days}"
+        assert base_days == 7, f"baseline_window should span 7 days, got {base_days}"
+
+    def test_response_shape(self, mcp_config_path):
+        """Response must include rows, row_count, and window echo fields."""
+        result = _fastmcp("call", mcp_config_path, "get_kubecost_cost_comparison", "--input-json", "{}")
+        assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
+        response = json.loads(result.stdout)
+        if response.get("status") == "empty":
+            pytest.skip("No comparison data available on this cluster.")
+        assert "rows" in response
+        assert "row_count" in response
+        assert response["row_count"] >= len(response["rows"])
+        assert len(response["rows"]) <= 20
+        assert response["truncated"] is (response["row_count"] > len(response["rows"]))

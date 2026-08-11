@@ -18,8 +18,6 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from mcp_kubecost.config.settings import get_settings
-from mcp_kubecost.middleware import ToonMiddleware
-from mcp_kubecost.middleware.toon import is_toon_enabled
 from mcp_kubecost.skills import register_all_skills
 from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
 
@@ -58,8 +56,6 @@ def create_server(server_name) -> FastMCP:
     # Register skills (MCP prompts — IDE-agnostic workflow guidance)
     register_all_skills(mcp)
 
-    if is_toon_enabled():
-        mcp.add_middleware(ToonMiddleware())
     return mcp
 
 

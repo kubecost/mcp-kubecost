@@ -52,6 +52,20 @@ logger = logging.getLogger(__name__)
 
 _VERSION = "3.0"
 
+# ---------------------------------------------------------------------------
+# API path segments — combined with get_settings().kubecost_api_base_path at call time
+# ---------------------------------------------------------------------------
+
+_SEG_ALLOCATION = "/allocation"
+_SEG_CONTAINER_SAVINGS = "/savings/requestSizingV2"
+_SEG_ABANDONED_WORKLOADS = "/savings/abandonedWorkloads"
+_SEG_SAVINGS_OVERVIEW = "/savings"
+_SEG_PV_SIZING = "/savings/persistentVolumeSizing"
+_SEG_LOCAL_DISKS = "/savings/localLowDisks"
+_SEG_NODE_GROUP_SIZING = "/savings/nodeGroupSizing/recommendations"
+_SEG_UNCLAIMED_VOLUMES = "/savings/unclaimedVolumes"
+_SEG_RESOURCE_QUOTA = "/savings/resourceQuotaSizing/recommendations"
+
 
 def _read_only(title: str) -> ToolAnnotations:
     return ToolAnnotations(
@@ -159,6 +173,36 @@ _KNOWN_DIMENSIONS: list[str] = [
     "annotation",
 ]
 
+# Aggregate token prefixes whose values live in a nested properties sub-dict.
+_NESTED_DIMENSION_GROUPS: dict[str, str] = {
+    "label": "labels",
+    "annotation": "annotations",
+}
+
+
+def _dimension_columns_for_aggregate(aggregate: str) -> list[tuple[str, str | None]]:
+    """Split a Kubecost ``aggregate`` string into ordered (column, property_group) pairs.
+
+    The requested aggregate is the authoritative source of dimension names — the
+    response alone cannot be trusted, since synthetic entries (``__idle__``,
+    ``__unallocated__``) carry no usable ``properties``.
+
+    ``"cluster,namespace"`` -> ``[("cluster", None), ("namespace", None)]``
+    ``"label:app"``         -> ``[("app", "labels")]``, i.e. ``properties["labels"]["app"]``
+    """
+    columns: list[tuple[str, str | None]] = []
+    for token in aggregate.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        prefix, sep, key = token.partition(":")
+        group = _NESTED_DIMENSION_GROUPS.get(prefix) if sep else None
+        if group and key:
+            columns.append((key, group))
+        else:
+            columns.append((token, None))
+    return columns
+
 
 def _format_number(value: float) -> int | float:
     """Return an int if the value is whole, otherwise round to 2 decimal places."""
@@ -240,11 +284,18 @@ def _window_from_allocation(response: dict[str, Any], source_expression: str) ->
 
 def _parse_allocation_response(
     response: dict[str, Any],
+    aggregate: str = "",
 ) -> tuple[list[str], list[dict]]:
     """Parse a Kubecost allocation API response into (dimension_columns, rows).
 
-    Inspects ``properties`` of the first entry to discover dimensions; falls back
-    to splitting ``name`` by ``/`` when no known property keys are present.
+    Dimension names come from the requested ``aggregate`` when given. Without it,
+    they are discovered from the union of ``properties`` keys across all entries,
+    falling back to splitting ``name`` by ``/`` when no known property keys appear
+    anywhere.
+
+    Each row resolves a dimension from ``properties`` first, then from the entry's
+    ``name`` — so synthetic entries such as ``__idle__``, whose ``properties`` are
+    empty, still report their name instead of collapsing into a blank key.
     """
     data_list: list[dict] = response.get("data", [])
     if not data_list:
@@ -257,28 +308,39 @@ def _parse_allocation_response(
     if not all_entries:
         return [], []
 
-    first_props: dict = all_entries[0].get("properties", {})
-    dimension_cols = [k for k in _KNOWN_DIMENSIONS if k in first_props]
+    columns = _dimension_columns_for_aggregate(aggregate)
 
-    if not dimension_cols:
+    if not columns:
+        # No aggregate to go by: take every known dimension present on any entry.
+        seen_props: set[str] = set()
+        for entry in all_entries:
+            seen_props.update(entry.get("properties", {}))
+        columns = [(k, None) for k in _KNOWN_DIMENSIONS if k in seen_props]
+
+    if not columns:
         parts = all_entries[0].get("name", "").split("/")
-        dimension_cols = [f"dim_{i}" for i in range(len(parts))]
+        columns = [(f"dim_{i}", None) for i in range(len(parts))]
+
+    dimension_cols = [col for col, _ in columns]
 
     rows: list[dict] = []
     for entry in all_entries:
         row: dict = {}
         props = entry.get("properties", {})
+        name_parts = entry.get("name", "").split("/")
+        # Positional fallback only lines up when the name has one part per column.
+        positional = name_parts if len(name_parts) == len(columns) else []
 
-        if dimension_cols and not dimension_cols[0].startswith("dim_"):
-            for col in dimension_cols:
-                val = props.get(col, "")
-                if isinstance(val, list):
-                    val = "|".join(val)
-                row[col] = val
-        else:
-            parts = entry.get("name", "").split("/")
-            for i, col in enumerate(dimension_cols):
-                row[col] = parts[i] if i < len(parts) else ""
+        for i, (col, group) in enumerate(columns):
+            if group:
+                val = (props.get(group) or {}).get(col)
+            else:
+                val = props.get(col)
+            if val is None or val == "":
+                val = positional[i] if positional else ""
+            if isinstance(val, list):
+                val = "|".join(val)
+            row[col] = val
 
         window_dict = entry.get("window", {})
         row["window_start"] = _format_date(window_dict.get("start", ""))
@@ -361,20 +423,19 @@ def _aggregate_by_dimensions(rows: list[dict], dimension_cols: list[str]) -> lis
 # period-over-period comparisons since the partial day skews the diff.
 _BARE_RELATIVE_WINDOW = re.compile(r"^\d+d$")
 
-# Calendar-relative aliases that also resolve relative to "now" and therefore
-# include a partial current period.
-_REJECTED_RELATIVE_ALIASES: frozenset[str] = frozenset({"today", "week", "month"})
-
-# Fixed calendar-period aliases — safe to use for comparisons since they never
-# include the current (in-progress) period.
-_ACCEPTED_COMPARISON_ALIASES: frozenset[str] = frozenset({"lastweek", "lastmonth"})
+# All named/alias windows — both relative-to-now ones ('today', 'week', 'month') and
+# fixed-calendar ones ('lastweek', 'lastmonth') — are rejected. lastweek/lastmonth are
+# technically safe for a single-period fetch, but there is no Kubecost alias for
+# "the period before lastmonth", making them a dead end for comparisons. RFC3339
+# ranges are always explicit and unambiguous.
+_REJECTED_ALIASES: frozenset[str] = frozenset({"today", "week", "month", "lastweek", "lastmonth"})
 
 
 def _classify_comparison_window(window: str, field_name: str) -> tuple[str, Any]:
-    """Classify a comparison window as ('alias', name) or ('rfc3339', (start, end)).
+    """Classify a comparison window as ('rfc3339', (start, end)).
 
     Raises a structured ToolError for any window that is unsuitable for a
-    period-over-period comparison (see module docstring rules).
+    period-over-period comparison — only explicit RFC3339 ranges are accepted.
     """
     raw = (window or "").strip()
     lower = raw.lower()
@@ -388,26 +449,24 @@ def _classify_comparison_window(window: str, field_name: str) -> tuple[str, Any]
             ),
             retryable=False,
             suggested_action=(
-                f"Use 'lastweek' or 'lastmonth' for {field_name}, or an explicit RFC3339 range "
+                f"Use an explicit RFC3339 range for {field_name} "
                 "(e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z') that ends before today."
             ),
         )
 
-    if lower in _REJECTED_RELATIVE_ALIASES:
+    if lower in _REJECTED_ALIASES:
         raise_tool_error(
             ErrorCode.INVALID_INPUT,
             message=(
-                f"{field_name}='{window}' resolves relative to 'now' and includes a partial current period, "
-                "which skews a diff."
+                f"{field_name}='{window}' is a named alias. Named aliases are not accepted for comparisons "
+                "because there is no corresponding alias for the preceding period."
             ),
             retryable=False,
             suggested_action=(
-                f"Use 'lastweek' or 'lastmonth' for {field_name}, or an explicit RFC3339 range that ends before today."
+                f"Use an explicit RFC3339 range for {field_name} that ends before today, "
+                "e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z'."
             ),
         )
-
-    if lower in _ACCEPTED_COMPARISON_ALIASES:
-        return "alias", lower
 
     if "," in raw:
         parts = [p.strip() for p in raw.split(",")]
@@ -417,8 +476,7 @@ def _classify_comparison_window(window: str, field_name: str) -> tuple[str, Any]
                 message=f"{field_name}='{window}' is not a valid RFC3339 range. Expected 'start,end'.",
                 retryable=False,
                 suggested_action=(
-                    f"Provide {field_name} as 'lastweek', 'lastmonth', or an RFC3339 range "
-                    "e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z'."
+                    f"Provide {field_name} as an RFC3339 range e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z'."
                 ),
             )
         start_str, end_str = parts
@@ -431,8 +489,7 @@ def _classify_comparison_window(window: str, field_name: str) -> tuple[str, Any]
                 message=f"{field_name}='{window}' contains an invalid RFC3339 timestamp.",
                 retryable=False,
                 suggested_action=(
-                    f"Provide {field_name} as 'lastweek', 'lastmonth', or an RFC3339 range "
-                    "e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z'."
+                    f"Provide {field_name} as an RFC3339 range e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z'."
                 ),
             )
         if start.tzinfo is None:
@@ -464,68 +521,60 @@ def _classify_comparison_window(window: str, field_name: str) -> tuple[str, Any]
 
     raise_tool_error(
         ErrorCode.INVALID_INPUT,
-        message=(
-            f"{field_name}='{window}' is not a supported comparison window. Bare relative windows "
-            "('7d', 'today', 'week', 'month') are rejected because they include a partial current period."
-        ),
+        message=f"{field_name}='{window}' is not a valid comparison window.",
         retryable=False,
         suggested_action=(
-            f"Provide {field_name} as 'lastweek', 'lastmonth', or an RFC3339 range "
+            f"Provide {field_name} as an RFC3339 range ending before today, "
             "e.g. '2026-06-01T00:00:00Z,2026-06-08T00:00:00Z'."
         ),
     )
 
 
-def _validate_comparison_windows(current_window: str, baseline_window: str) -> None:
-    """Validate that current_window and baseline_window are comparable.
+def _validate_comparison_windows(current_window: str, baseline_window: str) -> tuple[int, int]:
+    """Validate that current_window and baseline_window are suitable for comparison.
 
     Enforces (raising a structured ToolError on any violation):
-    - Neither window may be a bare relative window ('Nd', 'today', 'week', 'month').
-    - Both windows must be the same 'type': either the identical fixed-calendar
-      alias ('lastweek'/'lastweek' or 'lastmonth'/'lastmonth'), or two RFC3339
-      ranges of identical duration.
+    - Neither window may be a named alias or bare relative window — only RFC3339 ranges
+      are accepted. Named aliases like 'lastweek'/'lastmonth' are rejected because
+      there is no corresponding alias for the preceding period.
     - RFC3339 ranges must not extend into today (partial data).
+
+    Unequal durations are NOT an error — the caller is responsible for adding a
+    warning in the response.
+
+    Returns (current_days, baseline_days) so callers can detect and warn on mismatches.
     """
-    current_kind, current_value = _classify_comparison_window(current_window, "current_window")
-    baseline_kind, baseline_value = _classify_comparison_window(baseline_window, "baseline_window")
+    _, current_value = _classify_comparison_window(current_window, "current_window")
+    _, baseline_value = _classify_comparison_window(baseline_window, "baseline_window")
 
-    if current_kind != baseline_kind:
-        raise_tool_error(
-            ErrorCode.INVALID_INPUT,
-            message=(
-                f"current_window and baseline_window must be the same type of window "
-                f"(got {current_kind}='{current_window}' vs {baseline_kind}='{baseline_window}')."
-            ),
-            retryable=False,
-            suggested_action=(
-                "Use matching aliases (e.g. both 'lastweek') or two RFC3339 ranges of equal duration for both windows."
-            ),
-        )
+    current_start, current_end = current_value
+    baseline_start, baseline_end = baseline_value
+    current_days = (current_end - current_start).days
+    baseline_days = (baseline_end - baseline_start).days
+    return current_days, baseline_days
 
-    if current_kind == "alias":
-        if current_value != baseline_value:
-            raise_tool_error(
-                ErrorCode.INVALID_INPUT,
-                message=(
-                    f"current_window='{current_window}' and baseline_window='{baseline_window}' are "
-                    "different calendar aliases and are not equal-length comparable periods."
-                ),
-                retryable=False,
-                suggested_action="Use the same alias for both windows, or switch to explicit RFC3339 ranges.",
-            )
-    else:
-        current_start, current_end = current_value
-        baseline_start, baseline_end = baseline_value
-        if (current_end - current_start) != (baseline_end - baseline_start):
-            raise_tool_error(
-                ErrorCode.INVALID_INPUT,
-                message=(
-                    f"current_window='{current_window}' and baseline_window='{baseline_window}' have "
-                    "different durations and cannot be diffed as equal-length periods."
-                ),
-                retryable=False,
-                suggested_action="Adjust one of the RFC3339 ranges so both windows span the same duration.",
-            )
+
+def _default_wow_windows() -> tuple[str, str]:
+    """Return (current_window, baseline_window) as RFC3339 ranges for a week-over-week comparison.
+
+    current_window  = the 7-day period ending at yesterday midnight UTC
+                      (yesterday-6 days 00:00Z → yesterday+1 00:00Z, i.e. today 00:00Z)
+    baseline_window = the 7-day period immediately before that
+
+    Both ranges end before today so they never include a partial in-progress day.
+    """
+    today = datetime.now(UTC).date()
+    yesterday = today - timedelta(days=1)
+    week_start = yesterday - timedelta(days=6)  # inclusive start of current_window
+    prev_start = week_start - timedelta(weeks=1)  # inclusive start of baseline_window
+
+    def _fmt(d) -> str:  # noqa: ANN001
+        return d.strftime("%Y-%m-%dT00:00:00Z")
+
+    # Ranges are [start, end) where end is the exclusive boundary (midnight of the day after)
+    current = f"{_fmt(week_start)},{_fmt(today)}"
+    baseline = f"{_fmt(prev_start)},{_fmt(week_start)}"
+    return current, baseline
 
 
 def _diff_allocation_rows(
@@ -1407,6 +1456,10 @@ class CostComparisonResponse(BaseToolResponse):
         default=False,
         description="True when the full diffed result set was larger than top_n.",
     )
+    warnings: list[str] = Field(
+        default_factory=list,
+        description="Non-fatal warnings about this comparison (e.g. unequal period lengths).",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1576,7 +1629,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         resolved_window = _window_from_allocation(response, window) or resolved_window
         window_display = resolved_window.display if resolved_window else window
 
-        dimension_cols, rows = _parse_allocation_response(response)
+        dimension_cols, rows = _parse_allocation_response(response, aggregate)
         if not rows:
             return KubecostAllocationResponse(
                 status=QueryStatus.EMPTY,
@@ -1656,6 +1709,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             truncated=truncated,
         )
 
+    _default_current_window, _default_baseline_window = _default_wow_windows()
+
     @mcp.tool(
         version=_VERSION,
         annotations=ToolAnnotations(
@@ -1671,23 +1726,25 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             str,
             Field(
                 description=(
-                    "The more recent period to inspect. Accepts 'lastweek', 'lastmonth', or an "
-                    "explicit RFC3339 range 'start,end' that ends before today (UTC). Bare relative "
-                    "windows ('7d', 'today', 'week', 'month') are REJECTED because they include a "
-                    "partial current period."
-                )
+                    "The more recent period to inspect. Must be an RFC3339 range 'start,end' that ends "
+                    "before today (UTC). Named aliases ('lastweek', 'lastmonth', '7d', etc.) are REJECTED "
+                    "— use explicit dates. Defaults to the 7-day rolling window ending yesterday (UTC)."
+                ),
+                examples=["2026-07-14T00:00:00Z,2026-07-21T00:00:00Z"],
             ),
-        ],
+        ] = _default_current_window,
         baseline_window: Annotated[
             str,
             Field(
                 description=(
-                    "The prior period to compare against. Must be the SAME type as current_window: "
-                    "an identical alias ('lastweek' vs 'lastweek') or an RFC3339 range with the same "
-                    "duration as current_window."
-                )
+                    "The prior period to compare against. Must be an RFC3339 range ending before today "
+                    "(UTC). Periods of different lengths are allowed — a warning will be included in the "
+                    "response. Defaults to the 7-day period immediately before the default current_window, "
+                    "giving a rolling week-over-week comparison."
+                ),
+                examples=["2026-07-07T00:00:00Z,2026-07-14T00:00:00Z"],
             ),
-        ],
+        ] = _default_baseline_window,
         aggregate: Annotated[
             str,
             Field(
@@ -1711,28 +1768,29 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             ),
         ] = 20,
     ) -> CostComparisonResponse:
-        """Compare Kubernetes cost allocation between two equal-length windows to find cost spikes.
+        """Compare Kubernetes cost allocation between two time windows to find cost changes and spikes.
 
-        WHAT: Fetches allocation data for current_window and baseline_window separately,
-        aggregates each by the chosen dimension(s), and returns a per-dimension diff
-        (current_cost, baseline_cost, change, pct_change) sorted by absolute change
-        descending. This is the anomaly-investigation entry point.
+        WHAT: Fetches allocation data for current_window and baseline_window separately, aggregates
+        each by the chosen dimension(s), and returns a per-dimension diff (current_cost, baseline_cost,
+        change, pct_change) sorted by absolute change descending.
 
-        WHEN TO USE: Run this FIRST when investigating "why did costs change" or "what
-        spiked" questions. Run this first to find which dimension changed the most,
-        then drill into get_container_savings_recommendations, get_abandoned_workloads,
+        WHEN TO USE: Investigating "why did costs change" or "what spiked." Once you've identified the
+        responsible dimension, drill into get_container_savings_recommendations, get_abandoned_workloads,
         or get_cluster_rightsizing_recommendations for that dimension.
 
-        WHEN NOT TO USE: For a single-period cost snapshot (no comparison), use
-        get_kubecost_workload_costs instead.
+        WHEN NOT TO USE: For a single-period snapshot with no comparison, use get_kubecost_workload_costs
+        instead.
 
-        Window rules (enforced): current_window and baseline_window must both be
-        'lastweek', both be 'lastmonth', or both be RFC3339 ranges of identical
-        duration ending before today. Bare relative windows ('7d', 'today', 'week',
-        'month') are rejected since Kubecost resolves them relative to 'now' and
-        they would include partial, in-progress data.
+        DEFAULTS: Omitting both window parameters performs a rolling week-over-week comparison (the 7
+        days ending yesterday vs. the 7 days before that); the current in-progress day is never included.
+
+        WINDOW RULES (enforced): Both windows must be explicit RFC3339 ranges ending before today. Named
+        aliases ("lastweek", "lastmonth") and bare relative windows ("7d", "today", "week", "month") are
+        rejected — use explicit dates. Windows may differ in length; a warning is added to the response
+        when they do.
+
         """
-        _validate_comparison_windows(current_window, baseline_window)
+        current_days, baseline_days = _validate_comparison_windows(current_window, baseline_window)
         resolved_current_window = _resolve_window_defensively(current_window)
         resolved_baseline_window = _resolve_window_defensively(baseline_window)
         current_display = resolved_current_window.display if resolved_current_window else current_window
@@ -1771,8 +1829,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         current_display = resolved_current_window.display if resolved_current_window else current_window
         baseline_display = resolved_baseline_window.display if resolved_baseline_window else baseline_window
 
-        current_dims, current_rows = _parse_allocation_response(current_response)
-        baseline_dims, baseline_rows = _parse_allocation_response(baseline_response)
+        current_dims, current_rows = _parse_allocation_response(current_response, aggregate)
+        baseline_dims, baseline_rows = _parse_allocation_response(baseline_response, aggregate)
         dimension_cols = current_dims or baseline_dims
 
         if not current_rows and not baseline_rows:
@@ -1803,6 +1861,12 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             dim_desc = ", ".join(f"{dim}={top_mover.get(dim, '')}" for dim in dimension_cols)
             top_mover_desc = f" Biggest mover: {dim_desc} (change ${top_mover.get('change', 0):,.2f})."
 
+        response_warnings: list[str] = []
+        if current_days is not None and baseline_days is not None and current_days != baseline_days:
+            response_warnings.append(
+                f"The comparison periods have a different number of days: ({current_days} vs {baseline_days})."
+            )
+
         return CostComparisonResponse(
             status=QueryStatus.OK,
             message=(
@@ -1826,6 +1890,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             row_count=len(diffed),
             rows=[CostComparisonRow.model_validate(r) for r in diffed[:top_n]],
             truncated=truncated,
+            warnings=response_warnings,
         )
 
     @mcp.tool(
@@ -3037,20 +3102,16 @@ comparable periods, then compare them.
 
 ---
 
-**Step 1 — Pick two comparable periods**
-Both periods must be the SAME type and SAME length — this is enforced, not just advisory:
-  - **'lastweek' vs 'lastweek'** — compares the most recently completed calendar week
-    against itself run at different times (typically used with an explicit baseline
-    RFC3339 range instead — see below).
-  - **'lastmonth' vs 'lastmonth'** — same idea for calendar months.
-  - **Two explicit RFC3339 ranges of identical duration**, e.g.
-    current_window='2026-07-13T00:00:00Z,2026-07-20T00:00:00Z' and
-    baseline_window='2026-07-06T00:00:00Z,2026-07-13T00:00:00Z'. Both ranges must end
-    before today (UTC) — no partial/in-progress days.
+**Step 1 — Pick two periods**
+Both windows must be explicit RFC3339 ranges ending before today (UTC). Named aliases like
+'lastweek', 'lastmonth', '7d', etc. are not accepted — there is no alias for "the period
+before lastmonth", so aliases are a dead end for comparisons.
 
-Bare relative windows like '7d', 'today', 'week', or 'month' are REJECTED because Kubecost
-resolves them relative to 'now' and they always include a partial current day, which would
-skew the diff.
+Example (rolling week-over-week):
+  current_window='2026-07-13T00:00:00Z,2026-07-20T00:00:00Z'
+  baseline_window='2026-07-06T00:00:00Z,2026-07-13T00:00:00Z'
+
+Ranges of different lengths are allowed; a warning will appear in the response when they differ.
 
 ---
 
@@ -3172,7 +3233,7 @@ async def _fetch_request_sizing(
         "offset": 0,
         "limit": limit,
     }
-    path = get_settings().kubecost_container_savings_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_CONTAINER_SAVINGS}"
     logger.debug("Kubecost request sizing: path=%s window=%s", path, window)
     return await call_get_api(path, params=params)
 
@@ -3195,7 +3256,7 @@ async def _fetch_allocation(
         "sortByOrder": "desc",
         "limit": limit,
     }
-    path = get_settings().kubecost_base_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_ALLOCATION}"
     logger.debug("Kubecost allocation: path=%s window=%s", path, window)
     return await call_get_api(path, params=params)
 
@@ -3214,7 +3275,7 @@ async def _fetch_abandoned_workloads(
         "limit": limit,
         "filter": f'cluster:"{cluster}"' if cluster else "",
     }
-    path = get_settings().kubecost_abandoned_workloads_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_ABANDONED_WORKLOADS}"
     logger.debug("Kubecost abandoned workloads: path=%s days=%s threshold=%s", path, days, threshold)
     result = await call_get_api(path, params=params)
     # API returns a bare JSON array
@@ -3262,7 +3323,7 @@ def _parse_abandoned_workloads_response(raw: list[dict[str, Any]]) -> list[dict[
 
 async def _fetch_savings_overview() -> dict[str, Any]:
     """Fetch the savings overview from GET /model/savings."""
-    path = get_settings().kubecost_savings_overview_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_SAVINGS_OVERVIEW}"
     logger.debug("Kubecost savings overview: path=%s", path)
     result = await call_get_api(path, params={})
     # API returns { code, data, meta } — unwrap data
@@ -3279,7 +3340,7 @@ async def _fetch_pv_sizing(window: str, overhead_percent: int) -> dict[str, Any]
         "offset": 0,
         "limit": _SAVINGS_API_FETCH_LIMIT,
     }
-    path = get_settings().kubecost_pv_sizing_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_PV_SIZING}"
     logger.debug("Kubecost PV sizing: path=%s window=%s", path, window)
     result = await call_get_api(path, params=params)
     if isinstance(result, dict) and "data" in result:
@@ -3293,7 +3354,7 @@ async def _fetch_local_disks(window: str, overhead_percent: int) -> dict[str, An
         "window": to_api_window(window),
         "overheadPercent": overhead_percent,
     }
-    path = get_settings().kubecost_local_disks_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_LOCAL_DISKS}"
     logger.debug("Kubecost local disks: path=%s window=%s", path, window)
     result = await call_get_api(path, params=params)
     # API returns { unutilizedDisks: [...] } directly (no code/data wrapper)
@@ -3309,7 +3370,7 @@ async def _fetch_node_group_sizing(cluster: str, window: str, profile: str) -> d
         "window": to_api_window(window),
         "profile": profile,
     }
-    path = get_settings().kubecost_node_group_sizing_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_NODE_GROUP_SIZING}"
     logger.debug("Kubecost node group sizing: path=%s cluster=%s", path, cluster)
     result = await call_get_api(path, params=params)
     if isinstance(result, dict) and "data" in result:
@@ -3320,7 +3381,7 @@ async def _fetch_node_group_sizing(cluster: str, window: str, profile: str) -> d
 async def _fetch_unclaimed_volumes(window: str) -> dict[str, Any]:
     """Fetch unclaimed volumes; unwraps the { code, data } wrapper."""
     params: dict[str, Any] = {"window": to_api_window(window)}
-    path = get_settings().kubecost_unclaimed_volumes_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_UNCLAIMED_VOLUMES}"
     logger.debug("Kubecost unclaimed volumes: path=%s window=%s", path, window)
     result = await call_get_api(path, params=params)
     if isinstance(result, dict) and "data" in result:
@@ -3342,7 +3403,7 @@ async def _fetch_resource_quota_recommendations(
         "limit": limit,
         "offset": offset,
     }
-    path = get_settings().kubecost_resource_quota_path
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_RESOURCE_QUOTA}"
     logger.debug("Kubecost resource quota: path=%s window=%s", path, window)
     result = await call_get_api(path, params=params)
     if isinstance(result, dict) and "data" in result:

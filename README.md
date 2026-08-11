@@ -7,6 +7,9 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
   - [Cost Visibility](#cost-visibility)
   - [Savings Opportunities](#savings-opportunities)
 - [Tools](#tools)
+- [Telemetry (OpenTelemetry)](#telemetry-opentelemetry)
+  - [Current behavior (FastMCP 3.4.x)](#current-behavior-fastmcp-34x)
+  - [FastMCP 4.0 (when GA)](#fastmcp-40-when-ga)
 - [Quick Start](#quick-start)
 
 ## Who This Is For
@@ -67,6 +70,39 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
 | `explore_abandoned_workloads` | Start a guided abandoned-workload investigation. Walks the user through threshold and scope choices. |
 | `optimization` | Guidance for rightsizing resources and diagnosing Kubernetes cost anomalies. |
 | `kubecost_cost_allocation` | Guidance for investigating Kubernetes cluster costs and container allocation. |
+
+## Telemetry (OpenTelemetry)
+
+HTTP deployments can export traces via OpenTelemetry. The Docker image always includes the OTEL SDK and httpx/starlette auto-instrumentation; export is gated at runtime.
+
+### Current behavior (FastMCP 3.4.x)
+
+| Variable | Role |
+|----------|------|
+| `FASTMCP_TELEMETRY_MODE` | Process-wide switch. `off` (image default) runs bare `fastmcp`. Any other value (e.g. `native`) wraps the process with `opentelemetry-instrument`. |
+| `OTEL_SERVICE_NAME` | Service name on exported spans (image default: `mcp-kubecost`). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint. Required when telemetry is enabled (not set in the image). |
+
+When enabled, traces include FastMCP MCP operation spans (tools, prompts, resources) plus HTTP client/server spans from auto-instrumentation. Set these in your deployment ConfigMap / `.env` — see [`.env.example`](.env.example).
+
+> [!NOTE]
+> On FastMCP 3.4.x, `FASTMCP_TELEMETRY_MODE` is **not** read by FastMCP itself. This server reuses that name so the same env var will keep working after a FastMCP 4 upgrade. STDIO local runs are not wrapped unless you invoke `opentelemetry-instrument` yourself.
+
+### FastMCP 4.0 (when GA)
+
+FastMCP 4 introduces native `FASTMCP_TELEMETRY_MODE` semantics:
+
+| Mode | FastMCP MCP spans | Trace context in `_meta` |
+|------|-------------------|--------------------------|
+| `native` (default in FastMCP) | Emitted | Propagated |
+| `propagation_only` | Suppressed | Propagated (for external MCP-aware instrumentors) |
+| `off` | Suppressed | Untouched |
+
+After upgrading to FastMCP 4:
+
+- `FASTMCP_TELEMETRY_MODE` will control **both** this server’s OTEL SDK wrapper **and** FastMCP’s own span emission.
+- Prefer `native` for normal deployments; use `propagation_only` only if another layer already owns MCP spans.
+- Keep setting `OTEL_EXPORTER_OTLP_ENDPOINT` (and related `OTEL_*` vars) whenever you want spans exported — FastMCP still only uses the OpenTelemetry API until an SDK is configured.
 
 ## Quick Start
 
