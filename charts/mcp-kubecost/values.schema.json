@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "replicaCount": { "type": "integer", "minimum": 1 },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+        "pullSecrets": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["repository", "tag", "pullPolicy", "pullSecrets"]
+    },
+    "podAnnotations": { "type": "object" },
+    "podLabels": { "type": "object" },
+    "podSecurityContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runAsUser": { "type": "integer", "minimum": 1 },
+        "runAsGroup": { "type": "integer", "minimum": 1 },
+        "runAsNonRoot": { "type": "boolean" },
+        "seccompProfile": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": { "type": "string", "enum": ["RuntimeDefault", "Localhost"] },
+            "localhostProfile": { "type": "string" }
+          },
+          "required": ["type"]
+        },
+        "fsGroup": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "containerSecurityContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowPrivilegeEscalation": { "type": "boolean" },
+        "readOnlyRootFilesystem": { "type": "boolean" },
+        "capabilitiesDrop": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "automountServiceAccountToken": { "type": "boolean" },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "annotations": { "type": "object" }
+      },
+      "required": ["type", "port", "annotations"]
+    },
+    "httpRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "annotations": { "type": "object" },
+        "parentRefs": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "group": { "type": "string" },
+              "kind": { "type": "string" },
+              "name": { "type": "string", "minLength": 1 },
+              "namespace": { "type": "string" },
+              "sectionName": { "type": "string" },
+              "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            },
+            "required": ["name"]
+          }
+        },
+        "hostnames": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "object" }
+        }
+      },
+      "required": ["enabled", "annotations", "parentRefs", "hostnames", "rules"]
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string" },
+        "annotations": { "type": "object" },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "host": { "type": "string", "minLength": 1 },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "path": { "type": "string", "minLength": 1 },
+                    "pathType": { "type": "string", "enum": ["Exact", "Prefix", "ImplementationSpecific"] }
+                  },
+                  "required": ["path", "pathType"]
+                },
+                "minItems": 1
+              }
+            },
+            "required": ["host", "paths"]
+          }
+        },
+        "tls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "secretName": { "type": "string", "minLength": 1 },
+              "hosts": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+            },
+            "required": ["secretName", "hosts"]
+          }
+        }
+      },
+      "required": ["enabled", "className", "annotations", "hosts", "tls"]
+    },
+    "resources": { "type": "object" },
+    "probes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "path": { "type": "string", "minLength": 1 },
+        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kubecostBaseUrl": { "type": "string", "format": "uri", "pattern": "^https?://" },
+        "kubecostApiBasePath": { "type": "string", "pattern": "^/" },
+        "kubecostApiKey": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "value": { "type": "string" },
+            "existingSecret": { "type": "string" },
+            "key": { "type": "string", "minLength": 1 }
+          },
+          "required": ["value", "existingSecret", "key"]
+        },
+        "requestTimeoutSeconds": { "type": "number", "exclusiveMinimum": 0 },
+        "requestRetryCount": { "type": "integer", "minimum": 0 },
+        "defaultWindow": { "type": "string", "minLength": 1 },
+        "fastmcpLogLevel": { "type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] },
+        "fastmcpEnableRichLogging": { "type": "boolean" },
+        "useCacViews": { "type": "boolean" },
+        "fastmcpHttpAllowedHosts": { "type": "string" },
+        "mcpServerName": { "type": "string", "minLength": 1 },
+        "telemetryMode": { "type": "string", "minLength": 1 },
+        "otelServiceName": { "type": "string", "minLength": 1 },
+        "otelExporterOtlpEndpoint": { "type": "string" },
+        "otelMetricsExporter": { "type": "string", "minLength": 1 },
+        "otelLogsExporter": { "type": "string", "minLength": 1 },
+        "ssl": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "verify": { "type": "boolean" },
+            "caBundle": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "existingSecret": { "type": "string" },
+                "key": { "type": "string", "minLength": 1 },
+                "mountPath": { "type": "string", "pattern": "^/" }
+              },
+              "required": ["existingSecret", "key", "mountPath"]
+            }
+          },
+          "required": ["verify", "caBundle"]
+        }
+      },
+      "required": ["kubecostBaseUrl", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "defaultWindow", "fastmcpLogLevel", "fastmcpEnableRichLogging", "useCacViews", "fastmcpHttpAllowedHosts", "mcpServerName", "telemetryMode", "otelServiceName", "otelExporterOtlpEndpoint", "otelMetricsExporter", "otelLogsExporter", "ssl"]
+    },
+    "nodeSelector": { "type": "object" },
+    "tolerations": { "type": "array" },
+    "affinity": { "type": "object" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "config": { "properties": { "kubecostApiKey": { "properties": { "existingSecret": { "minLength": 1 } } } } } } },
+      "then": { "properties": { "config": { "properties": { "kubecostApiKey": { "properties": { "value": { "maxLength": 0 } } } } } } }
+    }
+  ]
+}

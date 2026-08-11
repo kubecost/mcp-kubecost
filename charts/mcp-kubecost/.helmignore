@@ -1,0 +1,6 @@
+.git/
+.gitignore
+.helmignore
+*.tgz
+*.swp
+*.tmp
