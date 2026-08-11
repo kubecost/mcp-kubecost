@@ -34,6 +34,7 @@
         "fastmcp's",
         "finops",
         "httpx",
+        "instrumentors",
         "isoformat",
         "isort",
         "keepends",
