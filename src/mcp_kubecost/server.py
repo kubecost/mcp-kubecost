@@ -17,6 +17,7 @@ from fastmcp import FastMCP
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from mcp_kubecost.config.oidc import create_oidc_provider
 from mcp_kubecost.config.settings import apply_http_rich_logging, get_settings
 from mcp_kubecost.skills import register_all_skills
 from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
@@ -41,6 +42,9 @@ _SERVER_INSTRUCTIONS = (
 def create_server(server_name) -> FastMCP:
     """Create and configure FastMCP with tools, prompts, and resources."""
 
+    # Build OIDC auth provider (None when OIDC is not enabled)
+    auth = create_oidc_provider()
+
     # Create the MCP server instance
     mcp = FastMCP(
         name=server_name,
@@ -48,6 +52,7 @@ def create_server(server_name) -> FastMCP:
         instructions=_SERVER_INSTRUCTIONS,
         on_duplicate="error",
         strict_input_validation=True,
+        auth=auth,
     )
 
     # Register all toolsets

@@ -7,10 +7,21 @@ import os
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import Enum
 from functools import lru_cache
 from urllib.parse import urlparse
 
 from mcp_kubecost.errors import ConfigError
+
+
+class AuthMode(Enum):
+    """Supported authentication modes for the HTTP transport."""
+
+    NONE = "none"
+    OIDC = "oidc"
+    API_KEY = "api_key"
+    BOTH = "both"
+
 
 _HTTP_TRANSPORTS = frozenset({"http", "sse", "streamable-http"})
 
@@ -32,11 +43,24 @@ class Settings:
     log_level: str
     enable_rich_logging: bool
 
+    # OIDC authentication (HTTP transport only)
+    auth_mode: AuthMode
+    oidc_issuer_url: str | None
+    oidc_client_id: str | None
+    oidc_client_secret: str | None
+    oidc_audience: str | None
+    oidc_base_url: str | None
+    oidc_required_scopes: list[str]
+
     def to_loggable_dict(self) -> dict:
         """Return a copy of settings safe for logging (sensitive fields redacted)."""
         d = dataclasses.asdict(self)
         if d.get("KUBECOST_API_KEY") is not None:
             d["KUBECOST_API_KEY"] = "***"
+        if d.get("oidc_client_secret") is not None:
+            d["oidc_client_secret"] = "***"
+        # Serialize auth_mode as its string value for readability
+        d["auth_mode"] = self.auth_mode.value
         return d
 
 
@@ -133,10 +157,48 @@ def _get_float_env(name: str, default: float) -> float:
         raise ConfigError(f"Invalid float for {name}: {raw}") from exc
 
 
+def _get_auth_mode() -> AuthMode:
+    """Parse AUTH_MODE from environment, defaulting to 'none'."""
+    raw = os.getenv("AUTH_MODE", "none").strip().lower()
+    try:
+        return AuthMode(raw)
+    except ValueError as exc:
+        valid = ", ".join(m.value for m in AuthMode)
+        raise ConfigError(f"Invalid AUTH_MODE: {raw!r} (expected one of: {valid})") from exc
+
+
+def _get_oidc_scopes() -> list[str]:
+    """Parse OIDC_REQUIRED_SCOPES as comma-separated list."""
+    raw = os.getenv("OIDC_REQUIRED_SCOPES", "openid,profile").strip()
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Load and cache settings from environment."""
     kubecost_base_url = _get_url_env("KUBECOST_BASE_URL")
+
+    auth_mode = _get_auth_mode()
+
+    # Validate that OIDC vars are present when OIDC is enabled
+    oidc_issuer_url: str | None = os.getenv("OIDC_ISSUER_URL", "").strip() or None
+    oidc_client_id: str | None = os.getenv("OIDC_CLIENT_ID", "").strip() or None
+    oidc_client_secret: str | None = os.getenv("OIDC_CLIENT_SECRET", "").strip() or None
+    oidc_audience: str | None = os.getenv("OIDC_AUDIENCE", "").strip() or None
+    oidc_base_url: str | None = os.getenv("OIDC_BASE_URL", "").strip() or None
+
+    if auth_mode in (AuthMode.OIDC, AuthMode.BOTH):
+        missing = []
+        if not oidc_issuer_url:
+            missing.append("OIDC_ISSUER_URL")
+        if not oidc_client_id:
+            missing.append("OIDC_CLIENT_ID")
+        if not oidc_client_secret:
+            missing.append("OIDC_CLIENT_SECRET")
+        if not oidc_base_url:
+            missing.append("OIDC_BASE_URL")
+        if missing:
+            raise ConfigError(f"AUTH_MODE={auth_mode.value} requires: {', '.join(missing)}")
 
     return Settings(
         kubecost_base_url=kubecost_base_url,
@@ -151,4 +213,11 @@ def get_settings() -> Settings:
         log_level=os.getenv("FASTMCP_LOG_LEVEL", "INFO").upper(),
         enable_rich_logging=False if is_http_mode() else _get_bool_env("FASTMCP_ENABLE_RICH_LOGGING", True),
         use_cac_views=_get_bool_env("USE_CAC_VIEWS", False),
+        auth_mode=auth_mode,
+        oidc_issuer_url=oidc_issuer_url,
+        oidc_client_id=oidc_client_id,
+        oidc_client_secret=oidc_client_secret,
+        oidc_audience=oidc_audience,
+        oidc_base_url=oidc_base_url,
+        oidc_required_scopes=_get_oidc_scopes(),
     )

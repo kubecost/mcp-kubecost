@@ -174,6 +174,34 @@ config:
       # config.ssl.caBundle.mountPath is the file path passed to SSL_CA_BUNDLE.
       mountPath: /etc/mcp-kubecost/ca/ca.crt
 
+  oidc:
+    # config.oidc.authMode controls how the MCP HTTP endpoint is protected.
+    # Supported values: none, oidc, api_key, both.
+    #   none    — no auth (default)
+    #   oidc    — require a valid OIDC token via FastMCP's OIDCProxy
+    #   api_key — require X-API-KEY header (same as requireClientApiKey: true)
+    #   both    — require OIDC token AND X-API-KEY header (presence check only)
+    authMode: "none"
+    # config.oidc.issuerUrl is the provider's .well-known/openid-configuration URL.
+    # Examples:
+    #   Azure: https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration
+    #   Okta:  https://{domain}/.well-known/openid-configuration
+    #   IBM:   https://iam.cloud.ibm.com/identity/.well-known/openid-configuration
+    issuerUrl: ""
+    # config.oidc.audience is the token audience expected by the provider (optional).
+    audience: ""
+    # config.oidc.baseUrl is the public URL of this MCP server (used for OAuth redirect callback).
+    baseUrl: ""
+    # config.oidc.requiredScopes is a comma-separated list of OAuth scopes to request.
+    requiredScopes: "openid,profile"
+    # config.oidc.clientId is the OIDC client ID. Prefer existingSecret for production.
+    clientId: ""
+    # config.oidc.clientSecret is the OIDC client secret. Prefer existingSecret for production.
+    clientSecret: ""
+    # config.oidc.existingSecret is the name of a pre-created Secret containing OIDC credentials.
+    # Expected keys: OIDC_CLIENT_ID and OIDC_CLIENT_SECRET.
+    existingSecret: ""
+
 nodeSelector: {}
 tolerations: []
 affinity: {}
