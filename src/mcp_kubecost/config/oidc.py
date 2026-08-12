@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
+from key_value.aio.stores.memory import MemoryStore
 
 from mcp_kubecost.config.settings import AuthMode, Settings, get_settings
 
@@ -48,6 +49,11 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
         settings.oidc_base_url,
     )
 
+    # FastMCP defaults to an encrypted FileTreeStore under
+    # platformdirs.user_data_dir("fastmcp") — typically
+    # ~/.local/share/fastmcp/oauth-proxy/<key>/. That mkdir fails on a
+    # read-only root filesystem. Keep DCR/token state in process memory;
+    # MCP clients re-register after a restart.
     return OIDCProxy(
         config_url=settings.oidc_issuer_url,
         client_id=settings.oidc_client_id,
@@ -55,4 +61,5 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
         audience=settings.oidc_audience,
         base_url=settings.oidc_base_url,
         required_scopes=settings.oidc_required_scopes or None,
+        client_storage=MemoryStore(),
     )
