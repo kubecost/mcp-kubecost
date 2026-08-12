@@ -13,6 +13,7 @@ from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from key_value.aio.stores.memory import MemoryStore
 
 from mcp_kubecost.config.settings import AuthMode, Settings, get_settings
+from mcp_kubecost.errors import ConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -54,12 +55,29 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
     # ~/.local/share/fastmcp/oauth-proxy/<key>/. That mkdir fails on a
     # read-only root filesystem. Keep DCR/token state in process memory;
     # MCP clients re-register after a restart.
-    return OIDCProxy(
-        config_url=settings.oidc_issuer_url,
-        client_id=settings.oidc_client_id,
-        client_secret=settings.oidc_client_secret,
-        audience=settings.oidc_audience,
-        base_url=settings.oidc_base_url,
-        required_scopes=settings.oidc_required_scopes or None,
-        client_storage=MemoryStore(),
-    )
+    #
+    # Consent is "external" so Keycloak owns the login/consent UI. FastMCP's
+    # built-in consent page is another HTML response that MCP clients try to
+    # parse as OAuth JSON.
+    try:
+        return OIDCProxy(
+            config_url=settings.oidc_issuer_url,
+            client_id=settings.oidc_client_id,
+            client_secret=settings.oidc_client_secret,
+            audience=settings.oidc_audience,
+            base_url=settings.oidc_base_url,
+            required_scopes=settings.oidc_required_scopes or None,
+            client_storage=MemoryStore(),
+            require_authorization_consent="external",
+        )
+    except ConfigError:
+        raise
+    except Exception as exc:
+        raise ConfigError(
+            "OIDC provider initialization failed "
+            f"({type(exc).__name__}): {exc}. "
+            "OIDC_ISSUER_URL must return JSON discovery metadata, not an HTML login page. "
+            "If this MCP server shares a Kubecost frontend hostname, OAuth paths "
+            "(/register, /authorize, /token, /.well-known/oauth-*) must reach this "
+            "Service without Kubecost SSO in front — set config.oidc.exposeAuthRoutes."
+        ) from exc

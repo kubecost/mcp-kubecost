@@ -9,6 +9,7 @@ from key_value.aio.stores.memory import MemoryStore
 
 from mcp_kubecost.config.oidc import create_oidc_provider
 from mcp_kubecost.config.settings import AuthMode, Settings
+from mcp_kubecost.errors import ConfigError
 
 _SETTINGS: dict[str, Any] = dict(
     kubecost_base_url="http://localhost:9090",
@@ -54,8 +55,19 @@ class TestCreateOidcProvider:
             create_oidc_provider(_settings(**_OIDC))
         kwargs = proxy.call_args.kwargs
         assert isinstance(kwargs["client_storage"], MemoryStore)
+        assert kwargs["require_authorization_consent"] == "external"
 
     def test_api_key_mode_does_not_build_proxy(self):
         with patch("mcp_kubecost.config.oidc.OIDCProxy") as proxy:
             assert create_oidc_provider(_settings(auth_mode=AuthMode.API_KEY)) is None
         proxy.assert_not_called()
+
+    def test_init_failure_is_config_error_not_traceback(self):
+        with patch("mcp_kubecost.config.oidc.OIDCProxy", side_effect=ValueError("expected value at line 1 column 1")):
+            try:
+                create_oidc_provider(_settings(**_OIDC))
+            except ConfigError as exc:
+                assert "OIDC provider initialization failed" in str(exc)
+                assert "HTML" in str(exc)
+            else:
+                raise AssertionError("expected ConfigError")

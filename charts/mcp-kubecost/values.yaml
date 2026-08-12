@@ -202,6 +202,19 @@ config:
     # config.oidc.existingSecret is the name of a pre-created Secret containing OIDC credentials.
     # Expected keys: OIDC_CLIENT_ID and OIDC_CLIENT_SECRET.
     existingSecret: ""
+    # config.oidc.exposeAuthRoutes creates an Ingress that sends FastMCP OAuth
+    # endpoints (DCR, authorize, token, well-known metadata) to this Service.
+    # Required when the MCP URL shares a Kubecost frontend host: that nginx
+    # only proxies /mcp, and auth_request redirects /register to Keycloak HTML
+    # which MCP clients then try to parse as OAuth JSON.
+    exposeAuthRoutes: false
+    # config.oidc.authIngress.className is the IngressClass for the OAuth Ingress.
+    authIngress:
+      className: nginx
+      annotations: {}
+      # config.oidc.authIngress.tlsSecretName is the TLS secret for the OAuth host.
+      # Leave empty to inherit TLS from another Ingress on the same host.
+      tlsSecretName: ""
 
 nodeSelector: {}
 tolerations: []
