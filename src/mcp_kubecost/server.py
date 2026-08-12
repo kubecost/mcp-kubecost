@@ -83,6 +83,15 @@ logger.info(f"Starting kubecost mcp version: {version}")
 mcp = create_server(mcp_server_name)
 
 
+@mcp.custom_route("/health", methods=["GET"])
+async def health_endpoint(_request: Request) -> JSONResponse:
+    """Unauthenticated process-up check for Kubernetes probes. Does not call Kubecost.
+
+    Uvicorn access logs for this path are dropped — probe traffic is too noisy.
+    """
+    return JSONResponse({"status": "ok"})
+
+
 @mcp.custom_route("/version", methods=["GET"])
 async def version_endpoint(_request: Request) -> JSONResponse:
     try:

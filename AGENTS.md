@@ -6,7 +6,7 @@ Development guide for AI coding agents working on this repository.
 
 FinOps MCP server that exposes read-only Kubecost cost allocation and container rightsizing data to MCP clients. Built with Python 3.12+, FastMCP 3.4+, and httpx.
 
-Entry point: [`src/mcp_kubecost/server.py`](src/mcp_kubecost/server.py) — creates the FastMCP instance, registers tools, skills, and the `/version` HTTP route.
+Entry point: [`src/mcp_kubecost/server.py`](src/mcp_kubecost/server.py) — creates the FastMCP instance, registers tools, skills, and the `/health` and `/version` HTTP routes.
 
 Runtime FinOps guidance for MCP clients lives in tool docstrings, [`src/mcp_kubecost/skills/`](src/mcp_kubecost/skills/), and the README tone section — not here.
 
@@ -37,7 +37,7 @@ Run `ruff format`, `ruff check --fix`, and `pyrefly check` after every Python ed
 | Workflow guidance prompt (skill) | New module under [`src/mcp_kubecost/skills/`](src/mcp_kubecost/skills/), register in [`skills/__init__.py`](src/mcp_kubecost/skills/__init__.py) |
 | Sizing profiles, aggregation helpers | [`src/mcp_kubecost/domain/kubecost/`](src/mcp_kubecost/domain/kubecost/) |
 | HTTP client / auth | [`src/mcp_kubecost/client.py`](src/mcp_kubecost/client.py) |
-| HTTP custom routes (`/version`) | [`server.py`](src/mcp_kubecost/server.py) |
+| HTTP custom routes (`/health`, `/version`) | [`server.py`](src/mcp_kubecost/server.py) |
 | Env-backed settings | [`src/mcp_kubecost/config/settings.py`](src/mcp_kubecost/config/settings.py) |
 
 **Pattern A for tools:** thin handler → `call_get_api()` → domain helpers → typed Pydantic response. Do not create separate `prompts/`, `resources/`, or `api/` packages unless deliberately refactoring.
