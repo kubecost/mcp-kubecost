@@ -43,13 +43,29 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "mcp-kubecost.configMapName" . }}
-          {{- if or .Values.config.kubecostApiKey.value .Values.config.kubecostApiKey.existingSecret }}
+          {{- $hasApiKey := or .Values.config.kubecostApiKey.value .Values.config.kubecostApiKey.existingSecret }}
+          {{- $hasOidc := or .Values.config.oidc.existingSecret (and .Values.config.oidc.clientId .Values.config.oidc.clientSecret) }}
+          {{- if or $hasApiKey $hasOidc }}
           env:
+            {{- if $hasApiKey }}
             - name: KUBECOST_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ if .Values.config.kubecostApiKey.existingSecret }}{{ .Values.config.kubecostApiKey.existingSecret }}{{ else }}{{ include "mcp-kubecost.apiKeySecretName" . }}{{ end }}
                   key: {{ .Values.config.kubecostApiKey.key }}
+            {{- end }}
+            {{- if $hasOidc }}
+            - name: OIDC_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ if .Values.config.oidc.existingSecret }}{{ .Values.config.oidc.existingSecret }}{{ else }}{{ include "mcp-kubecost.oidcSecretName" . }}{{ end }}
+                  key: OIDC_CLIENT_ID
+            - name: OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ if .Values.config.oidc.existingSecret }}{{ .Values.config.oidc.existingSecret }}{{ else }}{{ include "mcp-kubecost.oidcSecretName" . }}{{ end }}
+                  key: OIDC_CLIENT_SECRET
+            {{- end }}
           {{- end }}
           ports:
             - name: http
