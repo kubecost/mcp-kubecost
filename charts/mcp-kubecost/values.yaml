@@ -11,7 +11,7 @@ image:
   # image.repository is the container image repository.
   repository: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost
   # image.tag is the container image tag. Defaults to the chart appVersion when empty.
-  tag: 0.4.15
+  tag: 0.4.16
   # image.pullPolicy controls when Kubernetes pulls the image.
   pullPolicy: IfNotPresent
   # image.pullSecrets is a list of Secret names for private image registries.

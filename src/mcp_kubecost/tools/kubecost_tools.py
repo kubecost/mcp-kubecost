@@ -6,7 +6,7 @@ result sets are bounded via a ``top_n`` parameter with a ``truncated`` flag
 (client-side sort+slice), or true server-side ``limit``/``offset`` pagination
 where the upstream API supports it (e.g. ``get_resource_quota_recommendations``).
 
-Contract version: 4.0
+Contract version: 8.0
 """
 
 from __future__ import annotations
@@ -26,9 +26,10 @@ from mcp_kubecost.domain.kubecost.sizing_guidance import (
     CONTAINER_SIZING_GUIDE,
     CONTAINER_SIZING_REFERENCE,
     FIELD_DESCRIPTIONS,
-    PresetName,
+    PROFILE_DESCRIPTIONS,
+    ProfileName,
     build_result_interpretation,
-    format_presets_resource,
+    format_profiles_resource,
     resolve_sizing_params,
 )
 from mcp_kubecost.errors import ErrorCode
@@ -51,7 +52,7 @@ from mcp_kubecost.tools._common import (
 
 logger = logging.getLogger(__name__)
 
-_VERSION = "4.0"
+_VERSION = "8.0"
 
 # ---------------------------------------------------------------------------
 # API path segments — combined with get_settings().kubecost_api_base_path at call time
@@ -111,17 +112,16 @@ FILTER PREFERENCES
 Description of the filtering of results. Ask for clarification or use this detail to explain results as needed:
 
 ---
-**Container savings filter options:**
+**Container savings filter (`min_monthly_savings`):**
 
-1. **Include undersized containers?**
-   Some containers are *under*-provisioned — rightsizing them would *increase* cost.
-   Include these in the results? (default: **No**)
+Keeps rows where `monthlySavings_total >= min_monthly_savings`.
 
-2. **Include trivial savings?**
-   Containers saving less than **$10/month** may not be worth the operational effort to rightsize.
-   Include these low-value recommendations? (default: **No**)
+- **Omit / null (default)** — return every recommendation, including undersized (negative savings).
+- **`5.0` (recommended for noise reduction)** — focus on material savings opportunities.
+- **Negative value** (e.g. `-100`) — also keep undersized workloads whose rightsizing would
+  increase cost by up to that amount.
 
-Reply with your preferences (e.g. "No to both", "Yes to undersized, No to trivial").
+Profiles do not change this filter — every profile is filter-free unless you pass a value.
 ---
 """
 
@@ -760,17 +760,17 @@ SAVINGS_FIELDS: list[str] = SAVINGS_METADATA_FIELDS + [
     "monthlySavings_cpu",
     "monthlySavings_memory",
     "monthlySavings_total",
-    "Recommended_cpu",
-    "Recommended_memory",
-    "current_cpu",
-    "current_memory",
+    "Recommended_cpuInMilliCores",
+    "Recommended_memoryInMiB",
+    "current_cpuInMilliCores",
+    "current_memoryInMiB",
     "currentEfficiency_cpu",
     "currentEfficiency_memory",
     "currentEfficiency",
-    "AvgUsage_cpu",
-    "AvgUsage_memory",
-    "MaxUsage_cpu",
-    "MaxUsage_memory",
+    "AvgUsage_cpuInMilliCores",
+    "AvgUsage_memoryInMiB",
+    "MaxUsage_cpuInMilliCores",
+    "MaxUsage_memoryInMiB",
     "notes",
 ]
 
@@ -788,7 +788,7 @@ def _float_field(row: dict, key: str) -> float:
 def compute_savings_notes(row: dict) -> str:
     """Build a semicolon-separated notes string for a savings recommendation row."""
     notes: list[str] = []
-    if _float_field(row, "Recommended_memory") < _float_field(row, "MaxUsage_memory"):
+    if _float_field(row, "Recommended_memoryInMiB") < _float_field(row, "MaxUsage_memoryInMiB"):
         notes.append(NOTE_MEM_RECOMMENDATION_LESS_THAN_MAX)
     return ";".join(notes)
 
@@ -851,17 +851,17 @@ def parse_request_sizing_response(
         _nest(rec, row, "monthlySavings", "cpu", "monthlySavings_cpu")
         _nest(rec, row, "monthlySavings", "memory", "monthlySavings_memory")
         _nest(rec, row, "monthlySavings", "total", "monthlySavings_total")
-        _nest(rec, row, "normalizedRecommendedRequest", "cpuInMilliCores", "Recommended_cpu")
-        _nest(rec, row, "normalizedRecommendedRequest", "memoryInMiB", "Recommended_memory")
-        _nest(rec, row, "normalizedLatestKnownRequest", "cpuInMilliCores", "current_cpu")
-        _nest(rec, row, "normalizedLatestKnownRequest", "memoryInMiB", "current_memory")
+        _nest(rec, row, "normalizedRecommendedRequest", "cpuInMilliCores", "Recommended_cpuInMilliCores")
+        _nest(rec, row, "normalizedRecommendedRequest", "memoryInMiB", "Recommended_memoryInMiB")
+        _nest(rec, row, "normalizedLatestKnownRequest", "cpuInMilliCores", "current_cpuInMilliCores")
+        _nest(rec, row, "normalizedLatestKnownRequest", "memoryInMiB", "current_memoryInMiB")
         _nest(rec, row, "currentEfficiency", "cpu", "currentEfficiency_cpu")
         _nest(rec, row, "currentEfficiency", "memory", "currentEfficiency_memory")
         _nest(rec, row, "currentEfficiency", "total", "currentEfficiency")
-        _nest(rec, row, "normalizedAverageUsage", "cpuInMilliCores", "AvgUsage_cpu")
-        _nest(rec, row, "normalizedAverageUsage", "memoryInMiB", "AvgUsage_memory")
-        _nest(rec, row, "normalizedMaxUsage", "cpuInMilliCores", "MaxUsage_cpu")
-        _nest(rec, row, "normalizedMaxUsage", "memoryInMiB", "MaxUsage_memory")
+        _nest(rec, row, "normalizedAverageUsage", "cpuInMilliCores", "AvgUsage_cpuInMilliCores")
+        _nest(rec, row, "normalizedAverageUsage", "memoryInMiB", "AvgUsage_memoryInMiB")
+        _nest(rec, row, "normalizedMaxUsage", "cpuInMilliCores", "MaxUsage_cpuInMilliCores")
+        _nest(rec, row, "normalizedMaxUsage", "memoryInMiB", "MaxUsage_memoryInMiB")
 
         row["notes"] = compute_savings_notes(row)
         rows.append(row)
@@ -1076,27 +1076,26 @@ class ContainerSavingsRow(BaseModel):
         alias="monthlySavings_memory",
         description="Memory portion of monthly savings (USD). Negative = memory is undersized.",
     )
-    recommended_cpu: float = Field(
+    # Quantity aliases embed units (cpuInMilliCores / memoryInMiB) to match Kubecost's
+    # normalized nested keys. Efficiency and savings stay unitless / USD without those suffixes.
+    recommended_cpu_in_milli_cores: float = Field(
         default=0.0,
-        alias="Recommended_cpu",
+        alias="Recommended_cpuInMilliCores",
         description="Recommended CPU request in millicores.",
     )
-    recommended_memory: float = Field(
+    recommended_memory_in_mib: float = Field(
         default=0.0,
-        alias="Recommended_memory",
+        alias="Recommended_memoryInMiB",
         description="Recommended memory request in MiB.",
     )
-    # NOTE: These aliases match the *flattened* keys produced by parse_request_sizing_response
-    # (e.g. "current_cpu"), NOT the raw API keys (e.g. "normalizedLatestKnownRequest.cpuInMilliCores").
-    # This is intentional and differs from the camelCase-alias convention used by other fields.
-    current_cpu: float = Field(
+    current_cpu_in_milli_cores: float = Field(
         default=0.0,
-        alias="current_cpu",
+        alias="current_cpuInMilliCores",
         description="Current CPU request in millicores.",
     )
-    current_memory: float = Field(
+    current_memory_in_mib: float = Field(
         default=0.0,
-        alias="current_memory",
+        alias="current_memoryInMiB",
         description="Current memory request in MiB.",
     )
     current_efficiency_cpu: float = Field(
@@ -1108,6 +1107,31 @@ class ContainerSavingsRow(BaseModel):
         default=0.0,
         alias="currentEfficiency_memory",
         description="Memory utilization ratio (0–1). Low = over-provisioned.",
+    )
+    current_efficiency: float = Field(
+        default=0.0,
+        alias="currentEfficiency",
+        description="Combined CPU/memory utilization ratio (0–1). Low = over-provisioned.",
+    )
+    avg_usage_cpu_in_milli_cores: float = Field(
+        default=0.0,
+        alias="AvgUsage_cpuInMilliCores",
+        description="Average CPU usage over the window in millicores.",
+    )
+    avg_usage_memory_in_mib: float = Field(
+        default=0.0,
+        alias="AvgUsage_memoryInMiB",
+        description="Average memory usage over the window in MiB.",
+    )
+    max_usage_cpu_in_milli_cores: float = Field(
+        default=0.0,
+        alias="MaxUsage_cpuInMilliCores",
+        description="Peak CPU usage over the window in millicores.",
+    )
+    max_usage_memory_in_mib: float = Field(
+        default=0.0,
+        alias="MaxUsage_memoryInMiB",
+        description="Peak memory usage over the window in MiB.",
     )
     notes: str = Field(
         default="",
@@ -1141,7 +1165,7 @@ class ContainerSavingsResponse(BaseToolResponse):
         description=(
             "Total monthly savings across the FILTERED recommendations (USD) — the same "
             "population described by 'summary' and 'container_count'. Excludes rows removed "
-            "by the include_undersized / min_monthly_savings filters."
+            "by the min_monthly_savings filter (when set)."
         )
     )
     container_count: int = Field(
@@ -2049,9 +2073,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         ),
     )
     async def get_container_savings_recommendations(
-        preset: Annotated[
-            PresetName | None,
-            Field(description=FIELD_DESCRIPTIONS["preset"]),
+        profile: Annotated[
+            ProfileName | None,
+            Field(description=FIELD_DESCRIPTIONS["profile"]),
         ] = None,
         window: Annotated[
             str | None,
@@ -2097,23 +2121,10 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 le=10000,
             ),
         ] = 20,
-        include_undersized: Annotated[
-            bool | None,
-            Field(
-                description=(
-                    "Include containers where rightsizing would INCREASE cost "
-                    "(under-provisioned, negative savings). Default False."
-                ),
-            ),
-        ] = None,
         min_monthly_savings: Annotated[
             float | None,
             Field(
-                description=(
-                    "Minimum monthly savings (USD) to include. Recommendations below this "
-                    "threshold are excluded as trivial. Default 1.00; set 0.0 to include all."
-                ),
-                ge=0.0,
+                description=FIELD_DESCRIPTIONS["min_monthly_savings"],
             ),
         ] = None,
         summary_aggregate: Annotated[
@@ -2131,9 +2142,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
         WHAT: Which workloads are over-provisioned and how much can be saved by
         rightsizing them. Structured rows are returned directly in the response —
-        no separate resource read required. Supports named presets (conservative,
-        balanced, aggressive) that bundle recommended quantile/window settings;
-        explicit parameters override preset values.
+        no separate resource read required. Supports named profiles (production,
+        high-availability, development) that bundle recommended quantile/window
+        and target-utilization settings; explicit parameters override profile values.
 
         WHEN TO USE: For Kubernetes container savings, over-provisioned pods/namespaces,
         or rightsizing recommendations. If the user asks HOW to rightsize (methodology,
@@ -2144,7 +2155,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         get_kubecost_workload_costs.
         """
         sizing = resolve_sizing_params(
-            preset,
+            profile,
             window=window,
             algorithm_cpu=algorithm_cpu,
             algorithm_ram=algorithm_ram,
@@ -2152,7 +2163,6 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             q_ram=q_ram,
             target_cpu_utilization=target_cpu_utilization,
             target_ram_utilization=target_ram_utilization,
-            include_undersized=include_undersized,
             min_monthly_savings=min_monthly_savings,
         )
         resolved_window: str = sizing["window"]
@@ -2164,8 +2174,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         resolved_q_ram: float = sizing["q_ram"]
         resolved_target_cpu: float = sizing["target_cpu_utilization"]
         resolved_target_ram: float = sizing["target_ram_utilization"]
-        resolved_include_undersized: bool = sizing["include_undersized"]
-        resolved_min_monthly_savings: float = sizing["min_monthly_savings"]
+        resolved_min_monthly_savings: float | None = sizing["min_monthly_savings"]
 
         uses_quantile = (
             resolved_algorithm_cpu.lower() in _QUANTILE_ALGORITHMS
@@ -2229,21 +2238,20 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             )
 
         rows = all_rows
-        if not resolved_include_undersized:
-            rows = [r for r in rows if float(r.get("monthlySavings_total", 0) or 0) > 0]
-        if resolved_min_monthly_savings > 0:
+        if resolved_min_monthly_savings is not None:
             rows = [r for r in rows if float(r.get("monthlySavings_total", 0) or 0) >= resolved_min_monthly_savings]
 
         if not rows:
-            undersized_label = "included" if resolved_include_undersized else "excluded"
+            threshold_label = (
+                f"${resolved_min_monthly_savings:,.2f}" if resolved_min_monthly_savings is not None else "(none)"
+            )
             return ContainerSavingsResponse(
                 status=QueryStatus.EMPTY,
-                message=(
-                    f"No recommendations matched the filters "
-                    f"(undersized containers {undersized_label}, "
-                    f"minimum monthly savings ${resolved_min_monthly_savings:,.2f})."
+                message=(f"No recommendations matched the filters (minimum monthly savings {threshold_label})."),
+                recommended_action=(
+                    "Omit min_monthly_savings to return all recommendations, "
+                    "lower the threshold, or pass a negative value to include undersized workloads."
                 ),
-                recommended_action="Lower min_monthly_savings or set include_undersized=true.",
                 window=resolved_window,
                 resolved_window=resolved_window_display,
                 total_monthly_savings=0.0,
@@ -2277,7 +2285,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             else ""
         )
         # Preserve the unfiltered API figure so the caller still sees how much was
-        # excluded by the undersized / min-savings filters.
+        # excluded by the min_monthly_savings filter.
         filtered_note = (
             f" (filtered from {count} recommendations returned by the API)" if filtered_count != count else ""
         )
@@ -2301,7 +2309,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             rows=typed_rows[:top_n],
             truncated=truncated,
             parameters={
-                "preset": preset or "balanced (default)",
+                "profile": profile or "production (default)",
                 "window": resolved_window,
                 "algorithm_cpu": resolved_algorithm_cpu,
                 "algorithm_ram": resolved_algorithm_ram,
@@ -2309,7 +2317,6 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 "q_ram": resolved_q_ram,
                 "target_cpu_utilization": resolved_target_cpu,
                 "target_ram_utilization": resolved_target_ram,
-                "include_undersized": resolved_include_undersized,
                 "min_monthly_savings": resolved_min_monthly_savings,
                 "filter": filter_str or "(none)",
             },
@@ -3127,10 +3134,10 @@ totalCost        — sum of all cost components
 totalEfficiency  — utilization ratio 0–1 (request vs actual use)
 """
 
-    @mcp.resource("kubecost://schema/sizing-presets")
-    def sizing_presets_schema() -> str:
-        """Named sizing presets for get_container_savings_recommendations."""
-        return format_presets_resource()
+    @mcp.resource("kubecost://schema/sizing-profiles")
+    def sizing_profiles_schema() -> str:
+        """Named sizing profiles for get_container_savings_recommendations."""
+        return format_profiles_resource()
 
     @mcp.resource("kubecost://guides/container-sizing")
     def container_sizing_guide_resource() -> str:
@@ -3151,26 +3158,22 @@ totalEfficiency  — utilization ratio 0–1 (request vs actual use)
     @mcp.prompt()
     def explore_container_savings() -> str:
         """Start a guided container rightsizing exploration. Presents choices step-by-step."""
-        preset_menu = "\n".join(
-            f"  - **{name}** — {desc}"
-            for name, desc in [
-                ("conservative", "Minimize OOM risk; includes undersized containers"),
-                ("balanced", "Default — good starting point for most clusters"),
-                ("aggressive", "Maximize savings; skips trivial recommendations"),
-                ("custom", "Specify your own quantiles and filters"),
-            ]
+        # Generated from SIZING_PROFILES so the menu can never drift from what the profiles send.
+        profile_menu = "\n".join(
+            [f"  - **{name}**: {desc}" for name, desc in PROFILE_DESCRIPTIONS.items()]
+            + ["  - **custom**: Specify your own quantiles and filters"]
         )
         return f"""\
 Let's find container rightsizing opportunities. I'll walk you through a few choices.
 
 ---
 
-**Step 1 — Sizing preset**
-How aggressive should the recommendations be?
+**Step 1 — Sizing profile**
+What environment are these workloads running in?
 
-{preset_menu}
+{profile_menu}
 
-Pick a preset or describe your preferences.
+Pick a profile or describe your preferences.
 
 ---
 
@@ -3195,7 +3198,7 @@ Present the Executive Summary with a chart, the interpretation block, and a summ
 
     @mcp.prompt()
     def container_savings_filter_help() -> str:
-        """Explain the filter options (undersized containers, trivial savings) for container savings."""
+        """Explain the min_monthly_savings filter for container savings."""
         return _SAVINGS_FILTER_CLARIFICATION
 
     @mcp.prompt()

@@ -236,6 +236,68 @@ class TestIntegrationAllocationRowCounts:
         assert daily == pytest.approx(accumulated, rel=0.01)
 
 
+_PROFILES = ("high-availability", "production", "development")
+_EXPECTED_CPU_TARGETS = {
+    "high-availability": 0.50,
+    "production": 0.65,
+    "development": 0.80,
+}
+# Kubecost floors tiny CPU recommendations (~10m). Below this, equal recs are expected.
+_CPU_FLOOR_M = 15.0
+
+
+def _row_get(row: dict[str, Any], *keys: str, default: Any = "") -> Any:
+    for key in keys:
+        if key in row and row[key] is not None:
+            return row[key]
+    return default
+
+
+def _container_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    return (
+        str(_row_get(row, "cluster_id", "clusterID")),
+        str(_row_get(row, "namespace")),
+        str(_row_get(row, "controller_name", "controllerName")),
+        str(_row_get(row, "container_name", "containerName")),
+    )
+
+
+def _recommended_cpu(row: dict[str, Any]) -> float:
+    return float(_row_get(row, "recommended_cpu_in_milli_cores", "Recommended_cpuInMilliCores", default=0) or 0)
+
+
+def _cpu_savings(row: dict[str, Any]) -> float:
+    return float(_row_get(row, "monthly_savings_cpu", "monthlySavings_cpu", default=0) or 0)
+
+
+@pytest.fixture(scope="module")
+def savings_by_profile(mcp_config_path) -> dict[str, dict[str, Any]]:
+    """Fetch all three profiles with window/quantiles/filters pinned.
+
+    Only target utilization differs, so recommendation and savings order can be
+    attributed to the Kubecost formula ``recommended = usage / target``.
+    """
+    results: dict[str, dict[str, Any]] = {}
+    for profile in _PROFILES:
+        response = _call_tool(
+            mcp_config_path,
+            "get_container_savings_recommendations",
+            {
+                "profile": profile,
+                "window": "15d",
+                "q_cpu": 0.80,
+                "q_ram": 0.95,
+                "top_n": 100,
+            },
+        )
+        status = response.get("status")
+        if status == "empty":
+            pytest.skip(f"No container savings data on this cluster for profile={profile}.")
+        assert status == "ok", f"Expected ok for profile={profile}: {response.get('message')}"
+        results[profile] = response
+    return results
+
+
 class TestIntegrationGetContainerSavingsRecommendations:
     def test_returns_status_ok_or_empty(self, mcp_config_path):
         result = _fastmcp(
@@ -245,21 +307,82 @@ class TestIntegrationGetContainerSavingsRecommendations:
         output = result.stdout
         assert '"status"' in output or "status" in output
 
-    def test_conservative_preset(self, mcp_config_path):
+    def test_high_availability_profile(self, mcp_config_path):
         result = _fastmcp(
             "call",
             mcp_config_path,
             "get_container_savings_recommendations",
             "--input-json",
-            '{"preset": "conservative"}',
+            '{"profile": "high-availability"}',
         )
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
 
-    def test_aggressive_preset(self, mcp_config_path):
+    def test_development_profile(self, mcp_config_path):
         result = _fastmcp(
-            "call", mcp_config_path, "get_container_savings_recommendations", "--input-json", '{"preset": "aggressive"}'
+            "call",
+            mcp_config_path,
+            "get_container_savings_recommendations",
+            "--input-json",
+            '{"profile": "development"}',
         )
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
+
+    def test_profiles_echo_increasing_target_utilization(self, savings_by_profile):
+        """HA 0.50 < production 0.65 < development 0.80 — the utilization axis."""
+        for profile, expected in _EXPECTED_CPU_TARGETS.items():
+            params = savings_by_profile[profile].get("parameters") or {}
+            assert params.get("target_cpu_utilization") == expected, (
+                f"{profile} should send target_cpu_utilization={expected}, got {params.get('target_cpu_utilization')}"
+            )
+            assert params.get("target_ram_utilization") == expected
+
+    def test_profile_recommendations_are_directionally_correct(self, savings_by_profile):
+        """Lower target utilization must produce a larger request and less CPU savings.
+
+        Shared containers only. Tiny recs sit on Kubecost's ~10m floor and may
+        tie; anything above the floor must never invert, and at least one
+        container must show the strict HA > production > development order.
+        """
+        indexed = {
+            profile: {_container_key(row): row for row in (response.get("rows") or [])}
+            for profile, response in savings_by_profile.items()
+        }
+        common = set.intersection(*(set(rows) for rows in indexed.values()))
+        if not common:
+            pytest.skip("No overlapping containers across the three profile responses.")
+
+        inverted_cpu: list[str] = []
+        inverted_savings: list[str] = []
+        strict_cpu = 0
+        above_floor = 0
+        for key in common:
+            ha, prod, dev = (indexed[p][key] for p in _PROFILES)
+            ha_cpu, prod_cpu, dev_cpu = _recommended_cpu(ha), _recommended_cpu(prod), _recommended_cpu(dev)
+            ha_sav, prod_sav, dev_sav = _cpu_savings(ha), _cpu_savings(prod), _cpu_savings(dev)
+            label = "/".join(key)
+            if ha_cpu < prod_cpu or prod_cpu < dev_cpu:
+                inverted_cpu.append(f"{label}: HA={ha_cpu} prod={prod_cpu} dev={dev_cpu}")
+            if ha_sav > prod_sav or prod_sav > dev_sav:
+                inverted_savings.append(f"{label}: HA=${ha_sav:.2f} prod=${prod_sav:.2f} dev=${dev_sav:.2f}")
+            if prod_cpu >= _CPU_FLOOR_M:
+                above_floor += 1
+                if ha_cpu > prod_cpu > dev_cpu:
+                    strict_cpu += 1
+
+        assert not inverted_cpu, (
+            "Recommended CPU must be HA >= production >= development "
+            "(lower target = more headroom). Inversions:\n  " + "\n  ".join(inverted_cpu[:10])
+        )
+        assert not inverted_savings, (
+            "CPU savings must be HA <= production <= development "
+            "(lower target = less savings). Inversions:\n  " + "\n  ".join(inverted_savings[:10])
+        )
+        if above_floor == 0:
+            pytest.skip(f"No shared containers with production recommended CPU >= {_CPU_FLOOR_M}m.")
+        assert strict_cpu >= 1, (
+            f"Expected at least one above-floor container with HA > production > development "
+            f"recommended CPU; checked {above_floor} container(s) across {len(common)} shared rows."
+        )
 
 
 class TestIntegrationGetAbandonedWorkloads:

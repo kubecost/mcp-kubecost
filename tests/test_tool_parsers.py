@@ -438,12 +438,12 @@ class TestWindowFromAllocation:
 
 class TestComputeSavingsNotes:
     def test_note_when_recommended_less_than_max(self):
-        row = {"Recommended_memory": 100.0, "MaxUsage_memory": 200.0}
+        row = {"Recommended_memoryInMiB": 100.0, "MaxUsage_memoryInMiB": 200.0}
         notes = compute_savings_notes(row)
         assert "memRecommendationLessThanMax" in notes
 
     def test_no_note_when_recommended_above_max(self):
-        row = {"Recommended_memory": 300.0, "MaxUsage_memory": 200.0}
+        row = {"Recommended_memoryInMiB": 300.0, "MaxUsage_memoryInMiB": 200.0}
         notes = compute_savings_notes(row)
         assert notes == ""
 
@@ -483,7 +483,7 @@ class TestParseRequestSizingResponse:
         _, _, rows = parse_request_sizing_response(savings_api_response)
         row = rows[0]
         assert row["monthlySavings_cpu"] == 20
-        assert row["Recommended_cpu"] == 200
+        assert row["Recommended_cpuInMilliCores"] == 200
         assert row["currentEfficiency_cpu"] == 0.3
 
     def test_empty_recommendations(self):
