@@ -17,7 +17,7 @@ def _float_field(row: dict, key: str) -> float:
         return 0.0
 
 
-PresetName = Literal["conservative", "balanced", "aggressive"]
+ProfileName = Literal["high-availability", "production", "development"]
 
 # Display and analysis thresholds
 CPU_SPIKE_THRESHOLD = 3.0  # Max/Avg ratio indicating significant CPU burst behavior
@@ -37,37 +37,90 @@ DEFAULT_SIZING_PARAMS: dict[str, Any] = {
     "q_ram": 0.95,
     "target_cpu_utilization": 0.65,
     "target_ram_utilization": 0.65,
-    "include_undersized": False,
-    "min_monthly_savings": 1.0,
+    "min_monthly_savings": None,
 }
 
-SIZING_PRESETS: dict[PresetName, dict[str, Any]] = {
-    "balanced": {},
-    "conservative": {
+# Every profile pins every key in DEFAULT_SIZING_PARAMS so the full parameter set is readable in
+# isolation — no cross-referencing the defaults to know what a profile actually sends.
+# `min_monthly_savings: None` is deliberate and load-bearing as documentation: profiles never filter.
+SIZING_PROFILES: dict[ProfileName, dict[str, Any]] = {
+    "high-availability": {
+        "window": "30d",
+        "algorithm_cpu": "quantileOfAverages",
+        "algorithm_ram": "quantileOfMaxes",
         "q_cpu": 0.95,
         "q_ram": 0.99,
-        "window": "30d",
-        "target_cpu_utilization": 0.75,
-        "target_ram_utilization": 0.75,
-        "include_undersized": True,
+        "target_cpu_utilization": 0.50,
+        "target_ram_utilization": 0.50,
+        "min_monthly_savings": None,
     },
-    "aggressive": {
+    # Must stay identical to DEFAULT_SIZING_PARAMS — enforced by tests.
+    "production": {
+        "window": "15d",
+        "algorithm_cpu": "quantileOfAverages",
+        "algorithm_ram": "quantileOfMaxes",
         "q_cpu": 0.80,
         "q_ram": 0.95,
+        "target_cpu_utilization": 0.65,
+        "target_ram_utilization": 0.65,
+        "min_monthly_savings": None,
+    },
+    "development": {
         "window": "15d",
-        "target_cpu_utilization": 0.55,
-        "min_monthly_savings": 10.0,
-        "include_undersized": False,
+        "algorithm_cpu": "quantileOfAverages",
+        "algorithm_ram": "quantileOfMaxes",
+        "q_cpu": 0.80,
+        "q_ram": 0.95,
+        "target_cpu_utilization": 0.80,
+        "target_ram_utilization": 0.80,
+        "min_monthly_savings": None,
     },
 }
 
-PRESET_DESCRIPTIONS: dict[PresetName, str] = {
-    "balanced": "Default behavior — P80 CPU / P95 RAM over 15d; moderate CPU throttle risk.",
-    "conservative": "Minimize OOM risk — P95 CPU / P99 RAM over 30d; includes undersized containers.",
-    "aggressive": "Maximize savings — P80 CPU over 15d; filters trivial savings; accepts CPU throttle risk.",
+
+def _pct(quantile: float) -> str:
+    # round, not int — float representation makes int(0.29 * 100) truncate to 28.
+    return f"P{round(quantile * 100)}"
+
+
+# (tagline, trailing guidance) — the only hardcoded prose. Every number in a profile description is
+# generated from SIZING_PROFILES below, so the two can never disagree.
+_PROFILE_TAGLINES: dict[ProfileName, tuple[str, str]] = {
+    "production": ("Default", "Recommended first pass for most clusters."),
+    "high-availability": ("More headroom", "Use for latency-sensitive or stateful services."),
+    "development": (
+        "More savings",
+        "Accepts CPU throttle and RAM OOM risk; dev/test, batch, and cost-reduction sprints only.",
+    ),
 }
 
-CONTAINER_SIZING_GUIDE = """\
+
+def _describe(name: ProfileName) -> str:
+    """Render a profile description from its actual parameter values."""
+    tagline, guidance = _PROFILE_TAGLINES[name]
+    profile = SIZING_PROFILES[name]
+    target_cpu = profile["target_cpu_utilization"]
+    target_ram = profile["target_ram_utilization"]
+    target = (
+        f"target utilization {target_cpu:.2f}"
+        if target_cpu == target_ram
+        else f"target utilization {target_cpu:.2f} CPU / {target_ram:.2f} RAM"
+    )
+    return (
+        f"{tagline} — {_pct(profile['q_cpu'])} CPU / {_pct(profile['q_ram'])} RAM "
+        f"over {profile['window']}; {target}. {guidance}"
+    )
+
+
+# Ordering is the menu order rendered by format_profiles_resource() and the explore prompt.
+PROFILE_DESCRIPTIONS: dict[ProfileName, str] = {
+    name: _describe(name) for name in ("production", "high-availability", "development")
+}
+
+# Colon, not an em-dash — every description already opens with a "tagline —" clause.
+_PROFILE_BULLETS = "\n".join(f"- **{name}**: {desc}" for name, desc in PROFILE_DESCRIPTIONS.items())
+
+CONTAINER_SIZING_GUIDE = f"""\
 # Container Request Sizing Guide
 
 ## Core Principle
@@ -82,7 +135,7 @@ Accept more under-provisioning risk for CPU than for memory.
 
 | Resource | Request / Reservation | Limit / Hard Cap |
 |----------|----------------------|------------------|
-| CPU      | P90 to P95              | P99 or 2 to 3x request |
+| CPU      | P80 to P95              | P99 or 2 to 3x request |
 | Memory   | P95 to P99              | observed max + 20 to 30% headroom |
 
 ## Kubecost Parameter Mapping
@@ -90,33 +143,50 @@ Accept more under-provisioning risk for CPU than for memory.
 - **algorithm_cpu**: `quantileOfAverages` (default) — smooths daily noise; best for CPU requests
 - **algorithm_ram**: `quantileOfMaxes` (default) — captures peak memory; safer against OOM
 - **q_cpu / q_ram**: quantile (0 to 1). P90 = 0.90, P95 = 0.95, P99 = 0.99
-- **target_*_utilization**: headroom factor — lower = more aggressive downsizing
+- **target_*_utilization**: the utilization the new request should run at.
+  Kubecost computes `recommended = usage / targetUtilization`.
+  Lower target → larger request → more headroom. Higher target → smaller request → more savings and more risk.
 - **window**: 15 to 30 days is the sweet spot for quantiles (15d minimum for meaningful stats)
 
-## Presets
+## Profiles
 
-Use the `preset` parameter on `get_container_savings_recommendations`:
+Use the `profile` parameter on `get_container_savings_recommendations`. The same three
+names are accepted by the node-group and resource-quota tools, so there is one sizing
+vocabulary across the server. They are not the same mechanism, though: this tool expands
+a profile into sizing knobs you can override individually, while the other tools pass the
+name straight through to Kubecost as an opaque enum.
 
-- **balanced** — default; good starting point for most clusters
-- **conservative** — production-critical workloads; surfaces undersized memory
-- **aggressive** — cost-focused; skips trivial savings, accepts CPU throttle risk
+Profiles only change sizing knobs (quantiles, window, target utilization). They do
+**not** apply a savings filter — every profile returns the full recommendation set
+by default. Pass `min_monthly_savings=5.0` when you want less noise and the biggest
+savings opportunities. Pass a **negative** threshold (e.g. `-100`) to keep undersized
+workloads whose rightsizing would increase cost by up to that amount.
 
-## When to Use Each Preset
+{_PROFILE_BULLETS}
 
-| Workload type | Preset |
+## When to Use Each Profile
+
+| Workload type | Profile |
 |---------------|--------|
-| Production APIs, stateful services | conservative |
-| General workloads, first pass | balanced |
-| Dev/test, batch, cost reduction sprints | aggressive |
+| Latency-sensitive APIs, stateful services | high-availability |
+| General workloads, first pass | production |
+| Dev/test, batch, cost reduction sprints | development |
+
+`development` uses the same quantiles as `production` and differs only in target utilization
+(0.80 vs 0.65), which it raises on **both** CPU and RAM — so it shrinks the memory request too.
+Memory is not compressible, so an undersized request means OOM kills, not throttling. Do not use
+`development` on production or HA workloads.
 
 ## Practical Workflow
 
-1. Start with `preset="balanced"` and review top savings opportunities
+1. Start with `profile="production"` and review top savings opportunities
 2. Check for negative memory savings (undersized) — never downsize those
-3. For critical services, re-run with `preset="conservative"`
-4. Revisit every 30 to 60 days or after traffic changes
+3. Optionally pass `min_monthly_savings=5.0` to focus on material savings, or a negative
+   floor to keep undersized rows while dropping extreme cost-increase outliers
+4. For critical services, re-run with `profile="high-availability"`
+5. Revisit every 30 to 60 days or after traffic changes
 
-Call `get_container_savings_recommendations` with your chosen preset to get data-backed recommendations.
+Call `get_container_savings_recommendations` with your chosen profile to get data-backed recommendations.
 """
 
 CONTAINER_SIZING_REFERENCE = """\
@@ -155,10 +225,11 @@ CONTAINER_SIZING_REFERENCE = """\
 ## Result Column Glossary
 
 - **currentEfficiency_*** — request vs actual usage (low = over-provisioned)
-- **AvgUsage_*** — mean usage over the window
-- **MaxUsage_*** — peak usage (large gap from Avg = burst/spike behavior)
+- **AvgUsage_cpuInMilliCores / AvgUsage_memoryInMiB** — mean usage over the window
+- **MaxUsage_cpuInMilliCores / MaxUsage_memoryInMiB** — peak usage (large gap from Avg = burst/spike behavior)
 - **monthlySavings_memory < 0** — undersized memory; do NOT reduce memory request
-- **Recommended_*** — suggested request based on quantiles and target utilization
+- **Recommended_cpuInMilliCores / Recommended_memoryInMiB** — suggested request
+  based on quantiles and target utilization
 """
 
 FIELD_DESCRIPTIONS = {
@@ -179,22 +250,34 @@ FIELD_DESCRIPTIONS = {
         "OOM kills will disrupt workloads."
     ),
     "target_cpu_utilization": (
-        "Headroom factor for CPU recommendations (0 to 1). Lower = more aggressive downsizing. "
+        "Utilization the new CPU request should run at (0 to 1). "
+        "Kubecost computes recommended = usage / target. "
+        "Lower (e.g. 0.50) leaves more headroom; higher (e.g. 0.80) recommends a smaller request. "
         "Default 0.65 means sizing so usage hits 65% of the recommended request."
     ),
     "target_ram_utilization": (
-        "Headroom factor for RAM recommendations (0 to 1). Keep conservative — "
-        "OOM risk outweighs the cost of a few extra MB."
+        "Utilization the new RAM request should run at (0 to 1). Same formula as CPU. "
+        "Memory is not compressible — prefer 0.50 to 0.65 unless the workload can tolerate OOM risk."
     ),
-    "preset": (
-        "Named sizing preset: 'conservative' (minimize OOM), 'balanced' (default), "
-        "or 'aggressive' (maximize savings). Explicit params override preset values."
+    "profile": (
+        "Named sizing profile: 'production' (default, target 0.65), "
+        "'high-availability' (more headroom, target 0.50), "
+        "or 'development' (more savings, target 0.80). "
+        "Same three names as the node-group and resource-quota tools' profile parameter, but here "
+        "the profile expands into sizing knobs — any explicitly passed parameter overrides it. "
+        "Profiles do not apply a savings filter."
+    ),
+    "min_monthly_savings": (
+        "Minimum monthlySavings_total (USD) to keep. Default null returns every recommendation. "
+        "Pass 5.0 to cut noise and focus on material savings. "
+        "Pass a negative value (e.g. -100) to include undersized workloads whose rightsizing "
+        "would increase cost by up to that amount."
     ),
 }
 
 
 def resolve_sizing_params(
-    preset: PresetName | None = None,
+    profile: ProfileName | None = None,
     *,
     window: str | None = None,
     algorithm_cpu: str | None = None,
@@ -203,13 +286,12 @@ def resolve_sizing_params(
     q_ram: float | None = None,
     target_cpu_utilization: float | None = None,
     target_ram_utilization: float | None = None,
-    include_undersized: bool | None = None,
     min_monthly_savings: float | None = None,
 ) -> dict[str, Any]:
-    """Merge defaults → preset → explicit overrides."""
+    """Merge defaults → profile → explicit overrides."""
     params = dict(DEFAULT_SIZING_PARAMS)
-    if preset:
-        params.update(SIZING_PRESETS[preset])
+    if profile:
+        params.update(SIZING_PROFILES[profile])
     overrides = {
         "window": window,
         "algorithm_cpu": algorithm_cpu,
@@ -218,23 +300,23 @@ def resolve_sizing_params(
         "q_ram": q_ram,
         "target_cpu_utilization": target_cpu_utilization,
         "target_ram_utilization": target_ram_utilization,
-        "include_undersized": include_undersized,
         "min_monthly_savings": min_monthly_savings,
     }
     for key, value in overrides.items():
-        # Use `is not None` — False and 0.0 are valid overrides and must not be skipped
+        # Use `is not None` — False and 0.0 are valid overrides and must not be skipped.
+        # min_monthly_savings may intentionally stay None (no filter).
         if value is not None:
             params[key] = value
-    if preset:
-        params["preset"] = preset
+    if profile:
+        params["profile"] = profile
     return params
 
 
-def format_presets_resource() -> str:
-    """Format sizing presets for MCP resource."""
-    lines = ["# Container Sizing Presets\n"]
-    for name, desc in PRESET_DESCRIPTIONS.items():
-        overrides = SIZING_PRESETS[name]
+def format_profiles_resource() -> str:
+    """Format sizing profiles for MCP resource."""
+    lines = ["# Container Sizing Profiles\n"]
+    for name, desc in PROFILE_DESCRIPTIONS.items():
+        overrides = SIZING_PROFILES[name]
         lines.append(f"## {name}")
         lines.append(desc)
         if overrides:
@@ -243,12 +325,8 @@ def format_presets_resource() -> str:
         else:
             lines.append("  (uses all defaults)")
         lines.append("")
-    lines.append("Explicit parameters passed to the tool override preset values.")
+    lines.append("Explicit parameters passed to the tool override profile values.")
     return "\n".join(lines)
-
-
-def _pct(quantile: float) -> str:
-    return f"P{int(quantile * 100)}"
 
 
 def build_result_interpretation(
@@ -264,20 +342,20 @@ def build_result_interpretation(
         "**How to read these results:**",
         "- CPU is compressible (throttle) — memory is not (OOM kill). Treat memory recommendations conservatively.",
         "- Low `currentEfficiency` = over-provisioned (safe to downsize). High efficiency = already tight.",
-        "- Large gap between `AvgUsage` and `MaxUsage` indicates burst/spike behavior.",
+        "- Large gap between `AvgUsage` and `MaxUsage` (millicores/MiB) indicates burst/spike behavior.",
         "- Negative `monthlySavings_memory` = undersized RAM — do NOT reduce memory request.",
     ]
 
-    preset = params.get("preset")
+    profile = params.get("profile")
     q_cpu = float(params.get("q_cpu") or DEFAULT_SIZING_PARAMS["q_cpu"])
     q_ram = float(params.get("q_ram") or DEFAULT_SIZING_PARAMS["q_ram"])
     window = params.get("window", DEFAULT_SIZING_PARAMS["window"])
     algorithm_cpu = params.get("algorithm_cpu", DEFAULT_SIZING_PARAMS["algorithm_cpu"])
     algorithm_ram = params.get("algorithm_ram", DEFAULT_SIZING_PARAMS["algorithm_ram"])
 
-    preset_label = f" ({preset} preset)" if preset else ""
+    profile_label = f" ({profile} profile)" if profile else ""
     lines.append(
-        f"- Active sizing{preset_label}: {_pct(q_cpu)} CPU ({algorithm_cpu}), "
+        f"- Active sizing{profile_label}: {_pct(q_cpu)} CPU ({algorithm_cpu}), "
         f"{_pct(q_ram)} RAM ({algorithm_ram}), {window} window."
     )
 
@@ -291,14 +369,14 @@ def build_result_interpretation(
         )
         lines.append(
             f"- ⚠️ {len(undersized_memory)} container(s) have negative memory savings "
-            f"({names}{extra}) — under-provisioned RAM. Re-run with "
-            f'`preset="conservative"` and `include_undersized=True` to review.'
+            f"({names}{extra}) — under-provisioned RAM. Do NOT reduce those memory requests. "
+            f"Omit `min_monthly_savings` (or pass a negative floor) to keep undersized rows visible."
         )
 
     spikey: list[str] = []
     for row in display_rows[:MAX_SPIKEY_CONTAINERS_CHECK]:
-        avg_cpu = _float_field(row, "AvgUsage_cpu")
-        max_cpu = _float_field(row, "MaxUsage_cpu")
+        avg_cpu = _float_field(row, "AvgUsage_cpuInMilliCores")
+        max_cpu = _float_field(row, "MaxUsage_cpuInMilliCores")
         if (
             avg_cpu > MIN_AVG_CPU_FOR_SPIKE_DETECTION  # guards the division below; constant must stay > 0
             and max_cpu / avg_cpu >= CPU_SPIKE_THRESHOLD

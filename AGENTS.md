@@ -35,7 +35,7 @@ Run `ruff format`, `ruff check --fix`, and `pyrefly check` after every Python ed
 | New MCP tool, prompt, or resource | [`src/mcp_kubecost/tools/kubecost_tools.py`](src/mcp_kubecost/tools/kubecost_tools.py) |
 | Response envelope, window parsing, API call wrapper, error raising | [`src/mcp_kubecost/tools/_common.py`](src/mcp_kubecost/tools/_common.py) |
 | Workflow guidance prompt (skill) | New module under [`src/mcp_kubecost/skills/`](src/mcp_kubecost/skills/), register in [`skills/__init__.py`](src/mcp_kubecost/skills/__init__.py) |
-| Sizing presets, aggregation helpers | [`src/mcp_kubecost/domain/kubecost/`](src/mcp_kubecost/domain/kubecost/) |
+| Sizing profiles, aggregation helpers | [`src/mcp_kubecost/domain/kubecost/`](src/mcp_kubecost/domain/kubecost/) |
 | HTTP client / auth | [`src/mcp_kubecost/client.py`](src/mcp_kubecost/client.py) |
 | HTTP custom routes (`/version`) | [`server.py`](src/mcp_kubecost/server.py) |
 | Env-backed settings | [`src/mcp_kubecost/config/settings.py`](src/mcp_kubecost/config/settings.py) |
@@ -53,7 +53,7 @@ Current MCP surface — **11 tools**, **11 prompts** (9 inline in `kubecost_tool
 | `get_cluster_rightsizing_recommendations` | `get_unclaimed_volumes` |
 | `get_resource_quota_recommendations` | |
 
-Resources: `kubecost://schema/allocation-params`, `kubecost://schema/cost-fields`, `kubecost://schema/sizing-presets`, `kubecost://guides/container-sizing`.
+Resources: `kubecost://schema/allocation-params`, `kubecost://schema/cost-fields`, `kubecost://schema/sizing-profiles`, `kubecost://guides/container-sizing`.
 
 ### `tools/_common.py` — shared contract
 
@@ -97,7 +97,7 @@ API call (broad fetch, large limit)
 |------|-----|-------------------|----------------|
 | `get_kubecost_workload_costs` | `top_n=20` | `min_total_cost` | $1.00 |
 | `get_kubecost_cost_comparison` | `top_n=20` | (none — diff is already aggregated) | — |
-| `get_container_savings_recommendations` | `top_n=20` | `min_monthly_savings` | preset-resolved, $1.00 for most |
+| `get_container_savings_recommendations` | `top_n=20` | `min_monthly_savings` | none (suggest $5.00) |
 | `get_abandoned_workloads` | `limit=20` | (API-side threshold) | 500 bytes/s |
 | `get_pv_sizing_recommendations` | `top_n=20` | `min_monthly_savings` | $1.00 |
 | `get_local_disk_savings` | `top_n=20` | `min_monthly_savings` | $1.00 |
@@ -110,13 +110,39 @@ Design rules:
 - Response metadata (`total_cost`, `row_count`, `truncated`) must describe the full filtered population, not just the sliced rows.
 - When the Kubecost API has no server-side filter for a field (e.g. `totalCost`), apply the filter client-side after fetch.
 - Set `truncated=True` when rows are sliced so the caller knows more data exists.
-- Note that `get_container_savings_recommendations` takes `min_monthly_savings=None` as a sentinel — the effective threshold comes from the chosen sizing preset in [`domain/kubecost/sizing_guidance.py`](src/mcp_kubecost/domain/kubecost/sizing_guidance.py), not from the schema default.
+- Note that `get_container_savings_recommendations` takes `min_monthly_savings=None` as the default (no filter). Pass `5.0` to cut noise; pass a negative value to keep undersized workloads. Profiles do not change this filter.
+
+## Container Sizing Profiles
+
+`SIZING_PROFILES` in [`sizing_guidance.py`](src/mcp_kubecost/domain/kubecost/sizing_guidance.py) is the single source of truth for the `profile` parameter on `get_container_savings_recommendations`:
+
+| Profile | Window | Quantiles | Target utilization |
+|--------|--------|-----------|--------------------|
+| `high-availability` | 30d | P95 CPU / P99 RAM | 0.50 |
+| `production` (default) | 15d | P80 CPU / P95 RAM | 0.65 |
+| `development` | 15d | P80 CPU / P95 RAM | 0.80 |
+
+Rules to preserve when touching this:
+
+- Kubecost computes `recommended = usage / targetUtilization`, so a **lower** target means a **larger** request and more headroom. The ladder must stay `high-availability < production < development`.
+- No profile may set `target_ram_utilization` above `target_cpu_utilization` — memory is not compressible, so an undersized RAM request OOM-kills rather than throttles. A test enforces this.
+- Every profile pins every key in `DEFAULT_SIZING_PARAMS` (also enforced by a test) so each dict is readable without cross-referencing the defaults. `production` must stay identical to `DEFAULT_SIZING_PARAMS`.
+- `PROFILE_DESCRIPTIONS` and the `explore_container_savings` prompt menu are **generated** from `SIZING_PROFILES`. Change values there only — never restate quantiles or targets in prose.
+- Profiles never apply a savings filter; `min_monthly_savings` stays `None` in all three.
+- These are the **same three names** `get_cluster_rightsizing_recommendations` and `get_resource_quota_recommendations` take on their `profile` parameter — one sizing vocabulary across the server, checked by an invariant. Kubecost owns that spelling (the node-group and quota tools send `profile` to the API verbatim), so if the two ever diverge, our side moves back, not theirs. The mechanisms still differ: here a profile expands into individually overridable sizing knobs; there it is an opaque pass-through enum.
+
+Before and after changing a profile, run [`scripts/show_sizing_profiles.py`](scripts/show_sizing_profiles.py). It renders the parameters, the request multiplier each target implies (`0.50` → `2.00x` usage), a worked example, and the exact Kubecost query params — then checks every rule above. `--check` exits non-zero on a violation; `--json` for scripting.
+
+```bash
+uv run scripts/show_sizing_profiles.py          # full report
+uv run scripts/show_sizing_profiles.py --check  # invariants only, exit 1 on failure
+```
 
 ## Tool Response Shape
 
 FastMCP serializes each returned Pydantic model **twice** — once as a JSON `TextContent` block and once as `structuredContent`. This is deliberate: the MCP specification (2025-11-25) says a tool returning structured content SHOULD also return the serialized JSON in a text block, for clients that do not read `structuredContent`. Do not "optimize" it away with `ToolResult` or middleware. To shrink a response, shrink the payload — fewer fields, lower `top_n`.
 
-`_VERSION` in `kubecost_tools.py` is a single module constant applied to **every** tool's `version=`, so bumping it relabels all 11. Bump on a breaking response-shape change and update the "Contract version" line in the module docstring to match. Currently **4.0**.
+`_VERSION` in `kubecost_tools.py` is a single module constant applied to **every** tool's `version=`, so bumping it relabels all 11. Bump on a breaking response-shape change and update the "Contract version" line in the module docstring to match. Currently **7.0**.
 
 ## Code Conventions
 

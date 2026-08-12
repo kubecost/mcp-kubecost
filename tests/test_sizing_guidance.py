@@ -7,10 +7,11 @@ import pytest
 import mcp_kubecost.domain.kubecost.sizing_guidance as sg
 
 DEFAULT_SIZING_PARAMS = sg.DEFAULT_SIZING_PARAMS
-SIZING_PRESETS = sg.SIZING_PRESETS
-PresetName = sg.PresetName
+PROFILE_DESCRIPTIONS = sg.PROFILE_DESCRIPTIONS
+SIZING_PROFILES = sg.SIZING_PROFILES
+ProfileName = sg.ProfileName
 build_result_interpretation = sg.build_result_interpretation
-format_presets_resource = sg.format_presets_resource
+format_profiles_resource = sg.format_profiles_resource
 resolve_sizing_params = sg.resolve_sizing_params
 
 # ---------------------------------------------------------------------------
@@ -24,45 +25,66 @@ class TestResolveSizingParams:
         assert params["window"] == DEFAULT_SIZING_PARAMS["window"]
         assert params["q_cpu"] == DEFAULT_SIZING_PARAMS["q_cpu"]
         assert params["q_ram"] == DEFAULT_SIZING_PARAMS["q_ram"]
-        assert "preset" not in params
+        assert params["min_monthly_savings"] is None
+        assert "profile" not in params
 
-    def test_preset_balanced_is_empty_override(self):
-        params = resolve_sizing_params("balanced")
-        # balanced applies no overrides — all values should equal defaults
+    def test_profile_production_is_empty_override(self):
+        params = resolve_sizing_params("production")
         for key, val in DEFAULT_SIZING_PARAMS.items():
-            assert params[key] == val, f"balanced preset changed {key}"
-        assert params["preset"] == "balanced"
+            assert params[key] == val, f"production profile changed {key}"
+        assert params["profile"] == "production"
 
-    def test_preset_conservative_raises_quantiles(self):
-        params = resolve_sizing_params("conservative")
-        assert params["q_cpu"] == SIZING_PRESETS["conservative"]["q_cpu"]
-        assert params["q_ram"] == SIZING_PRESETS["conservative"]["q_ram"]
+    def test_profile_high_availability_raises_quantiles_and_headroom(self):
+        params = resolve_sizing_params("high-availability")
+        assert params["q_cpu"] == 0.95
+        assert params["q_ram"] == 0.99
         assert params["window"] == "30d"
-        assert params["include_undersized"] is True
+        assert params["target_cpu_utilization"] == 0.50
+        assert params["target_ram_utilization"] == 0.50
 
-    def test_preset_aggressive_lowers_target_utilization(self):
-        params = resolve_sizing_params("aggressive")
-        assert params["target_cpu_utilization"] == SIZING_PRESETS["aggressive"]["target_cpu_utilization"]
-        assert params["min_monthly_savings"] == SIZING_PRESETS["aggressive"]["min_monthly_savings"]
+    def test_profile_development_raises_target_utilization(self):
+        params = resolve_sizing_params("development")
+        assert params["target_cpu_utilization"] == 0.80
+        assert params["target_ram_utilization"] == 0.80
 
-    def test_explicit_override_beats_preset(self):
-        params = resolve_sizing_params("conservative", q_cpu=0.5)
-        assert params["q_cpu"] == 0.5  # explicit wins over preset's 0.95
+    @pytest.mark.parametrize("profile", [None, "high-availability", "production", "development"])
+    def test_min_monthly_savings_is_null_for_every_profile(self, profile: ProfileName | None):
+        params = resolve_sizing_params(profile)
+        assert params["min_monthly_savings"] is None
 
-    def test_false_and_zero_are_valid_overrides(self):
-        """False and 0.0 must not be skipped (they're falsy but intentional)."""
-        params = resolve_sizing_params(include_undersized=False, min_monthly_savings=0.0)
-        assert params["include_undersized"] is False
+    def test_target_utilization_orders_ha_below_production_below_development(self):
+        ha = resolve_sizing_params("high-availability")
+        prod = resolve_sizing_params("production")
+        dev = resolve_sizing_params("development")
+        assert ha["target_cpu_utilization"] < prod["target_cpu_utilization"] < dev["target_cpu_utilization"]
+        assert ha["target_ram_utilization"] < prod["target_ram_utilization"] < dev["target_ram_utilization"]
+
+    def test_higher_target_utilization_produces_smaller_recommended_request(self):
+        """Kubecost formula: recommended = usage / targetUtilization."""
+        usage = 1000.0
+        ha = usage / resolve_sizing_params("high-availability")["target_cpu_utilization"]
+        prod = usage / resolve_sizing_params("production")["target_cpu_utilization"]
+        dev = usage / resolve_sizing_params("development")["target_cpu_utilization"]
+        assert ha > prod > dev
+
+    def test_explicit_override_beats_profile(self):
+        params = resolve_sizing_params("high-availability", q_cpu=0.5)
+        assert params["q_cpu"] == 0.5  # explicit wins over profile's 0.95
+
+    def test_zero_min_monthly_savings_is_valid_override(self):
+        """0.0 must not be skipped (falsy but intentional)."""
+        params = resolve_sizing_params(min_monthly_savings=0.0)
         assert params["min_monthly_savings"] == 0.0
 
     def test_none_overrides_are_ignored(self):
-        params = resolve_sizing_params(window=None, q_cpu=None)
+        params = resolve_sizing_params(window=None, q_cpu=None, min_monthly_savings=None)
         assert params["window"] == DEFAULT_SIZING_PARAMS["window"]
         assert params["q_cpu"] == DEFAULT_SIZING_PARAMS["q_cpu"]
+        assert params["min_monthly_savings"] is None
 
-    @pytest.mark.parametrize("preset", ["conservative", "balanced", "aggressive"])
-    def test_all_presets_produce_required_keys(self, preset: PresetName):
-        params = resolve_sizing_params(preset)
+    @pytest.mark.parametrize("profile", ["high-availability", "production", "development"])
+    def test_all_profiles_produce_required_keys(self, profile: ProfileName):
+        params = resolve_sizing_params(profile)
         required = {
             "window",
             "algorithm_cpu",
@@ -71,10 +93,34 @@ class TestResolveSizingParams:
             "q_ram",
             "target_cpu_utilization",
             "target_ram_utilization",
-            "include_undersized",
             "min_monthly_savings",
         }
         assert required.issubset(params.keys())
+        assert "include_undersized" not in params
+
+    @pytest.mark.parametrize("profile", ["high-availability", "production", "development"])
+    def test_profile_pins_every_default_key(self, profile: ProfileName):
+        """Profiles spell out the full parameter set so each is readable in isolation."""
+        assert set(SIZING_PROFILES[profile]) == set(DEFAULT_SIZING_PARAMS)
+
+
+class TestProfileDescriptions:
+    @pytest.mark.parametrize("profile", ["high-availability", "production", "development"])
+    def test_description_reports_the_profiles_actual_values(self, profile: ProfileName):
+        """Descriptions are generated from SIZING_PROFILES — they cannot drift from it."""
+        values = SIZING_PROFILES[profile]
+        description = PROFILE_DESCRIPTIONS[profile]
+        assert f"P{round(values['q_cpu'] * 100)} CPU" in description
+        assert f"P{round(values['q_ram'] * 100)} RAM" in description
+        assert f"over {values['window']}" in description
+        assert f"{values['target_cpu_utilization']:.2f}" in description
+
+    def test_ram_target_never_exceeds_cpu_target(self):
+        """Memory is not compressible — no profile may squeeze RAM harder than CPU."""
+        for profile, values in SIZING_PROFILES.items():
+            assert values["target_ram_utilization"] <= values["target_cpu_utilization"], (
+                f"{profile} sizes RAM more aggressively than CPU"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -87,8 +133,8 @@ class TestBuildResultInterpretation:
         defaults = {
             "containerName": "app",
             "monthlySavings_memory": 5.0,
-            "AvgUsage_cpu": 100.0,
-            "MaxUsage_cpu": 200.0,
+            "AvgUsage_cpuInMilliCores": 100.0,
+            "MaxUsage_cpuInMilliCores": 200.0,
             "currentEfficiency_cpu": 0.5,
             "currentEfficiency_memory": 0.5,
         }
@@ -107,19 +153,20 @@ class TestBuildResultInterpretation:
         result = build_result_interpretation(params, [undersized])
         assert "leaky-app" in result
         assert "under-provisioned" in result.lower()
+        assert "min_monthly_savings" in result
 
     def test_cpu_spike_warning_appears(self):
         params = resolve_sizing_params()
         # Max/Avg > 3x threshold
-        spikey = self._make_row(AvgUsage_cpu=10.0, MaxUsage_cpu=40.0)
+        spikey = self._make_row(AvgUsage_cpuInMilliCores=10.0, MaxUsage_cpuInMilliCores=40.0)
         result = build_result_interpretation(params, [spikey])
         assert "spike" in result.lower() or "Max/Avg" in result
 
-    def test_preset_label_in_output(self):
-        params = resolve_sizing_params("conservative")
+    def test_profile_label_in_output(self):
+        params = resolve_sizing_params("high-availability")
         row = self._make_row()
         result = build_result_interpretation(params, [row])
-        assert "conservative" in result
+        assert "high-availability" in result
 
     def test_heavily_overprovisioned_entry(self):
         params = resolve_sizing_params()
@@ -133,16 +180,16 @@ class TestBuildResultInterpretation:
 
 
 # ---------------------------------------------------------------------------
-# format_presets_resource
+# format_profiles_resource
 # ---------------------------------------------------------------------------
 
 
-class TestFormatPresetsResource:
-    def test_all_preset_names_present(self):
-        output = format_presets_resource()
-        for name in ("conservative", "balanced", "aggressive"):
+class TestFormatProfilesResource:
+    def test_all_profile_names_present(self):
+        output = format_profiles_resource()
+        for name in ("high-availability", "production", "development"):
             assert name in output
 
     def test_contains_explicit_params_label(self):
-        output = format_presets_resource()
+        output = format_profiles_resource()
         assert "Explicit parameters" in output

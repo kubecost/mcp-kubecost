@@ -294,15 +294,41 @@ class TestGetContainerSavingsRecommendations:
         assert _sc(result)["status"] == "error"
 
     @pytest.mark.asyncio
-    async def test_preset_conservative_uses_30d_window(self, httpx_mock: HTTPXMock, mcp_app, savings_api_response):
+    async def test_profile_high_availability_uses_30d_window(
+        self, httpx_mock: HTTPXMock, mcp_app, savings_api_response
+    ):
         httpx_mock.add_response(
             method="GET",
             url=_savings_url(),
             json=savings_api_response,
         )
         tool = await mcp_app.get_tool("get_container_savings_recommendations")
-        result = await tool.run({"preset": "conservative"})
+        result = await tool.run({"profile": "high-availability"})
         assert _sc(result)["window"] == "30d"
+        assert _sc(result)["parameters"]["target_cpu_utilization"] == 0.50
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert request.url.params["window"] == "30d"
+        assert request.url.params["targetCPUUtilization"] == "0.5"
+
+    @pytest.mark.asyncio
+    async def test_profile_development_sends_higher_target_utilization(
+        self, httpx_mock: HTTPXMock, mcp_app, savings_api_response
+    ):
+        httpx_mock.add_response(
+            method="GET",
+            url=_savings_url(),
+            json=savings_api_response,
+        )
+        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        result = await tool.run({"profile": "development"})
+        assert _sc(result)["parameters"]["target_cpu_utilization"] == 0.80
+        assert _sc(result)["parameters"]["target_ram_utilization"] == 0.80
+        assert _sc(result)["parameters"]["min_monthly_savings"] is None
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert request.url.params["targetCPUUtilization"] == "0.8"
+        assert request.url.params["targetRAMUtilization"] == "0.8"
 
     @pytest.mark.asyncio
     async def test_min_monthly_savings_filter_to_empty(self, httpx_mock: HTTPXMock, mcp_app, savings_api_response):
@@ -314,6 +340,134 @@ class TestGetContainerSavingsRecommendations:
         tool = await mcp_app.get_tool("get_container_savings_recommendations")
         result = await tool.run({"window": "15d", "min_monthly_savings": 9999.0})
         assert _sc(result)["status"] == "empty"
+
+    @pytest.mark.asyncio
+    async def test_default_keeps_undersized_negative_total_rows(self, httpx_mock: HTTPXMock, mcp_app):
+        """Null min_monthly_savings returns undersized (negative total) recommendations."""
+        payload = {
+            "TotalMonthlySavings": 20.0,
+            "Count": 2,
+            "Recommendations": [
+                {
+                    "clusterID": "c1",
+                    "namespace": "default",
+                    "controllerKind": "Deployment",
+                    "controllerName": "api",
+                    "containerName": "api",
+                    "monthlySavings": {"cpu": 25.0, "memory": 0.0, "total": 25.0},
+                    "normalizedRecommendedRequest": {"cpuInMilliCores": 200.0, "memoryInMiB": 256.0},
+                    "normalizedLatestKnownRequest": {"cpuInMilliCores": 500.0, "memoryInMiB": 512.0},
+                    "currentEfficiency": {"cpu": 0.3, "memory": 0.4, "total": 0.35},
+                    "normalizedAverageUsage": {"cpuInMilliCores": 150.0, "memoryInMiB": 200.0},
+                    "normalizedMaxUsage": {"cpuInMilliCores": 600.0, "memoryInMiB": 300.0},
+                },
+                {
+                    "clusterID": "c1",
+                    "namespace": "default",
+                    "controllerKind": "Deployment",
+                    "controllerName": "leaky",
+                    "containerName": "leaky",
+                    "monthlySavings": {"cpu": 5.0, "memory": -20.0, "total": -15.0},
+                    "normalizedRecommendedRequest": {"cpuInMilliCores": 200.0, "memoryInMiB": 1024.0},
+                    "normalizedLatestKnownRequest": {"cpuInMilliCores": 500.0, "memoryInMiB": 512.0},
+                    "currentEfficiency": {"cpu": 0.3, "memory": 0.9, "total": 0.6},
+                    "normalizedAverageUsage": {"cpuInMilliCores": 150.0, "memoryInMiB": 900.0},
+                    "normalizedMaxUsage": {"cpuInMilliCores": 600.0, "memoryInMiB": 1000.0},
+                },
+            ],
+        }
+        httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
+        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        result = await tool.run({"window": "15d"})
+        sc = _sc(result)
+        assert sc["status"] == "ok"
+        assert sc["parameters"]["min_monthly_savings"] is None
+        names = {r["containerName"] for r in sc["rows"]}
+        assert names == {"api", "leaky"}
+
+    @pytest.mark.asyncio
+    async def test_positive_min_monthly_savings_drops_undersized(self, httpx_mock: HTTPXMock, mcp_app):
+        payload = {
+            "TotalMonthlySavings": 20.0,
+            "Count": 2,
+            "Recommendations": [
+                {
+                    "clusterID": "c1",
+                    "namespace": "default",
+                    "controllerKind": "Deployment",
+                    "controllerName": "api",
+                    "containerName": "api",
+                    "monthlySavings": {"cpu": 25.0, "memory": 0.0, "total": 25.0},
+                    "normalizedRecommendedRequest": {"cpuInMilliCores": 200.0, "memoryInMiB": 256.0},
+                    "normalizedLatestKnownRequest": {"cpuInMilliCores": 500.0, "memoryInMiB": 512.0},
+                    "currentEfficiency": {"cpu": 0.3, "memory": 0.4, "total": 0.35},
+                    "normalizedAverageUsage": {"cpuInMilliCores": 150.0, "memoryInMiB": 200.0},
+                    "normalizedMaxUsage": {"cpuInMilliCores": 600.0, "memoryInMiB": 300.0},
+                },
+                {
+                    "clusterID": "c1",
+                    "namespace": "default",
+                    "controllerKind": "Deployment",
+                    "controllerName": "leaky",
+                    "containerName": "leaky",
+                    "monthlySavings": {"cpu": 5.0, "memory": -20.0, "total": -15.0},
+                    "normalizedRecommendedRequest": {"cpuInMilliCores": 200.0, "memoryInMiB": 1024.0},
+                    "normalizedLatestKnownRequest": {"cpuInMilliCores": 500.0, "memoryInMiB": 512.0},
+                    "currentEfficiency": {"cpu": 0.3, "memory": 0.9, "total": 0.6},
+                    "normalizedAverageUsage": {"cpuInMilliCores": 150.0, "memoryInMiB": 900.0},
+                    "normalizedMaxUsage": {"cpuInMilliCores": 600.0, "memoryInMiB": 1000.0},
+                },
+            ],
+        }
+        httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
+        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        result = await tool.run({"window": "15d", "min_monthly_savings": 5.0})
+        sc = _sc(result)
+        assert sc["status"] == "ok"
+        names = {r["containerName"] for r in sc["rows"]}
+        assert names == {"api"}
+
+    @pytest.mark.asyncio
+    async def test_negative_min_monthly_savings_keeps_undersized_within_floor(self, httpx_mock: HTTPXMock, mcp_app):
+        payload = {
+            "TotalMonthlySavings": 20.0,
+            "Count": 2,
+            "Recommendations": [
+                {
+                    "clusterID": "c1",
+                    "namespace": "default",
+                    "controllerKind": "Deployment",
+                    "controllerName": "api",
+                    "containerName": "api",
+                    "monthlySavings": {"cpu": 25.0, "memory": 0.0, "total": 25.0},
+                    "normalizedRecommendedRequest": {"cpuInMilliCores": 200.0, "memoryInMiB": 256.0},
+                    "normalizedLatestKnownRequest": {"cpuInMilliCores": 500.0, "memoryInMiB": 512.0},
+                    "currentEfficiency": {"cpu": 0.3, "memory": 0.4, "total": 0.35},
+                    "normalizedAverageUsage": {"cpuInMilliCores": 150.0, "memoryInMiB": 200.0},
+                    "normalizedMaxUsage": {"cpuInMilliCores": 600.0, "memoryInMiB": 300.0},
+                },
+                {
+                    "clusterID": "c1",
+                    "namespace": "default",
+                    "controllerKind": "Deployment",
+                    "controllerName": "leaky",
+                    "containerName": "leaky",
+                    "monthlySavings": {"cpu": 5.0, "memory": -20.0, "total": -15.0},
+                    "normalizedRecommendedRequest": {"cpuInMilliCores": 200.0, "memoryInMiB": 1024.0},
+                    "normalizedLatestKnownRequest": {"cpuInMilliCores": 500.0, "memoryInMiB": 512.0},
+                    "currentEfficiency": {"cpu": 0.3, "memory": 0.9, "total": 0.6},
+                    "normalizedAverageUsage": {"cpuInMilliCores": 150.0, "memoryInMiB": 900.0},
+                    "normalizedMaxUsage": {"cpuInMilliCores": 600.0, "memoryInMiB": 1000.0},
+                },
+            ],
+        }
+        httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
+        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        result = await tool.run({"window": "15d", "min_monthly_savings": -100.0})
+        sc = _sc(result)
+        assert sc["status"] == "ok"
+        names = {r["containerName"] for r in sc["rows"]}
+        assert names == {"api", "leaky"}
 
     @pytest.mark.asyncio
     async def test_summary_aggregate_namespace(self, httpx_mock: HTTPXMock, mcp_app, savings_api_response):

@@ -1,6 +1,6 @@
 [project]
 name = "mcp-kubecost"
-version = "0.4.13"
+version = "0.4.16"
 description = "FinOps-first MCP server for Kubecost analytics."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -76,7 +76,7 @@ indent-style = "space"
 # Pyrefly is the project's type checker — the one CI and agents run.
 [tool.pyrefly]
 project-includes = ["src", "tests"]
-search-path = ["src"]
+search-path = ["src", "."]
 python-version = "3.12"
 
 

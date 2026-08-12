@@ -18,11 +18,12 @@ or diagnosing why costs changed (spikes, drops, anomalies).
 
 ### Container request sizing (Kubecost)
 - `get_container_savings_recommendations` — Quantile-based container CPU/RAM rightsizing from Kubecost requestSizingV2.
-   Supports named presets (conservative, balanced, aggressive).
+   Supports named profiles (production, high-availability, development) — the same names the
+   node-group and quota tools take.
 - `container_rightsizing_guide` prompt — Methodology for CPU vs memory sizing (call when user asks HOW to rightsize).
 - `explore_container_savings` prompt — Guided workflow for container savings exploration.
 - Resource `kubecost://guides/container-sizing` — Full sizing reference.
-- Resource `kubecost://schema/sizing-presets` — Preset parameter bundles.
+- Resource `kubecost://schema/sizing-profiles` — Profile parameter bundles.
 
 ### Abandoned workload detection (Kubecost)
 - `get_abandoned_workloads` — Surfaces pods with abnormally low network traffic (both ingress and egress
@@ -67,10 +68,10 @@ or diagnosing why costs changed (spikes, drops, anomalies).
 
 ### Kubernetes/Container rightsizing investigation
 1. If user asks about methodology, invoke `container_rightsizing_guide` prompt first
-2. `get_container_savings_recommendations` with `preset="balanced"` for a first pass
+2. `get_container_savings_recommendations` with `profile="production"` for a first pass
 3. Check interpretation block for undersized memory (negative memory savings) -- never downsize those
-4. Re-run with `preset="conservative"` for production-critical workloads
-5. Use `include_undersized=True` to surface containers that need MORE resources
+4. Re-run with `profile="high-availability"` for latency-sensitive or stateful workloads
+5. Optionally pass `min_monthly_savings=5.0` to focus on material savings, or a negative floor to keep undersized rows
 
 ### Abandoned workload discovery
 1. Invoke `explore_abandoned_workloads` prompt to walk the user through threshold and scope choices

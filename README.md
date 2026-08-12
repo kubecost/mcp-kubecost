@@ -63,7 +63,7 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
 | `container_rightsizing_guide` | Explain how to properly size Kubernetes container CPU and memory requests. |
 | `explore_container_savings` | Start a guided container rightsizing exploration. Presents choices step-by-step. |
 | `container_savings_window_help` | Explain the time window options for the container savings tool. |
-| `container_savings_filter_help` | Explain the filter options (undersized containers, trivial savings) for container savings. |
+| `container_savings_filter_help` | Explain the min_monthly_savings filter for container savings. |
 | `explore_costs` | Start a guided Kubernetes cost exploration. Presents choices step-by-step. |
 | `explore_cost_comparison` | Start a guided cost anomaly / spike investigation using period-over-period comparison. |
 | `top_spenders` | Show top cost drivers across clusters and namespaces for a given window. |
@@ -71,6 +71,20 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
 | `explore_abandoned_workloads` | Start a guided abandoned-workload investigation. Walks the user through threshold and scope choices. |
 | `optimization` | Guidance for rightsizing resources and diagnosing Kubernetes cost anomalies. |
 | `kubecost_cost_allocation` | Guidance for investigating Kubernetes cluster costs and container allocation. |
+
+### Container sizing profiles
+
+`get_container_savings_recommendations` accepts a `profile` that bundles the sizing knobs, so you can ask for "production sizing" instead of picking quantiles by hand:
+
+| Profile | Best for | Window | Quantiles | Target utilization |
+|--------|----------|--------|-----------|--------------------|
+| `high-availability` | Latency-sensitive APIs, stateful services | 30d | P95 CPU / P99 RAM | 0.50 |
+| `production` (default) | General workloads, first pass | 15d | P80 CPU / P95 RAM | 0.65 |
+| `development` | Dev/test, batch, cost-reduction sprints | 15d | P80 CPU / P95 RAM | 0.80 |
+
+Target utilization is the utilization the new request should run at — Kubecost computes `recommended = usage / target`. **Lower means a bigger request and more headroom**, so `high-availability` at 0.50 is the safest and `development` at 0.80 the most aggressive. Memory is not compressible, so an undersized memory request causes OOM kills rather than throttling — don't run `development` against production workloads.
+
+Profiles never filter results. Pass `min_monthly_savings=5.0` to hide small opportunities, or a negative value to keep undersized workloads. Any explicit parameter overrides the profile. Ask for the `container_rightsizing_guide` prompt for the full methodology.
 
 ## Authentication to Kubecost
 
