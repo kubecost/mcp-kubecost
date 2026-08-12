@@ -18,7 +18,7 @@ import logging
 
 from fastmcp.server.dependencies import get_http_headers
 
-from mcp_kubecost.config.settings import get_settings, is_http_mode
+from mcp_kubecost.config.settings import AuthMode, get_settings, is_http_mode
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,9 @@ def resolve_api_key() -> str | None:
             an HTTP client called without supplying a key. The check sits
             between the header and the environment fallback, so the flag means
             "the caller must present a key" rather than "a key must exist".
+            Also raised when ``AUTH_MODE=both`` — the client must supply an
+            ``X-API-KEY`` header alongside the OIDC token (presence check only,
+            value is not validated).
     """
     client_key = client_supplied_api_key()
     if client_key:
@@ -58,6 +61,16 @@ def resolve_api_key() -> str | None:
         return client_key
 
     settings = get_settings()
+
+    # In "both" mode, OIDC handles identity but we still require the API key
+    # header to be present on HTTP requests (value is forwarded as-is, no
+    # validation). This check is intentionally separate from require_client_api_key
+    # so operators can enable OIDC+API-key gating without the legacy flag.
+    if settings.auth_mode == AuthMode.BOTH and is_http_mode():
+        raise MissingClientApiKeyError(
+            f"AUTH_MODE=both requires an {KUBECOST_API_KEY_HEADER} header alongside OIDC authentication."
+        )
+
     # STDIO callers cannot send headers, so enforcing there would break the
     # transport outright.
     if settings.require_client_api_key and is_http_mode():

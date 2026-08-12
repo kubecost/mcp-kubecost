@@ -47,3 +47,8 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "mcp-kubecost.apiKeySecretName" -}}
 {{- printf "%s-api-key" (include "mcp-kubecost.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
+
+{{/* Return the generated OIDC Secret name. */}}
+{{- define "mcp-kubecost.oidcSecretName" -}}
+{{- printf "%s-oidc" (include "mcp-kubecost.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}

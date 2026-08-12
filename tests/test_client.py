@@ -11,7 +11,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 from mcp_kubecost.client import KubecostClientError, _build_params, get, post
-from mcp_kubecost.config.settings import Settings
+from mcp_kubecost.config.settings import AuthMode, Settings
 from mcp_kubecost.errors import ErrorCode
 
 
@@ -82,6 +82,13 @@ _BASE_SETTINGS: dict[str, Any] = dict(
     show_banner=False,
     log_level="INFO",
     enable_rich_logging=True,
+    auth_mode=AuthMode.NONE,
+    oidc_issuer_url=None,
+    oidc_client_id=None,
+    oidc_client_secret=None,
+    oidc_audience=None,
+    oidc_base_url=None,
+    oidc_required_scopes=["openid", "profile"],
 )
 
 

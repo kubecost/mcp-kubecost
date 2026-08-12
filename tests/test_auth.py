@@ -12,7 +12,7 @@ from mcp_kubecost.auth import (
     client_supplied_api_key,
     resolve_api_key,
 )
-from mcp_kubecost.config.settings import Settings
+from mcp_kubecost.config.settings import AuthMode, Settings
 
 _SETTINGS: dict[str, Any] = dict(
     kubecost_base_url="http://localhost:9090",
@@ -27,6 +27,13 @@ _SETTINGS: dict[str, Any] = dict(
     show_banner=False,
     log_level="INFO",
     enable_rich_logging=True,
+    auth_mode=AuthMode.NONE,
+    oidc_issuer_url=None,
+    oidc_client_id=None,
+    oidc_client_secret=None,
+    oidc_audience=None,
+    oidc_base_url=None,
+    oidc_required_scopes=["openid", "profile"],
 )
 
 
