@@ -7,11 +7,11 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
   - [Cost Visibility](#cost-visibility)
   - [Savings Opportunities](#savings-opportunities)
 - [Tools](#tools)
-- [Authentication to Kubecost](#authentication-to-kubecost)
 - [Telemetry (OpenTelemetry)](#telemetry-opentelemetry)
   - [Current behavior (FastMCP 3.4.x)](#current-behavior-fastmcp-34x)
   - [FastMCP 4.0 (when GA)](#fastmcp-40-when-ga)
 - [Quick Start](#quick-start)
+- [Authentication and security](README-auth.md)
 
 ## Who This Is For
 
@@ -86,21 +86,6 @@ Target utilization is the utilization the new request should run at — Kubecost
 
 Profiles never filter results. Pass `min_monthly_savings=5.0` to hide small opportunities, or a negative value to keep undersized workloads. Any explicit parameter overrides the profile. Ask for the `container_rightsizing_guide` prompt for the full methodology.
 
-## Authentication to Kubecost
-
-By default, the server calls Kubecost unauthenticated. This is fine for testing or when another layer of authentication is in place.
-
-Kubecost Enterprise can be configured with SAML/OIDC authentication. When enabled, the MCP server will require an API key to be sent in the `X-API-KEY` request header or the `KUBECOST_API_KEY` environment variable.
-
-The API key is sent to Kubecost as an `X-API-KEY` request header. Two sources feed it, header first:
-
-| Source | Scope |
-|--------|-------|
-| `X-API-KEY` header on the incoming MCP request | Per request — HTTP transport only |
-| `KUBECOST_API_KEY` environment variable | Process-wide fallback |
-
-Set `REQUIRE_CLIENT_API_KEY=true` to reject HTTP requests that arrive without the header. The check runs before the environment fallback, so a configured `KUBECOST_API_KEY` will not satisfy it. STDIO runs are never gated, since a STDIO client has no way to send headers.
-
 ## Telemetry (OpenTelemetry)
 
 HTTP deployments can export traces via OpenTelemetry. The Docker image includes the OTEL SDK by default and httpx/starlette auto-instrumentation; export is gated at runtime. This can be removed by omitting `--extra otel` in [Dockerfile](Dockerfile).
@@ -166,4 +151,4 @@ After upgrading to FastMCP 4:
 }
 ```
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for build, test, and deployment instructions.
+See [DEVELOPMENT.md](DEVELOPMENT.md) for build, test, and deployment instructions. Authentication, OIDC, API keys, and pod hardening are in [README-auth.md](README-auth.md).

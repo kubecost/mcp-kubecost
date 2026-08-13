@@ -48,6 +48,7 @@ jobs:
             DEVELOPMENT.md
             README-pre-commit.md
             README.md
+            README-auth.md
             src/mcp_kubecost/tools/**
             src/mcp_kubecost/skills/**
             src/mcp_kubecost/prompts/**

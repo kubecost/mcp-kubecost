@@ -2,6 +2,7 @@
 {{- $mode := $oidc.authMode | default "none" }}
 {{- if and $oidc.exposeAuthRoutes (or (eq $mode "oidc") (eq $mode "both")) $oidc.baseUrl }}
 {{- $host := (urlParse $oidc.baseUrl).host }}
+{{- $callback := $oidc.redirectPath | default "/auth/callback" }}
 {{- if not $host }}
 {{- fail "config.oidc.exposeAuthRoutes requires config.oidc.baseUrl to include a host" }}
 {{- end }}
@@ -23,7 +24,7 @@ spec:
     - host: {{ $host | quote }}
       http:
         paths:
-          {{- range $path := list "/mcp" "/register" "/authorize" "/token" "/consent" "/auth/callback" "/.well-known/oauth-protected-resource" "/.well-known/oauth-authorization-server" "/health" "/version" }}
+          {{- range $path := list "/mcp" "/register" "/authorize" "/token" "/consent" $callback "/.well-known/oauth-protected-resource" "/.well-known/oauth-authorization-server" "/health" "/version" }}
           - path: {{ $path }}
             pathType: Prefix
             backend:

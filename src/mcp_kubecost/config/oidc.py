@@ -45,9 +45,11 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
     assert settings.oidc_base_url is not None
 
     logger.info(
-        "OIDC enabled — issuer=%s, base_url=%s",
+        "OIDC enabled — issuer=%s, base_url=%s, redirect_path=%s, verify_id_token=%s",
         settings.oidc_issuer_url,
         settings.oidc_base_url,
+        settings.oidc_redirect_path,
+        settings.oidc_verify_id_token,
     )
 
     # FastMCP defaults to an encrypted FileTreeStore under
@@ -66,6 +68,8 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
             client_secret=settings.oidc_client_secret,
             audience=settings.oidc_audience,
             base_url=settings.oidc_base_url,
+            redirect_path=settings.oidc_redirect_path,
+            verify_id_token=settings.oidc_verify_id_token,
             required_scopes=settings.oidc_required_scopes or None,
             client_storage=MemoryStore(),
             require_authorization_consent="external",

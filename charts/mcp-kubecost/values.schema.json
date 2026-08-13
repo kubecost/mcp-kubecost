@@ -208,6 +208,8 @@
             "issuerUrl": { "type": "string" },
             "audience": { "type": "string" },
             "baseUrl": { "type": "string" },
+            "redirectPath": { "type": "string" },
+            "verifyIdToken": { "type": "boolean" },
             "requiredScopes": { "type": "string" },
             "clientId": { "type": "string" },
             "clientSecret": { "type": "string" },

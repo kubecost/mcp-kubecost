@@ -30,6 +30,8 @@ _SETTINGS: dict[str, Any] = dict(
     oidc_client_secret=None,
     oidc_audience=None,
     oidc_base_url=None,
+    oidc_redirect_path="/auth/callback",
+    oidc_verify_id_token=False,
     oidc_required_scopes=["openid", "profile"],
 )
 
@@ -56,6 +58,18 @@ class TestCreateOidcProvider:
         kwargs = proxy.call_args.kwargs
         assert isinstance(kwargs["client_storage"], MemoryStore)
         assert kwargs["require_authorization_consent"] == "external"
+        assert kwargs["redirect_path"] == "/auth/callback"
+        assert kwargs["verify_id_token"] is False
+
+    def test_forwards_verify_id_token(self):
+        with patch("mcp_kubecost.config.oidc.OIDCProxy") as proxy:
+            create_oidc_provider(_settings(**_OIDC, oidc_verify_id_token=True))
+        assert proxy.call_args.kwargs["verify_id_token"] is True
+
+    def test_forwards_custom_redirect_path(self):
+        with patch("mcp_kubecost.config.oidc.OIDCProxy") as proxy:
+            create_oidc_provider(_settings(**_OIDC, oidc_redirect_path="/auth-mcp"))
+        assert proxy.call_args.kwargs["redirect_path"] == "/auth-mcp"
 
     def test_api_key_mode_does_not_build_proxy(self):
         with patch("mcp_kubecost.config.oidc.OIDCProxy") as proxy:

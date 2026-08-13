@@ -11,7 +11,7 @@ image:
   # image.repository is the container image repository.
   repository: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost
   # image.tag is the container image tag. Defaults to the chart appVersion when empty.
-  tag: 0.4.19
+  tag: 0.4.23
   # image.pullPolicy controls when Kubernetes pulls the image.
   pullPolicy: IfNotPresent
   # image.pullSecrets is a list of Secret names for private image registries.
@@ -193,6 +193,15 @@ config:
     audience: ""
     # config.oidc.baseUrl is the public URL of this MCP server (used for OAuth redirect callback).
     baseUrl: ""
+    # config.oidc.redirectPath is the FastMCP OAuth callback path (OIDC_REDIRECT_PATH).
+    # Default /auth/callback for a dedicated MCP hostname. When MCP is a sub-path
+    # on a Kubecost frontend (/mcp on the same host), set /auth-mcp — Kubecost
+    # nginx owns /auth, and /auth-mcp/callback is not a path this server serves.
+    redirectPath: "/auth/callback"
+    # config.oidc.verifyIdToken verifies the OIDC id_token instead of the access
+    # token. Required for providers that issue opaque access tokens (IBM w3id).
+    # Leave false for Keycloak and other JWT access-token issuers.
+    verifyIdToken: false
     # config.oidc.requiredScopes is a comma-separated list of OAuth scopes to request.
     requiredScopes: "openid,profile"
     # config.oidc.clientId is the OIDC client ID. Prefer existingSecret for production.

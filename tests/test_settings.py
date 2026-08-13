@@ -7,6 +7,7 @@ import os
 import fastmcp
 
 from mcp_kubecost.config.settings import apply_http_rich_logging, get_settings, is_http_mode
+from mcp_kubecost.errors import ConfigError
 
 
 class TestIsHttpMode:
@@ -101,5 +102,59 @@ class TestRequireClientApiKeySetting:
         get_settings.cache_clear()
         try:
             assert get_settings().to_loggable_dict()["KUBECOST_API_KEY"] == "***"
+        finally:
+            get_settings.cache_clear()
+
+
+class TestOidcRedirectPathSetting:
+    def test_defaults_to_fastmcp_callback(self, monkeypatch):
+        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+        monkeypatch.delenv("OIDC_REDIRECT_PATH", raising=False)
+        get_settings.cache_clear()
+        try:
+            assert get_settings().oidc_redirect_path == "/auth/callback"
+        finally:
+            get_settings.cache_clear()
+
+    def test_reads_env_and_normalizes(self, monkeypatch):
+        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+        monkeypatch.setenv("OIDC_REDIRECT_PATH", "auth-mcp/")
+        get_settings.cache_clear()
+        try:
+            assert get_settings().oidc_redirect_path == "/auth-mcp"
+        finally:
+            get_settings.cache_clear()
+
+    def test_rejects_url(self, monkeypatch):
+        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+        monkeypatch.setenv("OIDC_REDIRECT_PATH", "https://mcp.example/auth-mcp")
+        get_settings.cache_clear()
+        try:
+            try:
+                get_settings()
+            except ConfigError as exc:
+                assert "OIDC_REDIRECT_PATH" in str(exc)
+            else:
+                raise AssertionError("expected ConfigError")
+        finally:
+            get_settings.cache_clear()
+
+
+class TestOidcVerifyIdTokenSetting:
+    def test_defaults_off(self, monkeypatch):
+        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+        monkeypatch.delenv("OIDC_VERIFY_ID_TOKEN", raising=False)
+        get_settings.cache_clear()
+        try:
+            assert get_settings().oidc_verify_id_token is False
+        finally:
+            get_settings.cache_clear()
+
+    def test_reads_env(self, monkeypatch):
+        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+        monkeypatch.setenv("OIDC_VERIFY_ID_TOKEN", "true")
+        get_settings.cache_clear()
+        try:
+            assert get_settings().oidc_verify_id_token is True
         finally:
             get_settings.cache_clear()
