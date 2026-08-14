@@ -31,7 +31,6 @@ data:
   {{- end }}
   {{- if ne .Values.config.oidc.authMode "none" }}
   AUTH_MODE: {{ .Values.config.oidc.authMode | quote }}
-  {{- end }}
   {{- if .Values.config.oidc.issuerUrl }}
   OIDC_ISSUER_URL: {{ .Values.config.oidc.issuerUrl | quote }}
   {{- end }}
@@ -41,12 +40,11 @@ data:
   {{- if .Values.config.oidc.baseUrl }}
   OIDC_BASE_URL: {{ .Values.config.oidc.baseUrl | quote }}
   {{- end }}
-  {{- if .Values.config.oidc.redirectPath }}
-  OIDC_REDIRECT_PATH: {{ .Values.config.oidc.redirectPath | quote }}
-  {{- end }}
+  OIDC_REDIRECT_PATH: {{ include "mcp-kubecost.oidcRedirectPath" . | quote }}
   {{- if hasKey .Values.config.oidc "verifyIdToken" }}
   OIDC_VERIFY_ID_TOKEN: {{ .Values.config.oidc.verifyIdToken | quote }}
   {{- end }}
   {{- if .Values.config.oidc.requiredScopes }}
   OIDC_REQUIRED_SCOPES: {{ .Values.config.oidc.requiredScopes | quote }}
+  {{- end }}
   {{- end }}

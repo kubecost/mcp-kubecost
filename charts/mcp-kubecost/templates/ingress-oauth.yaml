@@ -1,11 +1,15 @@
 {{- $oidc := .Values.config.oidc }}
 {{- $mode := $oidc.authMode | default "none" }}
-{{- if and $oidc.exposeAuthRoutes (or (eq $mode "oidc") (eq $mode "both")) $oidc.baseUrl }}
-{{- $host := (urlParse $oidc.baseUrl).host }}
-{{- $callback := $oidc.redirectPath | default "/auth/callback" }}
-{{- if not $host }}
-{{- fail "config.oidc.exposeAuthRoutes requires config.oidc.baseUrl to include a host" }}
+{{- if and $oidc.exposeAuthRoutes (or (eq $mode "oidc") (eq $mode "both")) }}
+{{- if not $oidc.baseUrl }}
+{{- fail "config.oidc.exposeAuthRoutes requires config.oidc.baseUrl" }}
 {{- end }}
+{{- $parsedUrl := urlParse $oidc.baseUrl }}
+{{- $host := regexReplaceAll ":[0-9]+$" $parsedUrl.host "" }}
+{{- if not $host }}
+{{- fail "config.oidc.baseUrl must include a scheme and host, e.g. https://mcp.example.com" }}
+{{- end }}
+{{- $callback := include "mcp-kubecost.oidcRedirectPath" . }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

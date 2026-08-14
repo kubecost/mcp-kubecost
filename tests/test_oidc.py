@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 from unittest.mock import patch
 
+from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from key_value.aio.stores.memory import MemoryStore
 
 from mcp_kubecost.config.oidc import create_oidc_provider
@@ -30,7 +32,7 @@ _SETTINGS: dict[str, Any] = dict(
     oidc_client_secret=None,
     oidc_audience=None,
     oidc_base_url=None,
-    oidc_redirect_path="/auth/callback",
+    oidc_redirect_path="/auth-mcp",
     oidc_verify_id_token=False,
     oidc_required_scopes=["openid", "profile"],
 )
@@ -58,7 +60,7 @@ class TestCreateOidcProvider:
         kwargs = proxy.call_args.kwargs
         assert isinstance(kwargs["client_storage"], MemoryStore)
         assert kwargs["require_authorization_consent"] == "external"
-        assert kwargs["redirect_path"] == "/auth/callback"
+        assert kwargs["redirect_path"] == "/auth-mcp"
         assert kwargs["verify_id_token"] is False
 
     def test_forwards_verify_id_token(self):
@@ -66,10 +68,10 @@ class TestCreateOidcProvider:
             create_oidc_provider(_settings(**_OIDC, oidc_verify_id_token=True))
         assert proxy.call_args.kwargs["verify_id_token"] is True
 
-    def test_forwards_custom_redirect_path(self):
+    def test_forwards_dedicated_host_redirect_path(self):
         with patch("mcp_kubecost.config.oidc.OIDCProxy") as proxy:
-            create_oidc_provider(_settings(**_OIDC, oidc_redirect_path="/auth-mcp"))
-        assert proxy.call_args.kwargs["redirect_path"] == "/auth-mcp"
+            create_oidc_provider(_settings(**_OIDC, oidc_redirect_path="/auth/callback"))
+        assert proxy.call_args.kwargs["redirect_path"] == "/auth/callback"
 
     def test_api_key_mode_does_not_build_proxy(self):
         with patch("mcp_kubecost.config.oidc.OIDCProxy") as proxy:
@@ -85,3 +87,22 @@ class TestCreateOidcProvider:
                 assert "HTML" in str(exc)
             else:
                 raise AssertionError("expected ConfigError")
+
+
+class TestOidcProxyKwargConformance:
+    """`test_uses_in_memory_client_storage` et al. patch OIDCProxy wholesale, so a
+    kwarg removed upstream would still pass those tests. Assert the kwargs we
+    pass still exist on the real signature, so a FastMCP bump fails a test
+    instead of failing at server startup.
+    """
+
+    def test_kwargs_still_exist_on_oidc_proxy(self):
+        sig = inspect.signature(OIDCProxy.__init__)
+        for kwarg in (
+            "redirect_path",
+            "verify_id_token",
+            "client_storage",
+            "require_authorization_consent",
+            "audience",
+        ):
+            assert kwarg in sig.parameters, f"OIDCProxy.__init__ no longer accepts {kwarg!r}"

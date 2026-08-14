@@ -77,11 +77,12 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
     except ConfigError:
         raise
     except Exception as exc:
+        logger.debug("OIDC provider initialization failed", exc_info=True)
         raise ConfigError(
             "OIDC provider initialization failed "
             f"({type(exc).__name__}): {exc}. "
-            "OIDC_ISSUER_URL must return JSON discovery metadata, not an HTML login page. "
-            "If this MCP server shares a Kubecost frontend hostname, OAuth paths "
-            "(/register, /authorize, /token, /.well-known/oauth-*) must reach this "
+            "Most often this means OIDC_ISSUER_URL returned an HTML login page instead of "
+            "JSON discovery metadata. If this MCP server shares a Kubecost frontend hostname, "
+            "OAuth paths (/register, /authorize, /token, /.well-known/oauth-*) must reach this "
             "Service without Kubecost SSO in front — set config.oidc.exposeAuthRoutes."
         ) from exc

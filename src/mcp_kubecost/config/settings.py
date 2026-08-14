@@ -175,22 +175,27 @@ def _get_oidc_scopes() -> list[str]:
     return [s.strip() for s in raw.split(",") if s.strip()]
 
 
-_DEFAULT_OIDC_REDIRECT_PATH = "/auth/callback"
+_DEFAULT_OIDC_REDIRECT_PATH = "/auth-mcp"
 
 
 def _get_oidc_redirect_path() -> str:
     """Return the FastMCP OAuth callback path (OIDC_REDIRECT_PATH).
 
-    FastMCP's OIDCProxy default is ``/auth/callback``. That prefix collides
-    with Kubecost frontend ``auth_request`` on a shared hostname — use
-    ``/auth-mcp`` there. Only this callback is remountable; ``/register``,
-    ``/authorize``, and ``/token`` stay at the server root.
+    Defaults to ``/auth-mcp`` — most deployments run this server as a
+    sub-path on an existing Kubecost frontend, where FastMCP's own default
+    of ``/auth/callback`` collides with Kubecost's ``auth_request`` on
+    ``location /auth``. Use ``/auth/callback`` instead when this server has
+    a dedicated hostname (not a Kubecost sub-path). Only this callback is
+    remountable; ``/register``, ``/authorize``, and ``/token`` stay at the
+    server root.
     """
     raw = os.getenv("OIDC_REDIRECT_PATH", _DEFAULT_OIDC_REDIRECT_PATH).strip()
     if not raw:
         return _DEFAULT_OIDC_REDIRECT_PATH
     if "://" in raw or "?" in raw or "#" in raw:
         raise ConfigError(f"Invalid OIDC_REDIRECT_PATH: {raw!r} (expected a path like /auth-mcp, not a URL)")
+    if ".." in raw:
+        raise ConfigError(f"Invalid OIDC_REDIRECT_PATH: {raw!r} (must not contain '..')")
     path = raw if raw.startswith("/") else f"/{raw}"
     if path != "/":
         path = path.rstrip("/")

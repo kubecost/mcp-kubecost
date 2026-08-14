@@ -107,27 +107,41 @@ class TestRequireClientApiKeySetting:
 
 
 class TestOidcRedirectPathSetting:
-    def test_defaults_to_fastmcp_callback(self, monkeypatch):
+    def test_defaults_to_auth_mcp(self, monkeypatch):
         monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
         monkeypatch.delenv("OIDC_REDIRECT_PATH", raising=False)
-        get_settings.cache_clear()
-        try:
-            assert get_settings().oidc_redirect_path == "/auth/callback"
-        finally:
-            get_settings.cache_clear()
-
-    def test_reads_env_and_normalizes(self, monkeypatch):
-        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
-        monkeypatch.setenv("OIDC_REDIRECT_PATH", "auth-mcp/")
         get_settings.cache_clear()
         try:
             assert get_settings().oidc_redirect_path == "/auth-mcp"
         finally:
             get_settings.cache_clear()
 
+    def test_reads_env_and_normalizes(self, monkeypatch):
+        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+        monkeypatch.setenv("OIDC_REDIRECT_PATH", "auth/callback/")
+        get_settings.cache_clear()
+        try:
+            assert get_settings().oidc_redirect_path == "/auth/callback"
+        finally:
+            get_settings.cache_clear()
+
     def test_rejects_url(self, monkeypatch):
         monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
         monkeypatch.setenv("OIDC_REDIRECT_PATH", "https://mcp.example/auth-mcp")
+        get_settings.cache_clear()
+        try:
+            try:
+                get_settings()
+            except ConfigError as exc:
+                assert "OIDC_REDIRECT_PATH" in str(exc)
+            else:
+                raise AssertionError("expected ConfigError")
+        finally:
+            get_settings.cache_clear()
+
+    def test_rejects_dot_dot(self, monkeypatch):
+        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+        monkeypatch.setenv("OIDC_REDIRECT_PATH", "/../auth-mcp")
         get_settings.cache_clear()
         try:
             try:
