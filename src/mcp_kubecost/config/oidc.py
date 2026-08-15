@@ -10,8 +10,10 @@ from __future__ import annotations
 import logging
 
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
+from key_value.aio.stores.memory import MemoryStore
 
 from mcp_kubecost.config.settings import AuthMode, Settings, get_settings
+from mcp_kubecost.errors import ConfigError
 
 logger = logging.getLogger(__name__)
 
@@ -43,16 +45,44 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
     assert settings.oidc_base_url is not None
 
     logger.info(
-        "OIDC enabled — issuer=%s, base_url=%s",
+        "OIDC enabled — issuer=%s, base_url=%s, redirect_path=%s, verify_id_token=%s",
         settings.oidc_issuer_url,
         settings.oidc_base_url,
+        settings.oidc_redirect_path,
+        settings.oidc_verify_id_token,
     )
 
-    return OIDCProxy(
-        config_url=settings.oidc_issuer_url,
-        client_id=settings.oidc_client_id,
-        client_secret=settings.oidc_client_secret,
-        audience=settings.oidc_audience,
-        base_url=settings.oidc_base_url,
-        required_scopes=settings.oidc_required_scopes or None,
-    )
+    # FastMCP defaults to an encrypted FileTreeStore under
+    # platformdirs.user_data_dir("fastmcp") — typically
+    # ~/.local/share/fastmcp/oauth-proxy/<key>/. That mkdir fails on a
+    # read-only root filesystem. Keep DCR/token state in process memory;
+    # MCP clients re-register after a restart.
+    #
+    # Consent is "external" so Keycloak owns the login/consent UI. FastMCP's
+    # built-in consent page is another HTML response that MCP clients try to
+    # parse as OAuth JSON.
+    try:
+        return OIDCProxy(
+            config_url=settings.oidc_issuer_url,
+            client_id=settings.oidc_client_id,
+            client_secret=settings.oidc_client_secret,
+            audience=settings.oidc_audience,
+            base_url=settings.oidc_base_url,
+            redirect_path=settings.oidc_redirect_path,
+            verify_id_token=settings.oidc_verify_id_token,
+            required_scopes=settings.oidc_required_scopes or None,
+            client_storage=MemoryStore(),
+            require_authorization_consent="external",
+        )
+    except ConfigError:
+        raise
+    except Exception as exc:
+        logger.debug("OIDC provider initialization failed", exc_info=True)
+        raise ConfigError(
+            "OIDC provider initialization failed "
+            f"({type(exc).__name__}): {exc}. "
+            "Most often this means OIDC_ISSUER_URL returned an HTML login page instead of "
+            "JSON discovery metadata. If this MCP server shares a Kubecost frontend hostname, "
+            "OAuth paths (/register, /authorize, /token, /.well-known/oauth-*) must reach this "
+            "Service without Kubecost SSO in front — set config.oidc.exposeAuthRoutes."
+        ) from exc

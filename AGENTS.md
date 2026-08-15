@@ -6,7 +6,7 @@ Development guide for AI coding agents working on this repository.
 
 FinOps MCP server that exposes read-only Kubecost cost allocation and container rightsizing data to MCP clients. Built with Python 3.12+, FastMCP 3.4+, and httpx.
 
-Entry point: [`src/mcp_kubecost/server.py`](src/mcp_kubecost/server.py) — creates the FastMCP instance, registers tools, skills, and the `/version` HTTP route.
+Entry point: [`src/mcp_kubecost/server.py`](src/mcp_kubecost/server.py) — creates the FastMCP instance, registers tools, skills, and the `/health` and `/version` HTTP routes.
 
 Runtime FinOps guidance for MCP clients lives in tool docstrings, [`src/mcp_kubecost/skills/`](src/mcp_kubecost/skills/), and the README tone section — not here.
 
@@ -37,7 +37,7 @@ Run `ruff format`, `ruff check --fix`, and `pyrefly check` after every Python ed
 | Workflow guidance prompt (skill) | New module under [`src/mcp_kubecost/skills/`](src/mcp_kubecost/skills/), register in [`skills/__init__.py`](src/mcp_kubecost/skills/__init__.py) |
 | Sizing profiles, aggregation helpers | [`src/mcp_kubecost/domain/kubecost/`](src/mcp_kubecost/domain/kubecost/) |
 | HTTP client / auth | [`src/mcp_kubecost/client.py`](src/mcp_kubecost/client.py) |
-| HTTP custom routes (`/version`) | [`server.py`](src/mcp_kubecost/server.py) |
+| HTTP custom routes (`/health`, `/version`) | [`server.py`](src/mcp_kubecost/server.py) |
 | Env-backed settings | [`src/mcp_kubecost/config/settings.py`](src/mcp_kubecost/config/settings.py) |
 
 **Pattern A for tools:** thin handler → `call_get_api()` → domain helpers → typed Pydantic response. Do not create separate `prompts/`, `resources/`, or `api/` packages unless deliberately refactoring.
@@ -159,7 +159,7 @@ FastMCP serializes each returned Pydantic model **twice** — once as a JSON `Te
 
 All configuration flows through `get_settings()` in [`config/settings.py`](src/mcp_kubecost/config/settings.py) — `client.py` reads no environment variables directly. [`.env.example`](.env.example) is the complete, accurate template; copy it to `.env`.
 
-`KUBECOST_BASE_URL` is the only required variable. The rest have defaults: `KUBECOST_API_BASE_PATH`, `KUBECOST_API_KEY`, `REQUIRE_CLIENT_API_KEY`, `KUBECOST_SSL_VERIFY`, `SSL_CA_BUNDLE`, `REQUEST_TIMEOUT_SECONDS`, `REQUEST_RETRY_COUNT`, `DEFAULT_WINDOW`, `USE_CAC_VIEWS`, `FASTMCP_LOG_LEVEL`, `FASTMCP_ENABLE_RICH_LOGGING` (forced off in HTTP mode), `FASTMCP_TELEMETRY_MODE`, `OTEL_*`. `MCP_SERVER_NAME` is read in `server.py` and is not in `.env.example`.
+`KUBECOST_BASE_URL` is the only required variable. The rest have defaults: `KUBECOST_API_BASE_PATH`, `KUBECOST_API_KEY`, `REQUIRE_CLIENT_API_KEY`, `KUBECOST_SSL_VERIFY`, `SSL_CA_BUNDLE`, `REQUEST_TIMEOUT_SECONDS`, `REQUEST_RETRY_COUNT`, `DEFAULT_WINDOW`, `USE_CAC_VIEWS`, `FASTMCP_LOG_LEVEL`, `FASTMCP_ENABLE_RICH_LOGGING` (forced off in HTTP mode), `FASTMCP_TELEMETRY_MODE`, `OTEL_*`, `OIDC_REDIRECT_PATH` (`/auth-mcp`; use `/auth/callback` when MCP has a dedicated hostname), `OIDC_VERIFY_ID_TOKEN` (false; set true for IBM w3id opaque access tokens). `MCP_SERVER_NAME` is read in `server.py` and is not in `.env.example`.
 
 Add new settings to `Settings` and `.env.example` together; do not read `os.getenv` from a tool or client module.
 
@@ -211,4 +211,5 @@ just call-json get_kubecost_cost_comparison '{"aggregate": "namespace"}'
 
 - [DEVELOPMENT.md](DEVELOPMENT.md) — human setup, run, Docker/Kubernetes workflow
 - [README.md](README.md) — overview and client configuration
+- [README-auth.md](README-auth.md) — MCP OIDC, Kubecost API keys, and pod hardening
 - [README-pre-commit.md](README-pre-commit.md) — hook tiers and CI auto-fix workflow

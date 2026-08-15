@@ -11,7 +11,7 @@ image:
   # image.repository is the container image repository.
   repository: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost
   # image.tag is the container image tag. Defaults to the chart appVersion when empty.
-  tag: 0.4.16
+  tag: 0.4.25
   # image.pullPolicy controls when Kubernetes pulls the image.
   pullPolicy: IfNotPresent
   # image.pullSecrets is a list of Secret names for private image registries.
@@ -109,8 +109,9 @@ resources:
 probes:
   # probes.enabled enables HTTP startup, readiness, and liveness checks.
   enabled: true
-  # probes.path is an unauthenticated health endpoint exposed by the server.
-  path: /version
+  # probes.path is the unauthenticated liveness endpoint (GET /health).
+  # Do not point this at /mcp — kubelet cannot present OIDC or X-API-KEY.
+  path: /health
   # probes.initialDelaySeconds delays the first liveness/readiness checks.
   initialDelaySeconds: 5
   # probes.periodSeconds is the interval between probe requests.
@@ -192,6 +193,15 @@ config:
     audience: ""
     # config.oidc.baseUrl is the public URL of this MCP server (used for OAuth redirect callback).
     baseUrl: ""
+    # config.oidc.redirectPath is the FastMCP OAuth callback path (OIDC_REDIRECT_PATH).
+    # The default /auth-mcp is for a sub-path on a Kubecost frontend (nginx
+    # owns /auth). Use /auth/callback when this server has a dedicated hostname.
+    redirectPath: "/auth-mcp"
+    # config.oidc.verifyIdToken verifies the OIDC id_token instead of the access
+    # token. Required for providers that issue opaque access tokens.
+    # The known symptom is that auth works, but no tools are returned.
+    # Leave false for Keycloak and other JWT access-token issuers.
+    verifyIdToken: false
     # config.oidc.requiredScopes is a comma-separated list of OAuth scopes to request.
     requiredScopes: "openid,profile"
     # config.oidc.clientId is the OIDC client ID. Prefer existingSecret for production.
@@ -201,6 +211,19 @@ config:
     # config.oidc.existingSecret is the name of a pre-created Secret containing OIDC credentials.
     # Expected keys: OIDC_CLIENT_ID and OIDC_CLIENT_SECRET.
     existingSecret: ""
+    # config.oidc.exposeAuthRoutes creates an Ingress that sends FastMCP OAuth
+    # endpoints (DCR, authorize, token, well-known metadata) to this Service.
+    # Required when the MCP URL shares a Kubecost frontend host: that nginx
+    # only proxies /mcp, and auth_request redirects /register to Keycloak HTML
+    # which MCP clients then try to parse as OAuth JSON.
+    exposeAuthRoutes: false
+    # config.oidc.authIngress.className is the IngressClass for the OAuth Ingress.
+    authIngress:
+      className: nginx
+      annotations: {}
+      # config.oidc.authIngress.tlsSecretName is the TLS secret for the OAuth host.
+      # Leave empty to inherit TLS from another Ingress on the same host.
+      tlsSecretName: ""
 
 nodeSelector: {}
 tolerations: []

@@ -13,18 +13,7 @@ helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
   --set config.kubecostApiKey.existingSecret=kubecost-api-key
 ```
 
-The API key Secret must contain the `KUBECOST_API_KEY` key unless
-`config.kubecostApiKey.key` is overridden. Prefer an existing Secret so the
-credential is not stored in a values file or Helm command history.
-
-The key is sent to Kubecost as an `X-API-KEY` request header. An MCP client may
-send its own `X-API-KEY` header, which takes precedence over the chart-provided
-key for that request — useful when several clients share one deployment and each
-carries its own Kubecost credential.
-
-Set `config.requireClientApiKey=true` to reject requests that arrive without that
-header. The check runs before the environment fallback, so the Secret-provided key
-is never reached over HTTP while the flag is on.
+Prefer an existing Secret so credentials are not stored in a values file or Helm command history. OIDC, API-key precedence, `REQUIRE_CLIENT_API_KEY`, shared-hostname OAuth routes, and pod hardening are documented in [README-auth.md](../../README-auth.md).
 
 All application environment settings from the repository's `.env.example`
 are represented under `config` in `values.yaml`. `values.schema.json` validates

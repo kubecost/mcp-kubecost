@@ -88,6 +88,8 @@ _BASE_SETTINGS: dict[str, Any] = dict(
     oidc_client_secret=None,
     oidc_audience=None,
     oidc_base_url=None,
+    oidc_redirect_path="/auth-mcp",
+    oidc_verify_id_token=False,
     oidc_required_scopes=["openid", "profile"],
 )
 

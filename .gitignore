@@ -250,3 +250,4 @@ mcp-http.json
 .vscode/settings.json
 k8s/debug-pod.yaml
 todo-list.md
+.kiro/

@@ -19,6 +19,7 @@ from starlette.responses import JSONResponse
 
 from mcp_kubecost.config.oidc import create_oidc_provider
 from mcp_kubecost.config.settings import apply_http_rich_logging, get_settings
+from mcp_kubecost.errors import ConfigError
 from mcp_kubecost.skills import register_all_skills
 from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
 
@@ -80,7 +81,20 @@ os.environ["FASTMCP_SHOW_SERVER_BANNER"] = "false"
 version = pkg_version(distribution_name="mcp-kubecost")
 
 logger.info(f"Starting kubecost mcp version: {version}")
-mcp = create_server(mcp_server_name)
+try:
+    mcp = create_server(mcp_server_name)
+except ConfigError as exc:
+    logger.error("%s", exc)
+    sys.exit(1)
+
+
+@mcp.custom_route("/health", methods=["GET"])
+async def health_endpoint(_request: Request) -> JSONResponse:
+    """Unauthenticated process-up check for Kubernetes probes. Does not call Kubecost.
+
+    Uvicorn access logs for this path are dropped — probe traffic is too noisy.
+    """
+    return JSONResponse({"status": "ok"})
 
 
 @mcp.custom_route("/version", methods=["GET"])

@@ -27,7 +27,7 @@ Tracing lives in a separate `otel` extra — add `--extra otel` (or use `just se
 
 ## Configuration
 
-Copy [`.env.example`](.env.example) to `.env` and set any variable needed to change defaults. `KUBECOST_BASE_URL` is the only required one.
+Copy [`.env.example`](.env.example) to `.env` and set any variable needed to change defaults. `KUBECOST_BASE_URL` is the only required one. Auth and TLS variables are documented in [README-auth.md](README-auth.md).
 
 ## Run
 
@@ -131,6 +131,8 @@ OpenTelemetry is an optional extra (`uv sync --extra otel`). The Docker image in
 Dropping the distro would forfeit automatic httpx spans on every Kubecost API call — the most useful signal this server produces — without escaping the 0.x track.
 
 ## Security
+
+Operator-facing authentication, OIDC, API keys, and pod hardening: [README-auth.md](README-auth.md).
 
 - Never hardcode credentials; use environment variables only.
 - Do not commit `.env` files or token files.

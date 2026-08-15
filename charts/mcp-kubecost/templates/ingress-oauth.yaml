@@ -1,0 +1,46 @@
+{{- $oidc := .Values.config.oidc }}
+{{- $mode := $oidc.authMode | default "none" }}
+{{- if and $oidc.exposeAuthRoutes (or (eq $mode "oidc") (eq $mode "both")) }}
+{{- if not $oidc.baseUrl }}
+{{- fail "config.oidc.exposeAuthRoutes requires config.oidc.baseUrl" }}
+{{- end }}
+{{- $parsedUrl := urlParse $oidc.baseUrl }}
+{{- $host := regexReplaceAll ":[0-9]+$" $parsedUrl.host "" }}
+{{- if not $host }}
+{{- fail "config.oidc.baseUrl must include a scheme and host, e.g. https://mcp.example.com" }}
+{{- end }}
+{{- $callback := include "mcp-kubecost.oidcRedirectPath" . }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "mcp-kubecost.fullname" . }}-oauth
+  labels:
+    {{- include "mcp-kubecost.labels" . | nindent 4 }}
+  {{- with $oidc.authIngress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $oidc.authIngress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          {{- range $path := list "/mcp" "/register" "/authorize" "/token" "/consent" $callback "/.well-known/oauth-protected-resource" "/.well-known/oauth-authorization-server" "/health" "/version" }}
+          - path: {{ $path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "mcp-kubecost.fullname" $ }}
+                port:
+                  name: http
+          {{- end }}
+  {{- if $oidc.authIngress.tlsSecretName }}
+  tls:
+    - secretName: {{ $oidc.authIngress.tlsSecretName | quote }}
+      hosts:
+        - {{ $host | quote }}
+  {{- end }}
+{{- end }}

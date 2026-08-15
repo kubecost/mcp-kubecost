@@ -1,3 +1,19 @@
+{{/* Canonical FastMCP OAuth callback path. Mirrors _get_oidc_redirect_path(). */}}
+{{- define "mcp-kubecost.oidcRedirectPath" -}}
+{{- $raw := .Values.config.oidc.redirectPath | default "/auth-mcp" | trim }}
+{{- if or (contains "://" $raw) (contains "?" $raw) (contains "#" $raw) }}
+{{- fail (printf "config.oidc.redirectPath must be a path like /auth-mcp, not a URL: %s" $raw) }}
+{{- end }}
+{{- if contains ".." $raw }}
+{{- fail (printf "config.oidc.redirectPath must not contain '..': %s" $raw) }}
+{{- end }}
+{{- $path := printf "/%s" (trimAll "/" $raw) }}
+{{- if eq $path "/" }}
+{{- fail "config.oidc.redirectPath must be a dedicated callback path, not '/'" }}
+{{- end }}
+{{- $path }}
+{{- end }}
+
 {{/* Return the chart name, allowing a user override. */}}
 {{- define "mcp-kubecost.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
