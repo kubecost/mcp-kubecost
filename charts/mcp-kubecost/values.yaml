@@ -23,6 +23,11 @@ podAnnotations: {}
 # podLabels are additional labels added to the MCP server pod template.
 podLabels: {}
 
+# reloadOnConfigChange causes the pod to restart automatically when the ConfigMap or Secrets
+# change. Set to false if your CI/CD tooling manages rollouts independently (e.g. Argo CD,
+# Flux, or a pipeline that handles rollouts after config updates).
+reloadOnConfigChange: true
+
 podSecurityContext:
   # podSecurityContext.runAsUser is the non-root UID used by the container.
   runAsUser: 65532

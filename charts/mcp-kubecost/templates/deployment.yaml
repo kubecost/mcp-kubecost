@@ -21,9 +21,22 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- with .Values.podAnnotations }}
+      {{- $apikeyChecksum := include "mcp-kubecost.apikey-stringdata" . }}
+      {{- $oidcChecksum := include "mcp-kubecost.oidc-stringdata" . }}
+      {{- if or .Values.podAnnotations .Values.reloadOnConfigChange }}
       annotations:
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.reloadOnConfigChange }}
+        checksum/config: {{ include "mcp-kubecost.configmap-data" . | sha256sum }}
+        {{- if $apikeyChecksum }}
+        checksum/secret-api-key: {{ $apikeyChecksum | sha256sum }}
+        {{- end }}
+        {{- if $oidcChecksum }}
+        checksum/secret-oidc: {{ $oidcChecksum | sha256sum }}
+        {{- end }}
+        {{- end }}
       {{- end }}
     spec:
       automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
