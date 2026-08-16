@@ -1,3 +1,24 @@
+# global values are merged from a parent Kubecost chart when this chart is a
+# subchart. They are ignored unless set. Extra parent keys (clusterId, etc.)
+# are accepted and unused.
+global:
+  # global.imageRegistry overrides image.registry for every image in this chart.
+  # Kubecost sets this to icr.io for IBM-distributed images.
+  imageRegistry: ""
+  # global.imagePullSecrets is merged with image.pullSecrets.
+  # E.g.
+  # imagePullSecrets:
+  #   - myRegistryKeySecretName
+  imagePullSecrets: []
+  platforms:
+    # global.platforms.cicd matches the Kubecost parent-chart CI/CD block.
+    cicd:
+      # Set to true when using Argo CD or similar tools so skipSanityChecks applies.
+      enabled: false
+      # Skip Secret existence lookups that fail when Helm cannot see the cluster
+      # (Argo CD dry-run / helm template) or when Secrets are created in a later wave.
+      skipSanityChecks: false
+
 # nameOverride replaces the chart name portion of generated resource names.
 nameOverride: ""
 
@@ -8,8 +29,10 @@ fullnameOverride: ""
 replicaCount: 1
 
 image:
-  # image.repository is the container image repository.
-  repository: 297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost
+  # image.registry is the container registry host. Overridden by global.imageRegistry.
+  registry: 297945954695.dkr.ecr.us-east-1.amazonaws.com
+  # image.repository is the image path within the registry (no host).
+  repository: mcp-kubecost
   # image.tag is the container image tag. Defaults to the chart appVersion when empty.
   tag: 0.4.25
   # image.pullPolicy controls when Kubernetes pulls the image.

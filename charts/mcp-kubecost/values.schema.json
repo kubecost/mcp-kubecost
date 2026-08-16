@@ -3,6 +3,41 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "global": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "imageRegistry": { "type": "string" },
+        "imagePullSecrets": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              { "type": "string", "minLength": 1 },
+              {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": { "name": { "type": "string", "minLength": 1 } },
+                "required": ["name"]
+              }
+            ]
+          }
+        },
+        "platforms": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "cicd": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "skipSanityChecks": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
     "replicaCount": { "type": "integer", "minimum": 1 },
@@ -10,12 +45,13 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "registry": { "type": "string" },
         "repository": { "type": "string", "minLength": 1 },
         "tag": { "type": "string" },
         "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
         "pullSecrets": { "type": "array", "items": { "type": "string" } }
       },
-      "required": ["repository", "tag", "pullPolicy", "pullSecrets"]
+      "required": ["registry", "repository", "tag", "pullPolicy", "pullSecrets"]
     },
     "podAnnotations": { "type": "object" },
     "podLabels": { "type": "object" },
