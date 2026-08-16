@@ -1,3 +1,4 @@
+{{- include "mcp-kubecost.sanityChecks" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,15 +31,10 @@ spec:
       enableServiceLinks: false
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
-      {{- with .Values.image.pullSecrets }}
-      imagePullSecrets:
-        {{- range . }}
-        - name: {{ . }}
-        {{- end }}
-      {{- end }}
+      {{- include "mcp-kubecost.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: mcp-kubecost
-          image: "{{ .Values.image.repository }}:{{ default .Chart.AppVersion .Values.image.tag }}"
+          image: {{ include "mcp-kubecost.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           envFrom:
             - configMapRef:

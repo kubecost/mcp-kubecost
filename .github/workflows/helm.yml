@@ -36,6 +36,22 @@ jobs:
         run: |
           mkdir -p .helm-render
           helm template mcp-kubecost "$CHART_DIR" --namespace mcp-kubecost > .helm-render/mcp-kubecost-default.yaml
+          grep -q 'image: "297945954695.dkr.ecr.us-east-1.amazonaws.com/mcp-kubecost:' .helm-render/mcp-kubecost-default.yaml
+
+      - name: Render Kubecost parent global image settings
+        run: |
+          helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set global.imageRegistry=icr.io \
+            --set 'global.imagePullSecrets={icr-pull}' \
+            --set 'image.pullSecrets={app-pull}' \
+            --set global.platforms.cicd.enabled=true \
+            --set global.platforms.cicd.skipSanityChecks=true \
+            > .helm-render/mcp-kubecost-global.yaml
+          grep -q 'image: "icr.io/mcp-kubecost:' .helm-render/mcp-kubecost-global.yaml
+          grep -q 'name: icr-pull' .helm-render/mcp-kubecost-global.yaml
+          grep -q 'name: app-pull' .helm-render/mcp-kubecost-global.yaml
+          ! grep -q 'dkr.ecr.us-east-1.amazonaws.com' .helm-render/mcp-kubecost-global.yaml
 
       - name: Render ingress and Secret-backed configuration
         run: >-
