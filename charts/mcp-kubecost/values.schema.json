@@ -55,6 +55,7 @@
     },
     "podAnnotations": { "type": "object" },
     "podLabels": { "type": "object" },
+    "reloadOnConfigChange": { "type": "boolean" },
     "podSecurityContext": {
       "type": "object",
       "additionalProperties": false,
