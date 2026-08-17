@@ -1319,8 +1319,7 @@ class ResourceMetrics(BaseModel):
 
     capacity_avg: float = Field(
         default=0.0,
-        description=(
-            "Average capacity. Unit depends on the resource: millicores (m) for CPU, mebibytes (Mi) for RAM."),
+        description=("Average capacity. Unit depends on the resource: millicores (m) for CPU, mebibytes (Mi) for RAM."),
     )
     utilization: float = Field(
         default=0.0,
