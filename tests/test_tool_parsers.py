@@ -599,3 +599,48 @@ class TestParseAbandonedWorkloadsResponse:
         assert len(rows) == 1
         assert rows[0]["monthlySavings"] == 0.0
         assert rows[0]["pod"] == ""
+
+
+# ---------------------------------------------------------------------------
+# _classify_node_recommendation
+# ---------------------------------------------------------------------------
+
+_classify_node_recommendation = ktools._classify_node_recommendation
+
+
+def _state(price: float) -> ktools.NodeGroupState:
+    """Minimal NodeGroupState with only price_per_month set."""
+    return ktools.NodeGroupState(
+        instance_type="",
+        node_count=0,
+        price_per_month=price,
+        cpu=ktools.ResourceMetrics(),
+        ram=ktools.ResourceMetrics(),
+    )
+
+
+class TestClassifyNodeRecommendation:
+    def test_scaleout_is_capacity(self):
+        assert _classify_node_recommendation("ScaleOut", _state(100), _state(200)) == "capacity"
+
+    def test_scaleout_case_insensitive(self):
+        assert _classify_node_recommendation("scaleout", _state(100), _state(50)) == "capacity"
+
+    def test_scale_in_cheaper_is_cost_saving(self):
+        assert _classify_node_recommendation("ScaleIn", _state(200), _state(100)) == "cost_saving"
+
+    def test_change_instance_type_more_expensive_is_capacity(self):
+        assert _classify_node_recommendation("ChangeInstanceType", _state(100), _state(150)) == "capacity"
+
+    def test_change_instance_type_cheaper_is_cost_saving(self):
+        assert _classify_node_recommendation("ChangeInstanceType", _state(150), _state(100)) == "cost_saving"
+
+    def test_none_recommendation_zero_delta_is_cost_saving(self):
+        # delta == 0: no-op, contributes 0 savings but is classified cost_saving not capacity
+        assert _classify_node_recommendation("None", _state(100), _state(100)) == "cost_saving"
+
+    def test_unknown_rec_positive_delta_is_capacity(self):
+        assert _classify_node_recommendation("SomeFutureRec", _state(50), _state(60)) == "capacity"
+
+    def test_unknown_rec_negative_delta_is_cost_saving(self):
+        assert _classify_node_recommendation("SomeFutureRec", _state(60), _state(50)) == "cost_saving"

@@ -746,6 +746,20 @@ def _cap_raw_rows(rows: list[dict[str, Any]], resource: str) -> tuple[list[dict[
     return rows, False
 
 
+def _classify_node_recommendation(rec_str: str, before_state: NodeGroupState, after_state: NodeGroupState) -> str:
+    """Classify a node group recommendation as ``'cost_saving'`` or ``'capacity'``.
+
+    ScaleOut always adds nodes (cost increase), so it is ``'capacity'``.
+    For all other types, compare the actual before/after monthly prices: if the
+    recommended state costs more than the current one it is a capacity recommendation.
+    A zero delta (no-op / ``'None'`` recommendation) is ``'cost_saving'`` with 0 savings.
+    """
+    if rec_str.lower() == "scaleout":
+        return "capacity"
+    delta = after_state.price_per_month - before_state.price_per_month
+    return "capacity" if delta > 0 else "cost_saving"
+
+
 SAVINGS_AGGREGATE_OPTIONS: tuple[str, ...] = ("containerName", "namespace", "clusterID")
 
 SAVINGS_METADATA_FIELDS: list[str] = [
@@ -1536,18 +1550,11 @@ class ResourceQuotaResponse(BaseToolResponse):
         default=0.0, description="Total monthly savings (USD). May be 0 -- this is a correctness tool."
     )
     truncated: bool = Field(default=False, description="True if more pages exist.")
-    has_more: bool = Field(
-        default=False,
-        description=(
-            "True when there are additional pages of recommendations beyond the current page. "
-            "Equivalent to truncated; provided for callers that prefer explicit pagination semantics."
-        ),
-    )
     next_offset: int | None = Field(
         default=None,
         description=(
             "The offset value to pass in the next call to retrieve the following page. "
-            "Null when has_more=False (no further pages exist)."
+            "Null when truncated=False (no further pages exist)."
         ),
     )
 
@@ -2937,24 +2944,12 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 ram=_resource_metrics(ram_res),
             )
 
-        def _recommendation_class(rec_str: str, before_state: NodeGroupState, after_state: NodeGroupState) -> str:
-            """Classify a recommendation as 'cost_saving' or 'capacity'.
-
-            ScaleOut always adds nodes (cost increase), so it is 'capacity'.
-            For all other types, compare the actual before/after monthly prices: if the
-            recommended state costs more than the current one it is a capacity recommendation.
-            """
-            if rec_str.lower() == "scaleout":
-                return "capacity"
-            delta = after_state.price_per_month - before_state.price_per_month
-            return "capacity" if delta > 0 else "cost_saving"
-
         recommendations: list[NodeGroupRecommendation] = []
         for r in recs_raw_sorted:
             before_state = _node_group_state(r.get("before", {}))
             after_state = _node_group_state(r.get("after", {}))
             monthly_cost_delta = round(after_state.price_per_month - before_state.price_per_month, 2)
-            rec_class = _recommendation_class(r.get("recommendation", ""), before_state, after_state)
+            rec_class = _classify_node_recommendation(r.get("recommendation", ""), before_state, after_state)
             # savings_per_month: clamped non-negative view for cost_saving rows; 0 for capacity rows
             savings_value = max(0.0, -monthly_cost_delta) if rec_class == "cost_saving" else 0.0
             recommendations.append(
@@ -3199,8 +3194,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         item_count = int(raw.get("itemCount", len(recs_raw)) or len(recs_raw))
         total_monthly_savings = round(float(raw.get("totalMonthlySavings", 0.0) or 0.0), 2)
         truncated = was_capped or item_count > offset + len(recs_raw)
-        has_more = truncated
-        next_offset = (offset + len(recs_raw)) if has_more else None
+        next_offset = (offset + len(recs_raw)) if truncated else None
 
         # P0: Integrity check — warn when rows carry blank cluster/namespace but have resources.
         # Blank dimensions indicate an unattributed row from the API, not a missing-quota entry.
@@ -3239,7 +3233,6 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 item_count=item_count,
                 total_monthly_savings=total_monthly_savings,
                 resolved_window=resolved_window,
-                has_more=False,
                 next_offset=None,
             )
 
@@ -3274,13 +3267,12 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             recommended_action=(
                 "Focus on namespaces with is_downsize=true for immediate savings. "
                 "Create missing quotas (is_new_resource_quota=true) to enforce governance."
-                + (" Use next_offset to retrieve further pages." if has_more else "")
+                + (" Use next_offset to retrieve further pages." if truncated else "")
             ),
             recommendations=recommendations,
             item_count=item_count,
             total_monthly_savings=total_monthly_savings,
             truncated=truncated,
-            has_more=has_more,
             next_offset=next_offset,
             resolved_window=resolved_window,
         )
