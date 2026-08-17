@@ -34,7 +34,7 @@ image:
   # image.repository is the image path within the registry (no host).
   repository: mcp-kubecost
   # image.tag is the container image tag. Defaults to the chart appVersion when empty.
-  tag: 0.4.25
+  tag: 0.4.27
   # image.pullPolicy controls when Kubernetes pulls the image.
   pullPolicy: IfNotPresent
   # image.pullSecrets is a list of Secret names for private image registries.
@@ -212,10 +212,7 @@ config:
     #   both    — require OIDC token AND X-API-KEY header (presence check only)
     authMode: "none"
     # config.oidc.issuerUrl is the provider's .well-known/openid-configuration URL.
-    # Examples:
-    #   Azure: https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration
-    #   Okta:  https://{domain}/.well-known/openid-configuration
-    #   IBM:   https://iam.cloud.ibm.com/identity/.well-known/openid-configuration
+    # Example: https://{domain}/.well-known/openid-configuration
     issuerUrl: ""
     # config.oidc.audience is the token audience expected by the provider (optional).
     audience: ""
@@ -225,11 +222,6 @@ config:
     # The default /auth-mcp is for a sub-path on a Kubecost frontend (nginx
     # owns /auth). Use /auth/callback when this server has a dedicated hostname.
     redirectPath: "/auth-mcp"
-    # config.oidc.verifyIdToken verifies the OIDC id_token instead of the access
-    # token. Required for providers that issue opaque access tokens.
-    # The known symptom is that auth works, but no tools are returned.
-    # Leave false for Keycloak and other JWT access-token issuers.
-    verifyIdToken: false
     # config.oidc.requiredScopes is a comma-separated list of OAuth scopes to request.
     requiredScopes: "openid,profile"
     # config.oidc.clientId is the OIDC client ID. Prefer existingSecret for production.

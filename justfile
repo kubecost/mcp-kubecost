@@ -111,7 +111,7 @@ cost-comparison AGGREGATE="namespace":
 
 # ── Client Setup ───────────────────────────────────────────────────────────────
 
-# Install MCP config for Bob (IBM Bob Shell)
+# Install MCP config for other agents
 install-bob:
     fastmcp install mcp-json ./fastmcp.json --project $PWD --env-file .env
 

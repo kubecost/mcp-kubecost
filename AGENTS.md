@@ -159,7 +159,7 @@ FastMCP serializes each returned Pydantic model **twice** — once as a JSON `Te
 
 All configuration flows through `get_settings()` in [`config/settings.py`](src/mcp_kubecost/config/settings.py) — `client.py` reads no environment variables directly. [`.env.example`](.env.example) is the complete, accurate template; copy it to `.env`.
 
-`KUBECOST_BASE_URL` is the only required variable. The rest have defaults: `KUBECOST_API_BASE_PATH`, `KUBECOST_API_KEY`, `REQUIRE_CLIENT_API_KEY`, `KUBECOST_SSL_VERIFY`, `SSL_CA_BUNDLE`, `REQUEST_TIMEOUT_SECONDS`, `REQUEST_RETRY_COUNT`, `DEFAULT_WINDOW`, `USE_CAC_VIEWS`, `FASTMCP_LOG_LEVEL`, `FASTMCP_ENABLE_RICH_LOGGING` (forced off in HTTP mode), `FASTMCP_TELEMETRY_MODE`, `OTEL_*`, `OIDC_REDIRECT_PATH` (`/auth-mcp`; use `/auth/callback` when MCP has a dedicated hostname), `OIDC_VERIFY_ID_TOKEN` (false; set true for IBM w3id opaque access tokens). `MCP_SERVER_NAME` is read in `server.py` and is not in `.env.example`.
+`KUBECOST_BASE_URL` is the only required variable. The rest have defaults: `KUBECOST_API_BASE_PATH`, `KUBECOST_API_KEY`, `REQUIRE_CLIENT_API_KEY`, `KUBECOST_SSL_VERIFY`, `SSL_CA_BUNDLE`, `REQUEST_TIMEOUT_SECONDS`, `REQUEST_RETRY_COUNT`, `DEFAULT_WINDOW`, `USE_CAC_VIEWS`, `FASTMCP_LOG_LEVEL`, `FASTMCP_ENABLE_RICH_LOGGING` (forced off in HTTP mode), `FASTMCP_TELEMETRY_MODE`, `OTEL_*`, `OIDC_REDIRECT_PATH` (`/auth-mcp`; use `/auth/callback` when MCP has a dedicated hostname). Opaque OIDC access tokens are detected from the token response — there is no `OIDC_VERIFY_ID_TOKEN` setting. `MCP_SERVER_NAME` is read in `server.py` and is not in `.env.example`.
 
 Add new settings to `Settings` and `.env.example` together; do not read `os.getenv` from a tool or client module.
 
