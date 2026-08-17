@@ -51,3 +51,17 @@ For a custom Kubecost CA, put the certificate in an existing Secret and set
 mounts it read-only and sets `SSL_CA_BUNDLE` to the configured mount path.
 
 The debug Caddy proxy is intentionally not part of this production chart.
+
+## Kubecost parent chart
+
+When this chart is a Kubecost subchart, parent `global` values are merged in:
+
+- `global.imageRegistry` replaces `image.registry` (Kubecost defaults this to `icr.io`).
+- `global.imagePullSecrets` is unioned with `image.pullSecrets`.
+- `global.platforms.cicd.enabled` plus `global.platforms.cicd.skipSanityChecks`
+  skip Secret existence lookups. Set both when Helm cannot see the live
+  cluster (Argo CD) or Secrets are created in a later sync wave.
+
+Standalone installs leave `global.imageRegistry` empty and keep using
+`image.registry`. Other parent `global` keys (for example `clusterId`) are
+ignored.

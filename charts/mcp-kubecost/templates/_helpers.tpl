@@ -1,3 +1,90 @@
+{{/*
+Kubecost parent-chart globals. Helm merges the parent `global` key into every
+subchart, so these helpers read `.Values.global` when present and stay no-ops
+for a standalone install.
+*/}}
+
+{{/* Return true when CI/CD tools (e.g. Argo CD) should skip Secret existence lookups. */}}
+{{- define "mcp-kubecost.skipSanityChecks" -}}
+{{- $cicd := (((.Values.global).platforms).cicd) | default dict -}}
+{{- if and $cicd.enabled $cicd.skipSanityChecks -}}
+true
+{{- else -}}
+false
+{{- end -}}
+{{- end }}
+
+{{/*
+Fully qualified container image. `global.imageRegistry` overrides `image.registry`
+when this chart is a Kubecost subchart (IBM ships images from icr.io).
+*/}}
+{{- define "mcp-kubecost.image" -}}
+{{- $tag := default .Chart.AppVersion .Values.image.tag -}}
+{{- $repository := .Values.image.repository -}}
+{{- $registry := .Values.image.registry | default "" -}}
+{{- $globalRegistry := (.Values.global).imageRegistry | default "" -}}
+{{- if $globalRegistry -}}
+{{- $registry = $globalRegistry -}}
+{{- end -}}
+{{- if $registry -}}
+{{- printf "%s/%s:%s" ($registry | trimSuffix "/") $repository $tag -}}
+{{- else -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+imagePullSecrets from this chart plus `global.imagePullSecrets`. Accepts either
+secret-name strings or {name: ...} maps, matching Kubecost's global list.
+*/}}
+{{- define "mcp-kubecost.imagePullSecrets" -}}
+{{- $local := .Values.image.pullSecrets | default (list) -}}
+{{- $fromGlobal := ((.Values.global).imagePullSecrets) | default (list) -}}
+{{- $secrets := list -}}
+{{- range concat $local $fromGlobal -}}
+  {{- if kindIs "string" . -}}
+    {{- $secrets = append $secrets . -}}
+  {{- else if and (kindIs "map" .) .name -}}
+    {{- $secrets = append $secrets .name -}}
+  {{- end -}}
+{{- end -}}
+{{- $secrets = compact $secrets | uniq -}}
+{{- if $secrets }}
+imagePullSecrets:
+  {{- range $secrets }}
+  - name: {{ . }}
+  {{- end }}
+{{- end }}
+{{- end }}
+
+{{/*
+Fail when referenced existing Secrets are missing, unless CI/CD skip is on or
+the cluster is unreachable (helm template / dry-run with no kube API).
+*/}}
+{{- define "mcp-kubecost.sanityChecks" -}}
+{{- if ne (include "mcp-kubecost.skipSanityChecks" .) "true" }}
+{{- $ns := lookup "v1" "Namespace" "" .Release.Namespace }}
+{{- if $ns }}
+{{- $checks := list -}}
+{{- if .Values.config.kubecostApiKey.existingSecret }}
+{{- $checks = append $checks (dict "name" .Values.config.kubecostApiKey.existingSecret "ref" "config.kubecostApiKey.existingSecret") -}}
+{{- end }}
+{{- if .Values.config.oidc.existingSecret }}
+{{- $checks = append $checks (dict "name" .Values.config.oidc.existingSecret "ref" "config.oidc.existingSecret") -}}
+{{- end }}
+{{- if .Values.config.ssl.caBundle.existingSecret }}
+{{- $checks = append $checks (dict "name" .Values.config.ssl.caBundle.existingSecret "ref" "config.ssl.caBundle.existingSecret") -}}
+{{- end }}
+{{- range $checks }}
+{{- $secret := lookup "v1" "Secret" $.Release.Namespace .name }}
+{{- if not $secret }}
+{{- fail (printf "%s %q was not found in namespace %s; create the Secret or set global.platforms.cicd.enabled and global.platforms.cicd.skipSanityChecks for Argo CD / similar tools" .ref .name $.Release.Namespace) }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
+
 {{/* Canonical FastMCP OAuth callback path. Mirrors _get_oidc_redirect_path(). */}}
 {{- define "mcp-kubecost.oidcRedirectPath" -}}
 {{- $raw := .Values.config.oidc.redirectPath | default "/auth-mcp" | trim }}
