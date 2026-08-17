@@ -53,3 +53,8 @@ jobs:
             src/mcp_kubecost/skills/**
             src/mcp_kubecost/prompts/**
             src/mcp_kubecost/domain/kubecost/**
+            charts/mcp-kubecost/README.md
+            charts/mcp-kubecost/Chart.yaml
+            charts/mcp-kubecost/values.yaml
+            charts/mcp-kubecost/values.schema.json
+            charts/mcp-kubecost/templates/**

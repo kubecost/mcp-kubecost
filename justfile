@@ -14,6 +14,14 @@ _sed pattern file:
     else
         sed -i "{{pattern}}" "{{file}}"
     fi
+_update_chart_version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    VERSION=$(uv version --short)
+    echo "Updating Chart.yaml appVersion to $VERSION..."
+    just _sed 's|^appVersion:.*|appVersion: "'"$VERSION"'"|' charts/mcp-kubecost/Chart.yaml
+    echo "Updated charts/mcp-kubecost/Chart.yaml appVersion to $VERSION"
+
 _update_version_refs:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -23,6 +31,9 @@ _update_version_refs:
     # Update the canonical Helm chart image tag.
     just _sed 's|^  tag:.*|  tag: "'"$VERSION"'"|' charts/mcp-kubecost/values.yaml
     echo "Updated charts/mcp-kubecost/values.yaml image tag to $VERSION"
+
+    # Keep Chart.yaml appVersion in lockstep.
+    just _update_chart_version
 
 docker-build-run:
     #!/usr/bin/env bash
@@ -118,3 +129,28 @@ install-bob:
 # Install MCP config for Claude Desktop
 install-claude:
     fastmcp install claude-desktop ./fastmcp.json --project $PWD --env-file .env
+
+# ── Linting ────────────────────────────────────────────────────────────────────
+
+# Spell-check all prose and source files tracked by cspell
+spell-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cspell &>/dev/null; then
+        echo "cspell not found — skipping spell check (install with: npm install -g cspell)"
+        exit 0
+    fi
+    cspell lint --no-progress --config .github/cspell.json \
+        DEVELOPMENT.md \
+        README-pre-commit.md \
+        README.md \
+        README-auth.md \
+        "src/mcp_kubecost/tools/**" \
+        "src/mcp_kubecost/skills/**" \
+        "src/mcp_kubecost/prompts/**" \
+        "src/mcp_kubecost/domain/kubecost/**" \
+        charts/mcp-kubecost/README.md \
+        charts/mcp-kubecost/Chart.yaml \
+        charts/mcp-kubecost/values.yaml \
+        charts/mcp-kubecost/values.schema.json \
+        "charts/mcp-kubecost/templates/**"

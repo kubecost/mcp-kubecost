@@ -34,7 +34,7 @@ image:
   # image.repository is the image path within the registry (no host).
   repository: mcp-kubecost
   # image.tag is the container image tag. Defaults to the chart appVersion when empty.
-  tag: 0.4.27
+  tag: 0.4.32
   # image.pullPolicy controls when Kubernetes pulls the image.
   pullPolicy: IfNotPresent
   # image.pullSecrets is a list of Secret names for private image registries.
@@ -174,8 +174,6 @@ config:
   defaultWindow: 15d
   # config.fastmcpLogLevel is the FastMCP log level.
   fastmcpLogLevel: INFO
-  # config.fastmcpEnableRichLogging enables rich terminal formatting when not in HTTP mode.
-  fastmcpEnableRichLogging: true
   # config.useCacViews enables Kubecost CAC views.
   useCacViews: false
   # config.fastmcpHttpAllowedHosts is a JSON array string of permitted HTTP Host headers; empty disables the allowlist.
