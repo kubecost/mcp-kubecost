@@ -152,23 +152,3 @@ class TestOidcRedirectPathSetting:
                 raise AssertionError("expected ConfigError")
         finally:
             get_settings.cache_clear()
-
-
-class TestOidcVerifyIdTokenSetting:
-    def test_defaults_off(self, monkeypatch):
-        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
-        monkeypatch.delenv("OIDC_VERIFY_ID_TOKEN", raising=False)
-        get_settings.cache_clear()
-        try:
-            assert get_settings().oidc_verify_id_token is False
-        finally:
-            get_settings.cache_clear()
-
-    def test_reads_env(self, monkeypatch):
-        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
-        monkeypatch.setenv("OIDC_VERIFY_ID_TOKEN", "true")
-        get_settings.cache_clear()
-        try:
-            assert get_settings().oidc_verify_id_token is True
-        finally:
-            get_settings.cache_clear()

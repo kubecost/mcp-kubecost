@@ -51,7 +51,6 @@ class Settings:
     oidc_audience: str | None
     oidc_base_url: str | None
     oidc_redirect_path: str
-    oidc_verify_id_token: bool
     oidc_required_scopes: list[str]
 
     def to_loggable_dict(self) -> dict:
@@ -251,6 +250,5 @@ def get_settings() -> Settings:
         oidc_audience=oidc_audience,
         oidc_base_url=oidc_base_url,
         oidc_redirect_path=_get_oidc_redirect_path(),
-        oidc_verify_id_token=_get_bool_env("OIDC_VERIFY_ID_TOKEN", False),
         oidc_required_scopes=_get_oidc_scopes(),
     )

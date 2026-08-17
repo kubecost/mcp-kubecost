@@ -54,7 +54,7 @@ STDIO has no HTTP headers, so MCP OIDC and `REQUIRE_CLIENT_API_KEY` do not apply
 
 ## Protecting the MCP HTTP endpoint (OIDC)
 
-When `AUTH_MODE=oidc` (or `both`), the server builds a FastMCP [`OIDCProxy`](https://gofastmcp.com/servers/auth/oidc-proxy). MCP clients speak the MCP OAuth spec to **this server**. This server then talks to the upstream identity provider (Keycloak, Azure AD, Okta, IBM IAM, …).
+When `AUTH_MODE=oidc` (or `both`), the server builds a FastMCP [`OIDCProxy`](https://gofastmcp.com/servers/auth/oidc-proxy). MCP clients speak the MCP OAuth spec to **this server**. This server then talks to the upstream identity provider.
 
 OAuth client registrations and tokens stay in **process memory** (`MemoryStore`). That is required for `readOnlyRootFilesystem`: FastMCP’s default file store mkdirs under `~/.local/share/fastmcp/oauth-proxy/` and fails on a read-only root. Clients re-register after a pod restart. Consent is delegated to the identity provider (`require_authorization_consent="external"`).
 
@@ -95,18 +95,11 @@ When this server has a **dedicated hostname** (not a Kubecost sub-path), use `/a
 
 The MCP client’s own redirect (`http://localhost:<port>/callback` or Claude’s `https://claude.ai/api/mcp/auth_callback`) is registered with FastMCP via DCR. Do not put those URLs on the identity provider.
 
-`OIDC_ISSUER_URL` is the provider’s discovery document, for example:
+`OIDC_ISSUER_URL` is the provider’s discovery document, for example: `https://{domain}/.well-known/openid-configuration`.
 
-| Provider | `OIDC_ISSUER_URL` |
-|----------|-------------------|
-| Keycloak | `https://{host}/realms/{realm}/.well-known/openid-configuration` |
-| Azure AD | `https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration` |
-| Okta | `https://{domain}/.well-known/openid-configuration` |
-| IBM IAM | `https://iam.cloud.ibm.com/identity/.well-known/openid-configuration` |
+Optional: `OIDC_AUDIENCE` when the provider issues JWT access tokens for a specific API audience. Do not set it for providers that issue opaque access tokens — those are verified via the `id_token`, whose audience is the OAuth client id. `OIDC_REQUIRED_SCOPES` defaults to `openid,profile`.
 
-Optional: `OIDC_AUDIENCE` when the provider issues JWT access tokens for a specific API audience. `OIDC_REQUIRED_SCOPES` defaults to `openid,profile`.
-
-IBM w3id (and some other providers) issue **opaque** access tokens, not JWTs. FastMCP then fails with `invalid_token` / `Failed to extract key ID from token` after a successful login, and MCP clients never list tools. Set `OIDC_VERIFY_ID_TOKEN=true` (Helm: `config.oidc.verifyIdToken`) so the proxy validates the `id_token` instead. Leave this off for Keycloak. Do not set `OIDC_AUDIENCE` when it is on — the `id_token` audience is the OAuth client id.
+Some other providers issue **opaque** access tokens, not JWTs. The server detects that from the token response and verifies the `id_token` instead. JWT access-token issuers (Keycloak, typical Azure/Okta) keep access-token verification. No extra setting is required.
 
 ### Shared Kubecost frontend hostname
 
@@ -192,8 +185,7 @@ Templates: [`.env.example`](.env.example) and [`charts/mcp-kubecost/values.yaml`
 | `OIDC_CLIENT_SECRET` | `config.oidc.clientSecret` or Secret | Confidential client secret |
 | `OIDC_BASE_URL` | `config.oidc.baseUrl` | Public URL of this MCP server |
 | `OIDC_REDIRECT_PATH` | `config.oidc.redirectPath` | IdP callback path. Default `/auth-mcp`. Use `/auth/callback` when MCP has a dedicated hostname |
-| `OIDC_AUDIENCE` | `config.oidc.audience` | Optional token audience (JWT access tokens only) |
-| `OIDC_VERIFY_ID_TOKEN` | `config.oidc.verifyIdToken` | Verify `id_token` instead of the access token; required for IBM w3id opaque tokens |
+| `OIDC_AUDIENCE` | `config.oidc.audience` | Optional token audience (JWT access tokens only; omit for opaque IdPs) |
 | `OIDC_REQUIRED_SCOPES` | `config.oidc.requiredScopes` | Default `openid,profile` |
 | `KUBECOST_API_KEY` | `config.kubecostApiKey` | Fallback key sent to Kubecost |
 | `REQUIRE_CLIENT_API_KEY` | `config.requireClientApiKey` | Require inbound `X-API-KEY` on HTTP |
@@ -262,4 +254,4 @@ OIDC file storage tried to write to disk. Current builds use `MemoryStore`; rebu
 `OIDC_ISSUER_URL` must be the provider’s `/.well-known/openid-configuration` JSON URL, not a login page and not this server’s `/mcp` URL.
 
 **Login succeeds but `/mcp` returns `invalid_token` / tools never appear**
-The IdP issued an opaque access token (IBM w3id does this). Logs show `Failed to extract key ID from token` and `Upstream token validation failed`. Set `OIDC_VERIFY_ID_TOKEN=true` (Helm: `config.oidc.verifyIdToken: true`) and redeploy. Leave it off for Keycloak JWT access tokens.
+Confirm the IdP returned an `id_token` (request `openid`). Opaque access tokens are verified via that `id_token` automatically. If `OIDC_AUDIENCE` is set for an opaque IdP, remove it — the `id_token` audience is the OAuth client id. Check logs for `Upstream token validation failed` or `no id_token was in the token response`.

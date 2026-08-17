@@ -110,9 +110,6 @@ OIDC_AUDIENCE={{ .Values.config.oidc.audience }}
 OIDC_BASE_URL={{ .Values.config.oidc.baseUrl }}
 {{- end }}
 OIDC_REDIRECT_PATH={{ include "mcp-kubecost.oidcRedirectPath" . }}
-{{- if hasKey .Values.config.oidc "verifyIdToken" }}
-OIDC_VERIFY_ID_TOKEN={{ .Values.config.oidc.verifyIdToken }}
-{{- end }}
 {{- if .Values.config.oidc.requiredScopes }}
 OIDC_REQUIRED_SCOPES={{ .Values.config.oidc.requiredScopes }}
 {{- end }}
