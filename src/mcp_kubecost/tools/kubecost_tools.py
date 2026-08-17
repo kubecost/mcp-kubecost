@@ -1077,7 +1077,7 @@ class ContainerSavingsRow(BaseModel):
         description="Memory portion of monthly savings (USD). Negative = memory is undersized.",
     )
     # Quantity aliases embed units (cpuInMilliCores / memoryInMiB) to match Kubecost's
-    # normalized nested keys. Efficiency and savings stay unitless / USD without those suffixes.
+    # normalized nested keys.
     recommended_cpu_in_milli_cores: float = Field(
         default=0.0,
         alias="Recommended_cpuInMilliCores",
@@ -1280,7 +1280,14 @@ class LocalDiskRow(BaseModel):
 
     disk_name: str = Field(default="", description="Disk/node identifier.")
     cluster_id: str = Field(default="", description="Kubecost cluster ID.")
-    utilization_percent: float = Field(default=0.0, description="Disk utilization as a 0-1 ratio (NOT 0-100).")
+    utilization_percent: float = Field(
+        default=0.0,
+        description=(
+            "Disk utilization as a 0–1 ratio (NOT 0–100). "
+            "May theoretically exceed 1.0 in burst or overcommit scenarios — values above 1.0 "
+            "are passed through as-is from the upstream Kubecost API and are not an error."
+        ),
+    )
     current_usage_bytes: int = Field(default=0, description="Current used bytes.")
     current_capacity_bytes: int = Field(default=0, description="Current capacity in bytes.")
     recommended_capacity_bytes: int = Field(
@@ -1310,10 +1317,33 @@ class LocalDiskSavingsResponse(BaseToolResponse):
 class ResourceMetrics(BaseModel):
     """CPU or RAM metrics for a node group state."""
 
-    capacity_avg: float = Field(default=0.0, description="Average capacity (in the unit specified by the API).")
-    utilization: float = Field(default=0.0, description="Utilization ratio 0-1.")
-    usage_avg: float | None = Field(default=None, description="Average usage. None in the recommended (after) state.")
-    usage_p95: float | None = Field(default=None, description="P95 usage. None in the recommended (after) state.")
+    capacity_avg: float = Field(
+        default=0.0,
+        description=(
+            "Average capacity. Unit depends on the resource: millicores (m) for CPU, mebibytes (Mi) for RAM."),
+    )
+    utilization: float = Field(
+        default=0.0,
+        description=(
+            "Utilization ratio (usage / capacity). Typically 0–1, but may exceed 1.0 due to CPU burst, "
+            "memory overcommit, or averaging artifacts across heterogeneous nodes. "
+            "Values above 1.0 are not an error — they indicate the node is running above nominal capacity."
+        ),
+    )
+    usage_avg: float | None = Field(
+        default=None,
+        description=(
+            "Average usage (same unit as capacity_avg: millicores for CPU, mebibytes for RAM). "
+            "None in the recommended (after) state."
+        ),
+    )
+    usage_p95: float | None = Field(
+        default=None,
+        description=(
+            "P95 usage (same unit as capacity_avg: millicores for CPU, mebibytes for RAM). "
+            "None in the recommended (after) state."
+        ),
+    )
 
 
 class NodeGroupState(BaseModel):
@@ -1322,8 +1352,8 @@ class NodeGroupState(BaseModel):
     instance_type: str = Field(default="", description="EC2/GCE/Azure instance type.")
     node_count: int = Field(default=0, description="Number of nodes.")
     price_per_month: float = Field(default=0.0, description="Total monthly cost for this node group (USD).")
-    cpu: ResourceMetrics = Field(description="CPU metrics.")
-    ram: ResourceMetrics = Field(description="RAM metrics.")
+    cpu: ResourceMetrics = Field(description="CPU metrics. All capacity/usage values are in millicores (m).")
+    ram: ResourceMetrics = Field(description="RAM metrics. All capacity/usage values are in mebibytes (Mi).")
 
 
 class NodeGroupRecommendation(BaseModel):
@@ -1332,11 +1362,39 @@ class NodeGroupRecommendation(BaseModel):
     node_group: str = Field(default="", description="Node group name.")
     recommendation: str = Field(
         default="",
-        description="Recommended action. Observed values: 'ScaleIn', 'None', 'ChangeInstanceType'. Open string.",
+        description=(
+            "Recommended action. Observed values: 'ScaleIn', 'ScaleOut', 'ChangeInstanceType', 'None'. Open string."
+        ),
+    )
+    recommendation_class: str = Field(
+        default="cost_saving",
+        description=(
+            "High-level class of this recommendation. "
+            "'cost_saving' — the change reduces monthly cost (ScaleIn, ChangeInstanceType to cheaper type). "
+            "'capacity' — the change adds headroom or reliability at higher or equal cost (ScaleOut, "
+            "ChangeInstanceType to a larger type). Consumers should not treat 'capacity' rows as savings "
+            "opportunities; they represent reliability recommendations."
+        ),
     )
     before: NodeGroupState = Field(description="Current node group state.")
     after: NodeGroupState = Field(description="Recommended node group state.")
-    savings_per_month: float = Field(default=0.0, description="Estimated monthly savings (USD).")
+    monthly_cost_delta: float = Field(
+        default=0.0,
+        description=(
+            "Signed monthly cost change: after.price_per_month - before.price_per_month (USD). "
+            "Negative means cost decreases (saving); positive means cost increases (capacity investment). "
+            "Use this field when you need the exact signed delta."
+        ),
+    )
+    savings_per_month: float = Field(
+        default=0.0,
+        description=(
+            "Estimated monthly savings if this recommendation is applied (USD). "
+            "Always >= 0: negative monthly_cost_delta rows contribute their absolute value; "
+            "positive monthly_cost_delta rows (capacity recommendations) contribute 0. "
+            "Use total_savings_per_month on the response for the cluster-level savings figure."
+        ),
+    )
 
 
 class ClusterRightsizingResponse(BaseToolResponse):
@@ -1352,7 +1410,23 @@ class ClusterRightsizingResponse(BaseToolResponse):
     recommendations: list[NodeGroupRecommendation] = Field(
         default_factory=list, description="Node group recommendations."
     )
-    total_savings_per_month: float = Field(default=0.0, description="Total estimated monthly savings (USD).")
+    total_savings_per_month: float = Field(
+        default=0.0,
+        description=(
+            "Total estimated monthly savings across all cost_saving recommendations (USD). "
+            "Always >= 0. Capacity recommendations (ScaleOut, etc.) do not reduce this figure even "
+            "if they increase cost — they are excluded from the total. "
+            "Compare to net_cost_change for the signed total."
+        ),
+    )
+    net_cost_change: float = Field(
+        default=0.0,
+        description=(
+            "Sum of monthly_cost_delta across all recommendations (USD). "
+            "May be negative (net saving), zero, or positive (net capacity investment). "
+            "This is the signed total; total_savings_per_month is the non-negative savings view."
+        ),
+    )
     recommendation_count: int = Field(default=0, description="Number of recommendations.")
     truncated: bool = Field(
         default=False, description="True if upstream returned >1000 recommendations and results were capped."
@@ -1394,14 +1468,44 @@ class UnclaimedVolumesResponse(BaseToolResponse):
 
 
 class QuotaResourceChange(BaseModel):
-    """One resource type change within a namespace quota recommendation."""
+    """One resource type change within a namespace quota recommendation.
+
+    Note on field semantics: ``current_quota`` and ``recommended_quota`` are
+    **quota** values, not raw pod-level observed usage. For example,
+    ``current_quota='3500m'`` means the namespace's existing ResourceQuota cap is
+    3500 millicores — *not* that pods are consuming 3500m. ``is_downsize=True``
+    means the recommended quota is *lower* than the current one (tightening).
+    """
 
     resource_type: str = Field(default="", description="Resource type (e.g. 'requests.cpu', 'requests.memory').")
     category: str = Field(default="", description="Resource category (e.g. 'compute').")
-    used: str = Field(default="", description="Current observed usage.")
-    recommended: str = Field(default="", description="Recommended quota value.")
+    current_quota: str = Field(
+        default="",
+        alias="used",
+        description=(
+            "Current ResourceQuota value for this resource type "
+            "(e.g. '3500m' CPU or '8Gi' memory). This is the quota cap, not raw "
+            "observed pod usage — the name 'used' in the Kubecost API is misleading."
+        ),
+    )
+    recommended_quota: str = Field(
+        default="",
+        alias="recommended",
+        description=(
+            "Recommended ResourceQuota value (e.g. '4725m' CPU or '10Gi' memory). "
+            "Apply this value to the namespace's ResourceQuota object. "
+            "When is_downsize=True this is lower than current_quota (quota tightening)."
+        ),
+    )
     is_new_resource: bool = Field(default=False, description="True if this resource type has no existing quota entry.")
-    is_downsize: bool = Field(default=False, description="True if this recommendation reduces the quota.")
+    is_downsize: bool = Field(
+        default=False,
+        description=(
+            "True if the recommended_quota is lower than current_quota. "
+            "Despite the name, this means the quota is being *tightened*, not that "
+            "current resource usage exceeds the quota."
+        ),
+    )
 
 
 class QuotaNamespaceRecommendation(BaseModel):
@@ -1433,6 +1537,20 @@ class ResourceQuotaResponse(BaseToolResponse):
         default=0.0, description="Total monthly savings (USD). May be 0 -- this is a correctness tool."
     )
     truncated: bool = Field(default=False, description="True if more pages exist.")
+    has_more: bool = Field(
+        default=False,
+        description=(
+            "True when there are additional pages of recommendations beyond the current page. "
+            "Equivalent to truncated; provided for callers that prefer explicit pagination semantics."
+        ),
+    )
+    next_offset: int | None = Field(
+        default=None,
+        description=(
+            "The offset value to pass in the next call to retrieve the following page. "
+            "Null when has_more=False (no further pages exist)."
+        ),
+    )
 
 
 class AbandonedWorkloadRow(BaseModel):
@@ -2792,7 +2910,6 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             )
 
         recs_raw, was_capped = _cap_raw_rows(raw.get("recommendations", []), "node group sizing")
-        total_savings = round(float(raw.get("totalSavingsPerMonth", 0.0) or 0.0), 2)
         warnings: list[str] = raw.get("warnings") or []
         window_info = raw.get("window", {})
         window_str = window_info.get("start", window) if isinstance(window_info, dict) else window
@@ -2821,16 +2938,42 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 ram=_resource_metrics(ram_res),
             )
 
-        recommendations = [
-            NodeGroupRecommendation(
-                node_group=r.get("nodeGroup", ""),
-                recommendation=r.get("recommendation", ""),
-                before=_node_group_state(r.get("before", {})),
-                after=_node_group_state(r.get("after", {})),
-                savings_per_month=round(float(r.get("savingsPerMonth", 0.0) or 0.0), 2),
+        def _recommendation_class(rec_str: str, before_state: NodeGroupState, after_state: NodeGroupState) -> str:
+            """Classify a recommendation as 'cost_saving' or 'capacity'.
+
+            ScaleOut always adds nodes (cost increase), so it is 'capacity'.
+            For all other types, compare the actual before/after monthly prices: if the
+            recommended state costs more than the current one it is a capacity recommendation.
+            """
+            if rec_str.lower() == "scaleout":
+                return "capacity"
+            delta = after_state.price_per_month - before_state.price_per_month
+            return "capacity" if delta > 0 else "cost_saving"
+
+        recommendations: list[NodeGroupRecommendation] = []
+        for r in recs_raw_sorted:
+            before_state = _node_group_state(r.get("before", {}))
+            after_state = _node_group_state(r.get("after", {}))
+            monthly_cost_delta = round(after_state.price_per_month - before_state.price_per_month, 2)
+            rec_class = _recommendation_class(r.get("recommendation", ""), before_state, after_state)
+            # savings_per_month: clamped non-negative view for cost_saving rows; 0 for capacity rows
+            savings_value = max(0.0, -monthly_cost_delta) if rec_class == "cost_saving" else 0.0
+            recommendations.append(
+                NodeGroupRecommendation(
+                    node_group=r.get("nodeGroup", ""),
+                    recommendation=r.get("recommendation", ""),
+                    recommendation_class=rec_class,
+                    before=before_state,
+                    after=after_state,
+                    monthly_cost_delta=monthly_cost_delta,
+                    savings_per_month=round(savings_value, 2),
+                )
             )
-            for r in recs_raw_sorted
-        ]
+
+        # total_savings_per_month: clamped, non-negative sum of cost_saving rows only
+        total_savings = round(sum(rec.savings_per_month for rec in recommendations), 2)
+        # net_cost_change: signed sum across all recommendations (may be negative, zero, or positive)
+        net_cost_change = round(sum(rec.monthly_cost_delta for rec in recommendations), 2)
 
         if not recommendations:
             return ClusterRightsizingResponse(
@@ -2845,18 +2988,26 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 cluster=cluster,
                 profile=profile,
                 window=window_str,
-                total_savings_per_month=total_savings,
+                total_savings_per_month=0.0,
+                net_cost_change=0.0,
                 warnings=warnings,
             )
+
+        # Separate capacity from cost-saving recommendations in the summary for clarity.
+        capacity_count = sum(1 for rec in recommendations if rec.recommendation_class == "capacity")
+        capacity_note = (
+            f" ({capacity_count} capacity recommendation(s) excluded from savings total.)" if capacity_count else ""
+        )
 
         return ClusterRightsizingResponse(
             status=QueryStatus.OK,
             message=(
                 f"Found {len(recommendations)} node group recommendation(s) for cluster '{cluster}' "
-                f"for {window_display} with estimated monthly savings of ${total_savings:,.2f}."
+                f"for {window_display} with estimated monthly savings of ${total_savings:,.2f}.{capacity_note}"
             ),
             recommended_action=(
-                "Review ScaleIn and ChangeInstanceType recommendations first for quickest savings. "
+                "Review cost_saving recommendations (ScaleIn, ChangeInstanceType) first for quickest savings. "
+                "Capacity recommendations (ScaleOut) improve reliability but do not reduce cost. "
                 "Validate node counts against workload headroom before applying."
             ),
             cluster=cluster,
@@ -2865,6 +3016,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             resolved_window=resolved_window,
             recommendations=recommendations,
             total_savings_per_month=total_savings,
+            net_cost_change=net_cost_change,
             recommendation_count=len(recommendations),
             truncated=was_capped,
             warnings=warnings,
@@ -3041,9 +3193,44 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         window_display = resolved_window.display if resolved_window else window
 
         recs_raw: list[dict[str, Any]] = raw.get("recommendations", [])
+        # P0: Cap oversized upstream responses — this endpoint lacks a top_n client-side guard
+        # that every other row-returning tool has. At ~900 bytes/row, 1,873 rows ≈ 1.7MB, which
+        # exceeds typical MCP client response-size limits and produces "no visible payload".
+        recs_raw, was_capped = _cap_raw_rows(recs_raw, "resource quota")
         item_count = int(raw.get("itemCount", len(recs_raw)) or len(recs_raw))
         total_monthly_savings = round(float(raw.get("totalMonthlySavings", 0.0) or 0.0), 2)
-        truncated = item_count > offset + len(recs_raw)
+        truncated = was_capped or item_count > offset + len(recs_raw)
+        has_more = truncated
+        next_offset = (offset + len(recs_raw)) if has_more else None
+
+        # P0: Integrity check — warn when rows carry blank cluster/namespace but have resources.
+        # Blank dimensions indicate an unattributed row from the API, not a missing-quota entry.
+        integrity_warnings: list[str] = []
+        blank_rows = [r for r in recs_raw if (not r.get("cluster") or not r.get("namespace")) and r.get("resources")]
+        if blank_rows:
+            logger.warning(
+                "ResourceQuota API returned %d row(s) with blank cluster or namespace but populated resources",
+                len(blank_rows),
+            )
+            integrity_warnings.append(
+                f"{len(blank_rows)} row(s) had a blank cluster or namespace field with populated resources — "
+                "these may be unattributed recommendations from the Kubecost API."
+            )
+
+        # P0: Dedupe check — warn on duplicate (cluster, namespace, category) keys.
+        seen_keys: set[tuple[str, str, str]] = set()
+        dupe_count = 0
+        for r in recs_raw:
+            key = (r.get("cluster", ""), r.get("namespace", ""), r.get("category", ""))
+            if key in seen_keys:
+                dupe_count += 1
+            else:
+                seen_keys.add(key)
+        if dupe_count:
+            logger.warning("ResourceQuota API returned %d duplicate (cluster, namespace, category) key(s)", dupe_count)
+            integrity_warnings.append(
+                f"{dupe_count} duplicate (cluster, namespace, category) combination(s) detected in API response."
+            )
 
         if not recs_raw:
             return ResourceQuotaResponse(
@@ -3053,6 +3240,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 item_count=item_count,
                 total_monthly_savings=total_monthly_savings,
                 resolved_window=resolved_window,
+                has_more=False,
+                next_offset=None,
             )
 
         recommendations = [
@@ -3081,15 +3270,19 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             message=(
                 f"Found {item_count} namespace quota recommendation(s) for {window_display}"
                 + (f" (page offset={offset}, showing {len(recommendations)})." if offset > 0 or truncated else ".")
+                + (f" Integrity warnings: {'; '.join(integrity_warnings)}" if integrity_warnings else "")
             ),
             recommended_action=(
-                "Focus on namespaces with isDownsize=true for immediate savings. "
-                "Create missing quotas (isNewResourceQuota=true) to enforce governance."
+                "Focus on namespaces with is_downsize=true for immediate savings. "
+                "Create missing quotas (is_new_resource_quota=true) to enforce governance."
+                + (" Use next_offset to retrieve further pages." if has_more else "")
             ),
             recommendations=recommendations,
             item_count=item_count,
             total_monthly_savings=total_monthly_savings,
             truncated=truncated,
+            has_more=has_more,
+            next_offset=next_offset,
             resolved_window=resolved_window,
         )
 
