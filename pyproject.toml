@@ -1,6 +1,6 @@
 [project]
 name = "mcp-kubecost"
-version = "0.4.32"
+version = "0.5.0"
 description = "FinOps-first MCP server for Kubecost analytics."
 readme = "README.md"
 requires-python = ">=3.12"
