@@ -8,7 +8,8 @@ import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastmcp.server.auth.oauth_proxy.models import UpstreamTokenSet
+import pytest
+from fastmcp.server.auth.oauth_proxy.models import ProxyDCRClient, UpstreamTokenSet
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from key_value.aio.stores.memory import MemoryStore
 
@@ -85,7 +86,16 @@ def _token_set(*, access: str, id_token: str | None = None) -> UpstreamTokenSet:
 
 
 def _uninitialized_proxy() -> AdaptiveOidcProxy:
-    return AdaptiveOidcProxy.__new__(AdaptiveOidcProxy)
+    """Return an AdaptiveOidcProxy bypassing __init__ for unit-testing individual methods.
+
+    Tests that call _get_verification_token must set _logged_opaque on the instance
+    themselves (or accept AttributeError) because __init__ is skipped.
+    The ContextVar _verify_id_token is task-local, so _uses_alternate_verification()
+    reads whatever the current task's _get_verification_token call last wrote.
+    """
+    proxy = AdaptiveOidcProxy.__new__(AdaptiveOidcProxy)
+    proxy._logged_opaque = False  # normally set by __init__
+    return proxy
 
 
 class TestCreateOidcProvider:
@@ -100,7 +110,8 @@ class TestCreateOidcProvider:
         assert kwargs["require_authorization_consent"] == "external"
         assert kwargs["redirect_path"] == "/auth-mcp"
         assert "verify_id_token" not in kwargs
-        proxy.return_value._install_adaptive_verifier.assert_called_once()
+        # _install_adaptive_verifier is now called from AdaptiveOidcProxy.__init__,
+        # not from create_oidc_provider, so no explicit call assertion needed here.
 
     def test_forwards_dedicated_host_redirect_path(self):
         with patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy") as proxy:
@@ -200,6 +211,12 @@ class TestInstallAdaptiveVerifier:
 
 
 class TestAdaptiveTokenVerifier:
+    # Routing is driven by the task-local ContextVar _verify_id_token.
+    # _get_verification_token sets the ContextVar as a side effect, so we call it
+    # on an uninitialized proxy before asserting the verifier's routing — both
+    # the proxy call and verify_token run in the same asyncio task, so the
+    # ContextVar value is visible to the verifier without any extra wiring.
+
     async def test_routes_jwt_access_to_access_verifier(self):
         access = MagicMock()
         access.required_scopes = ["openid", "profile"]
@@ -227,3 +244,34 @@ class TestAdaptiveTokenVerifier:
         assert await verifier.verify_token("tok") == "id-ok"
         id_token.verify_token.assert_awaited_once_with("tok")
         access.verify_token.assert_not_awaited()
+
+
+class TestGetClientFallback:
+    """get_client synthesizes a permissive ProxyDCRClient for unknown client IDs.
+
+    After a server restart the MemoryStore is empty.  MCP clients that cached a
+    client_id from a previous session would otherwise receive a 400 HTML error
+    when hitting /authorize.  The override in AdaptiveOidcProxy synthesizes a
+    ProxyDCRClient so the flow can complete and the client gets a fresh token.
+    """
+
+    @pytest.mark.asyncio
+    async def test_known_client_returned_as_is(self):
+        proxy = _uninitialized_proxy()
+        known = MagicMock(spec=ProxyDCRClient)
+        proxy_parent_get_client = AsyncMock(return_value=known)
+        with patch.object(type(proxy).__mro__[1], "get_client", proxy_parent_get_client):
+            result = await proxy.get_client("known-id")
+        assert result is known
+
+    @pytest.mark.asyncio
+    async def test_unknown_client_synthesized(self):
+        proxy = _uninitialized_proxy()
+        proxy._allowed_client_redirect_uris = None
+        proxy._default_scope_str = "openid profile"
+        # Simulate parent returning None (client not found in store)
+        with patch.object(type(proxy).__mro__[1], "get_client", AsyncMock(return_value=None)):
+            result = await proxy.get_client("stale-id-from-restart")
+        assert isinstance(result, ProxyDCRClient)
+        assert result.client_id == "stale-id-from-restart"
+        assert result.allow_unregistered_redirect_uris is True

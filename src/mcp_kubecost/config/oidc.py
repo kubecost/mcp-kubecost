@@ -14,13 +14,16 @@ from __future__ import annotations
 import json
 import logging
 from contextvars import ContextVar
+from typing import Any
 
 from fastmcp.server.auth import AccessToken, TokenVerifier
-from fastmcp.server.auth.oauth_proxy.models import UpstreamTokenSet
+from fastmcp.server.auth.oauth_proxy.models import ProxyDCRClient, UpstreamTokenSet
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.utilities.auth import decode_jwt_header
 from key_value.aio.stores.memory import MemoryStore
+from mcp.shared.auth import OAuthClientInformationFull
+from pydantic import AnyUrl
 
 from mcp_kubecost.config.settings import AuthMode, Settings, get_settings
 from mcp_kubecost.errors import ConfigError
@@ -29,7 +32,6 @@ logger = logging.getLogger(__name__)
 
 # Per-request: True when the current verification token is the OIDC id_token.
 _verify_id_token: ContextVar[bool] = ContextVar("oidc_verify_id_token", default=False)
-_logged_opaque_access_token = False
 
 
 def looks_like_jwt(token: str) -> bool:
@@ -60,6 +62,11 @@ class AdaptiveTokenVerifier(TokenVerifier):
 class AdaptiveOidcProxy(OIDCProxy):
     """OIDC proxy that verifies JWT access tokens, else the OIDC id_token."""
 
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._logged_opaque: bool = False
+        self._install_adaptive_verifier()
+
     def _install_adaptive_verifier(self) -> None:
         """Wrap FastMCP's access-token JWTVerifier with an id_token fallback."""
         access_verifier = self._token_validator
@@ -72,16 +79,15 @@ class AdaptiveOidcProxy(OIDCProxy):
         self._token_validator = AdaptiveTokenVerifier(access_verifier, id_token_verifier)
 
     def _get_verification_token(self, upstream_token_set: UpstreamTokenSet) -> str | None:
-        global _logged_opaque_access_token
         access_token = upstream_token_set.access_token
         if looks_like_jwt(access_token):
             _verify_id_token.set(False)
             return access_token
 
         _verify_id_token.set(True)
-        if not _logged_opaque_access_token:
+        if not self._logged_opaque:
             logger.info("OIDC access token is not a JWT; verifying id_token instead")
-            _logged_opaque_access_token = True
+            self._logged_opaque = True
 
         id_token = upstream_token_set.raw_token_data.get("id_token")
         if id_token is None:
@@ -90,6 +96,35 @@ class AdaptiveOidcProxy(OIDCProxy):
 
     def _uses_alternate_verification(self) -> bool:
         return _verify_id_token.get()
+
+    async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
+        """Return client by ID, synthesizing a permissive fallback for unknown IDs.
+
+        MemoryStore loses all registrations on server restart.  When the MCP
+        client retries /authorize with a stale ``client_id`` it cached from the
+        previous session, the normal lookup returns ``None`` → 400 HTML error
+        page.  Synthesize a permissive ``ProxyDCRClient`` for any unknown
+        ``client_id`` so the authorization flow can complete and issue a fresh
+        token set.  The client will re-register itself on the next normal startup.
+        """
+        client = await super().get_client(client_id)
+        if client is not None:
+            return client
+
+        logger.debug(
+            "Unknown client_id=%s after server restart — synthesizing fallback client",
+            client_id,
+        )
+        return ProxyDCRClient(
+            client_id=client_id,
+            client_secret=None,
+            redirect_uris=[AnyUrl("http://localhost")],
+            grant_types=["authorization_code", "refresh_token"],
+            scope=self._default_scope_str,
+            token_endpoint_auth_method="none",
+            allowed_redirect_uri_patterns=self._allowed_client_redirect_uris,
+            allow_unregistered_redirect_uris=True,
+        )
 
 
 def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
@@ -135,7 +170,7 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
     # built-in consent page is another HTML response that MCP clients try to
     # parse as OAuth JSON.
     try:
-        proxy = AdaptiveOidcProxy(
+        return AdaptiveOidcProxy(
             config_url=settings.oidc_issuer_url,
             client_id=settings.oidc_client_id,
             client_secret=settings.oidc_client_secret,
@@ -146,8 +181,6 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
             client_storage=MemoryStore(),
             require_authorization_consent="external",
         )
-        proxy._install_adaptive_verifier()
-        return proxy
     except ConfigError:
         raise
     except Exception as exc:
