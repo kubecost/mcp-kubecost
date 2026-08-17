@@ -1,9 +1,9 @@
 apiVersion: v2
 name: mcp-kubecost
-description: A FinOps-first MCP server for Kubecost analytics.
+description: FinOps MCP server for Kubecost analytics.
 type: application
 version: 0.1.0
-appVersion: "0.4.13"
+appVersion: 0.4.32
 kubeVersion: ">=1.27.0-0"
 home: https://github.com/kubecost/mcp-kubecost
 sources:

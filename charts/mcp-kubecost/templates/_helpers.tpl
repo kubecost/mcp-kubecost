@@ -161,44 +161,43 @@ Stable string of all ConfigMap data values used for checksum annotation.
 Must stay in sync with the data block in configmap.yaml.
 */}}
 {{- define "mcp-kubecost.configmap-data" -}}
-KUBECOST_BASE_URL={{ .Values.config.kubecostBaseUrl }}
-KUBECOST_API_BASE_PATH={{ .Values.config.kubecostApiBasePath }}
-REQUEST_TIMEOUT_SECONDS={{ .Values.config.requestTimeoutSeconds }}
-REQUEST_RETRY_COUNT={{ .Values.config.requestRetryCount }}
-DEFAULT_WINDOW={{ .Values.config.defaultWindow }}
-FASTMCP_LOG_LEVEL={{ .Values.config.fastmcpLogLevel }}
-FASTMCP_ENABLE_RICH_LOGGING={{ .Values.config.fastmcpEnableRichLogging }}
-USE_CAC_VIEWS={{ .Values.config.useCacViews }}
-REQUIRE_CLIENT_API_KEY={{ .Values.config.requireClientApiKey }}
-MCP_SERVER_NAME={{ .Values.config.mcpServerName }}
-FASTMCP_TELEMETRY_MODE={{ .Values.config.telemetryMode }}
-OTEL_SERVICE_NAME={{ .Values.config.otelServiceName }}
-OTEL_METRICS_EXPORTER={{ .Values.config.otelMetricsExporter }}
-OTEL_LOGS_EXPORTER={{ .Values.config.otelLogsExporter }}
-KUBECOST_SSL_VERIFY={{ .Values.config.ssl.verify }}
+KUBECOST_BASE_URL={{ .Values.config.kubecostBaseUrl | quote }}
+KUBECOST_API_BASE_PATH={{ .Values.config.kubecostApiBasePath | quote }}
+REQUEST_TIMEOUT_SECONDS={{ .Values.config.requestTimeoutSeconds | quote }}
+REQUEST_RETRY_COUNT={{ .Values.config.requestRetryCount | quote }}
+DEFAULT_WINDOW={{ .Values.config.defaultWindow | quote }}
+FASTMCP_LOG_LEVEL={{ .Values.config.fastmcpLogLevel | quote }}
+USE_CAC_VIEWS={{ .Values.config.useCacViews | quote }}
+REQUIRE_CLIENT_API_KEY={{ .Values.config.requireClientApiKey | quote }}
+MCP_SERVER_NAME={{ .Values.config.mcpServerName | quote }}
+FASTMCP_TELEMETRY_MODE={{ .Values.config.telemetryMode | quote }}
+OTEL_SERVICE_NAME={{ .Values.config.otelServiceName | quote }}
+OTEL_METRICS_EXPORTER={{ .Values.config.otelMetricsExporter | quote }}
+OTEL_LOGS_EXPORTER={{ .Values.config.otelLogsExporter | quote }}
+KUBECOST_SSL_VERIFY={{ .Values.config.ssl.verify | quote }}
 {{- if .Values.config.otelExporterOtlpEndpoint }}
-OTEL_EXPORTER_OTLP_ENDPOINT={{ .Values.config.otelExporterOtlpEndpoint }}
+OTEL_EXPORTER_OTLP_ENDPOINT={{ .Values.config.otelExporterOtlpEndpoint | quote }}
 {{- end }}
 {{- if .Values.config.fastmcpHttpAllowedHosts }}
-FASTMCP_HTTP_ALLOWED_HOSTS={{ .Values.config.fastmcpHttpAllowedHosts }}
+FASTMCP_HTTP_ALLOWED_HOSTS={{ .Values.config.fastmcpHttpAllowedHosts | quote }}
 {{- end }}
 {{- if .Values.config.ssl.caBundle.existingSecret }}
-SSL_CA_BUNDLE={{ .Values.config.ssl.caBundle.mountPath }}
+SSL_CA_BUNDLE={{ .Values.config.ssl.caBundle.mountPath | quote }}
 {{- end }}
 {{- if ne .Values.config.oidc.authMode "none" }}
-AUTH_MODE={{ .Values.config.oidc.authMode }}
+AUTH_MODE={{ .Values.config.oidc.authMode | quote }}
 {{- if .Values.config.oidc.issuerUrl }}
-OIDC_ISSUER_URL={{ .Values.config.oidc.issuerUrl }}
+OIDC_ISSUER_URL={{ .Values.config.oidc.issuerUrl | quote }}
 {{- end }}
 {{- if .Values.config.oidc.audience }}
-OIDC_AUDIENCE={{ .Values.config.oidc.audience }}
+OIDC_AUDIENCE={{ .Values.config.oidc.audience | quote }}
 {{- end }}
 {{- if .Values.config.oidc.baseUrl }}
-OIDC_BASE_URL={{ .Values.config.oidc.baseUrl }}
+OIDC_BASE_URL={{ .Values.config.oidc.baseUrl | quote }}
 {{- end }}
-OIDC_REDIRECT_PATH={{ include "mcp-kubecost.oidcRedirectPath" . }}
+OIDC_REDIRECT_PATH={{ include "mcp-kubecost.oidcRedirectPath" . | quote }}
 {{- if .Values.config.oidc.requiredScopes }}
-OIDC_REQUIRED_SCOPES={{ .Values.config.oidc.requiredScopes }}
+OIDC_REQUIRED_SCOPES={{ .Values.config.oidc.requiredScopes | quote }}
 {{- end }}
 {{- end }}
 {{- end }}

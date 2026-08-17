@@ -11,7 +11,6 @@ data:
   REQUEST_RETRY_COUNT: {{ .Values.config.requestRetryCount | quote }}
   DEFAULT_WINDOW: {{ .Values.config.defaultWindow | quote }}
   FASTMCP_LOG_LEVEL: {{ .Values.config.fastmcpLogLevel | quote }}
-  FASTMCP_ENABLE_RICH_LOGGING: {{ .Values.config.fastmcpEnableRichLogging | quote }}
   USE_CAC_VIEWS: {{ .Values.config.useCacViews | quote }}
   REQUIRE_CLIENT_API_KEY: {{ .Values.config.requireClientApiKey | quote }}
   MCP_SERVER_NAME: {{ .Values.config.mcpServerName | quote }}
