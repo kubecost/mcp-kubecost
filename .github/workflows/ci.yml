@@ -1,8 +1,10 @@
-name: ci tests
+name: ci
 
 on:
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -13,6 +15,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -32,3 +37,33 @@ jobs:
           path: coverage.xml
       - name: Repo safety checks
         run: uv run python scripts/check_repo_safety.py
+
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MCP_KUBECOST_CONFIG: tests/mcp-demo.json
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: uv sync --extra dev
+      - name: Check the target instance is reachable
+        run: |
+          set -euo pipefail
+          URL=$(jq -r '.mcpServers["mcp-kubecost"].env.KUBECOST_BASE_URL' "$MCP_KUBECOST_CONFIG")
+          echo "Integration target: $URL"
+          echo "Integration target: $URL" >> "$GITHUB_STEP_SUMMARY"
+          if ! curl -fsS --retry 3 --retry-delay 5 --max-time 30 -o /dev/null \
+              "$URL/model/allocation?window=1d&aggregate=cluster&accumulate=true"; then
+            echo "::error::$URL is not responding — integration tests cannot run against it."
+            exit 1
+          fi
+      - name: Integration tests
+        run: uv run pytest -m integration -v
