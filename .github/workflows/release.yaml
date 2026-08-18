@@ -233,20 +233,11 @@ jobs:
   trigger-copy:
     needs: [build, publish-image]
     if: github.event_name == 'workflow_dispatch' && github.repository == 'kubecost/mcp-kubecost'
-    runs-on: ubuntu-latest
+    runs-on: Kubecost-Linux-Small-x86
     steps:
-      - name: Generate app token for cross-repo dispatch
-        id: app-token
-        uses: actions/create-github-app-token@v3.2.0
-        with:
-          client-id: ${{ vars.KC_ACTIONS_BOT_APP_CLIENT_ID }}
-          private-key: ${{ secrets.KC_ACTIONS_BOT_APP_PRIVATE_KEY }}
-          owner: apptio-pne
-          repositories: kubecost-deploy
-
-      - name: Trigger Harbor and ICR copy
+      - name: Trigger upload to Harbor and ICR
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.GH_KUBECOST_DEPLOY_PAT_JESSE }}
           DOCKER_IMAGE: ${{ needs.publish-image.outputs.image }}
         run: |
           set -euo pipefail
