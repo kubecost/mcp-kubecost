@@ -61,7 +61,7 @@ jobs:
 
   trigger-copy:
     needs: docker-build
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.repository == 'kubecost/mcp-kubecost'
     runs-on: ubuntu-latest
     steps:
       - name: Generate app token for cross-repo dispatch

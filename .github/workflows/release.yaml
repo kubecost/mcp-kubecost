@@ -232,7 +232,7 @@ jobs:
 
   trigger-copy:
     needs: [build, publish-image]
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'kubecost/mcp-kubecost'
     runs-on: ubuntu-latest
     steps:
       - name: Generate app token for cross-repo dispatch
