@@ -23,11 +23,14 @@ on:
         default: ""
 
 permissions:
-  contents: write   # required for creating the GitHub Release
+  contents: write   # required for creating the GitHub Release and pushing to gh-pages
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      chart_version: ${{ steps.id.outputs.py_version }}
+      release_tag: ${{ steps.id.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -61,11 +64,12 @@ jobs:
             echo "::warning::manifest.json not found — skipping version sync."
           fi
 
-          # Keep Chart.yaml appVersion in lockstep with pyproject.toml.
+          # Keep Chart.yaml version + appVersion in lockstep with pyproject.toml.
           CHART_FILE="charts/mcp-kubecost/Chart.yaml"
           if [ -f "$CHART_FILE" ]; then
+            sed -i "s|^version:.*|version: ${PY_VERSION}|" "$CHART_FILE"
             sed -i "s|^appVersion:.*|appVersion: \"${PY_VERSION}\"|" "$CHART_FILE"
-            echo "Updated $CHART_FILE appVersion to $PY_VERSION"
+            echo "Updated $CHART_FILE version and appVersion to $PY_VERSION"
           fi
 
           git config user.name "github-app-commit[bot]"
@@ -117,8 +121,14 @@ jobs:
           fi
           echo "Tag ${TAG} is available."
 
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+
       - name: Build wheel + sdist
         run: uv build
+
+      - name: Package Helm chart
+        run: helm package charts/mcp-kubecost --destination dist/
 
       - name: Bundle source archive
         run: |
@@ -174,3 +184,51 @@ jobs:
               $PRERELEASE_FLAG \
               "${files[@]}"
           fi
+
+  update-helm-index:
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ssh-key: ${{ secrets.DEPLOY_KEY }}
+          ref: gh-pages
+          path: gh-pages
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+
+      - name: Download chart tarball from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHART_VERSION: ${{ needs.build.outputs.chart_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/chart-tgz
+          gh release download "v${CHART_VERSION}" \
+            --repo kubecost/mcp-kubecost \
+            --pattern "mcp-kubecost-${CHART_VERSION}.tgz" \
+            --dir /tmp/chart-tgz
+
+      - name: Update index.yaml
+        env:
+          CHART_VERSION: ${{ needs.build.outputs.chart_version }}
+        run: |
+          set -euo pipefail
+          helm repo index /tmp/chart-tgz \
+            --url "https://github.com/kubecost/mcp-kubecost/releases/download/v${CHART_VERSION}/" \
+            --merge gh-pages/index.yaml
+          cp /tmp/chart-tgz/index.yaml gh-pages/index.yaml
+
+      - name: Commit and push index.yaml to gh-pages
+        env:
+          CHART_VERSION: ${{ needs.build.outputs.chart_version }}
+        run: |
+          set -euo pipefail
+          cd gh-pages
+          git config user.name "github-app-commit[bot]"
+          git config user.email "github-app-commit[bot]@users.noreply.github.com"
+          git add index.yaml
+          git commit -m "chore: add mcp-kubecost v${CHART_VERSION} to helm index"
+          git push
