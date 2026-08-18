@@ -272,7 +272,7 @@ jobs:
           echo "| ICR (pending scan) | \`ibm-finops/${IMAGE_NAME}\` |" >> "$GITHUB_STEP_SUMMARY"
 
   update-helm-index:
-    needs: build
+    needs: [build, publish-image]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
