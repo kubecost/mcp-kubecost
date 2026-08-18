@@ -12,6 +12,7 @@ concurrency:
 
 permissions:
   contents: read
+  packages: write
 
 jobs:
   docker-build:
@@ -22,24 +23,25 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to ICR
+      - name: Log in to GHCR
         if: github.event_name == 'push'
         uses: docker/login-action@v3
         with:
-          registry: icr.io
-          username: iamapikey
-          password: ${{ secrets.ICR_API_KEY }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: icr.io/mcp-kubecost
+          images: ghcr.io/kubecost/mcp-kubecost
           tags: |
             type=ref,event=branch
             type=sha,prefix=sha-
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -49,3 +51,41 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Generate app token for cross-repo dispatch
+        id: app-token
+        if: github.event_name == 'push'
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          app-id: ${{ vars.KC_ACTIONS_BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KC_ACTIONS_BOT_APP_PRIVATE_KEY }}
+          owner: apptio-pne
+          repositories: kubecost-deploy
+
+      - name: Trigger Harbor and ICR copy
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          DOCKER_IMAGE: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
+        run: |
+          set -euo pipefail
+          gh workflow run "Copy Cloudy Images to Harbor and ICR" \
+            --repo apptio-pne/kubecost-deploy \
+            --ref main \
+            -f docker_image="${DOCKER_IMAGE}"
+
+      - name: Image path summary
+        if: github.event_name == 'push'
+        env:
+          DOCKER_IMAGE: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
+        run: |
+          set -euo pipefail
+          # Derive IMAGE_NAME from the last path segment (same logic as copy workflow)
+          IMAGE_NAME=$(echo "${DOCKER_IMAGE}" | rev | cut -d '/' -f1 | rev)
+          echo "## Container Image Published" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Registry | Image |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| GHCR | \`${DOCKER_IMAGE}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Harbor (pending) | \`kubecost/${IMAGE_NAME}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ICR (pending scan) | \`ibm-finops/${IMAGE_NAME}\` |" >> "$GITHUB_STEP_SUMMARY"
