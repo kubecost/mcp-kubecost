@@ -16,7 +16,7 @@ false
 
 {{/*
 Fully qualified container image. `global.imageRegistry` overrides `image.registry`
-when this chart is a Kubecost subchart (IBM ships images from icr.io).
+when this chart is a Kubecost subchart (IBM sets this to icr.io for ICR-distributed images).
 */}}
 {{- define "mcp-kubecost.image" -}}
 {{- $tag := default .Chart.AppVersion .Values.image.tag -}}

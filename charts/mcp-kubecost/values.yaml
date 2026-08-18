@@ -3,7 +3,7 @@
 # are accepted and unused.
 global:
   # global.imageRegistry overrides image.registry for every image in this chart.
-  # Kubecost sets this to icr.io for IBM-distributed images.
+  # Kubecost sets this to icr.io when distributing via IBM Cloud Container Registry.
   imageRegistry: ""
   # global.imagePullSecrets is merged with image.pullSecrets.
   # E.g.
@@ -30,11 +30,11 @@ replicaCount: 1
 
 image:
   # image.registry is the container registry host. Overridden by global.imageRegistry.
-  registry: 297945954695.dkr.ecr.us-east-1.amazonaws.com
+  registry: icr.io
   # image.repository is the image path within the registry (no host).
-  repository: mcp-kubecost
+  repository: kubecost/mcp-kubecost
   # image.tag is the container image tag. Defaults to the chart appVersion when empty.
-  tag: 0.4.32
+  tag: ""
   # image.pullPolicy controls when Kubernetes pulls the image.
   pullPolicy: IfNotPresent
   # image.pullSecrets is a list of Secret names for private image registries.

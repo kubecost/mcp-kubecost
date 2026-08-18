@@ -56,12 +56,12 @@ The debug Caddy proxy is intentionally not part of this production chart.
 
 When this chart is a Kubecost subchart, parent `global` values are merged in:
 
-- `global.imageRegistry` replaces `image.registry` (Kubecost defaults this to `icr.io`).
+- `global.imageRegistry` replaces `image.registry` (Kubecost sets this to `icr.io` for IBM Cloud Container Registry distribution).
 - `global.imagePullSecrets` is unioned with `image.pullSecrets`.
 - `global.platforms.cicd.enabled` plus `global.platforms.cicd.skipSanityChecks`
   skip Secret existence lookups. Set both when Helm cannot see the live
   cluster (Argo CD) or Secrets are created in a later sync wave.
 
-Standalone installs leave `global.imageRegistry` empty and keep using
-`image.registry`. Other parent `global` keys (for example `clusterId`) are
-ignored.
+Standalone installs leave `global.imageRegistry` empty and pull from
+`public.ecr.aws` (the default `image.registry`). Other parent `global` keys
+(for example `clusterId`) are ignored.
