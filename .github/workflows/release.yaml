@@ -192,10 +192,11 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      image: ghcr.io/kubecost/mcp-kubecost:${{ needs.build.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ssh-key: ${{ secrets.DEPLOY_KEY }}
           ref: ${{ needs.build.outputs.release_tag }}
 
       - name: Set up Docker Buildx
@@ -229,6 +230,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  trigger-copy:
+    needs: [build, publish-image]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
       - name: Generate app token for cross-repo dispatch
         id: app-token
         uses: actions/create-github-app-token@v3.2.0
@@ -241,10 +247,9 @@ jobs:
       - name: Trigger Harbor and ICR copy
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+          DOCKER_IMAGE: ${{ needs.publish-image.outputs.image }}
         run: |
           set -euo pipefail
-          DOCKER_IMAGE="ghcr.io/kubecost/mcp-kubecost:${RELEASE_TAG}"
           gh workflow run "Copy Cloudy Images to Harbor and ICR" \
             --repo apptio-pne/kubecost-deploy \
             --ref main \
@@ -254,10 +259,9 @@ jobs:
 
       - name: Image path summary
         env:
-          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+          DOCKER_IMAGE: ${{ needs.publish-image.outputs.image }}
         run: |
           set -euo pipefail
-          DOCKER_IMAGE="ghcr.io/kubecost/mcp-kubecost:${RELEASE_TAG}"
           IMAGE_NAME=$(echo "${DOCKER_IMAGE}" | rev | cut -d '/' -f1 | rev)
           echo "## Container Image Published" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
