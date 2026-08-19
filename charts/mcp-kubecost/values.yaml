@@ -1,16 +1,39 @@
 # global values are merged from a parent Kubecost chart when this chart is a
 # subchart. They are ignored unless set. Extra parent keys (clusterId, etc.)
-# are accepted and unused.
+# are accepted and unused. Keys and defaults here mirror the parent chart:
+# https://github.com/kubecost/kubecost/blob/develop/kubecost/values.yaml
 global:
   # global.imageRegistry overrides image.registry for every image in this chart.
-  # Kubecost sets this to icr.io when distributing via IBM Cloud Container Registry.
-  imageRegistry: ""
+  # Kubecost distributes via IBM Cloud Container Registry, so the default matches
+  # the parent chart's global.imageRegistry rather than being empty.
+  imageRegistry: icr.io
   # global.imagePullSecrets is merged with image.pullSecrets.
   # E.g.
   # imagePullSecrets:
   #   - myRegistryKeySecretName
   imagePullSecrets: []
+  # global.annotations are added to this chart's Deployment metadata. Matches the
+  # parent chart, where global.annotations applies to all controllers.
+  annotations: {}
+  # global.podAnnotations are added to this chart's pod template. Merged with the
+  # chart-local podAnnotations; chart-local keys win on conflict.
+  podAnnotations: {}
+  # global.additionalLabels are added to this chart's resources and pod template.
+  # They are never added to selector labels, which must stay immutable.
+  additionalLabels: {}
   platforms:
+    # global.platforms.openshift matches the Kubecost parent-chart OpenShift block.
+    openshift:
+      # Set to true when deploying to OpenShift. The restricted-v2 SCC rejects the
+      # explicit runAsUser/runAsGroup in podSecurityContext below, so the
+      # securityContext here replaces it, exactly as the parent chart does.
+      enabled: false
+      # global.platforms.openshift.securityContext replaces podSecurityContext
+      # when openshift.enabled is true, letting OpenShift assign the UID/GID.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
     # global.platforms.cicd matches the Kubecost parent-chart CI/CD block.
     cicd:
       # Set to true when using Argo CD or similar tools so skipSanityChecks applies.
@@ -151,7 +174,9 @@ probes:
 
 config:
   # config.kubecostBaseUrl is the required base URL of the Kubecost API.
-  kubecostBaseUrl: http://kubecost-frontend:9090
+  # Evaluated with tpl, so umbrella charts may pass "{{ .Release.Name }}-frontend".
+  # The standalone default assumes the Kubecost frontend is in the kubecost namespace.
+  kubecostBaseUrl: http://kubecost-frontend.kubecost.svc.cluster.local:9090
   # config.kubecostApiBasePath is the path prefix used for Kubecost API calls.
   kubecostApiBasePath: /model
   # config.kubecostApiKey is sent to Kubecost as an X-API-KEY request header.
