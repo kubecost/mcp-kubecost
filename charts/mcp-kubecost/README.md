@@ -4,16 +4,24 @@ This chart deploys the read-only Kubecost FinOps MCP server with a hardened
 Deployment, ClusterIP Service, optional Gateway API HTTPRoute, optional legacy
 Ingress, and a generated ConfigMap.
 
-## Install
+## Installation Options
+
+The MCP, by default, is bundled with the Kubecost helm installation. This repo may have newer versions of the MCP available for users looking for the latest improvements. The MCP should be compatible with any version of Kubecost 3.x, though be sure to read the release notes for any dependencies.
+
+[kubecost chart](https://github.com/kubecost/kubecost)
+
+## Standalone Install
+
+Create a file with the values that differ from the defaults, example `helmValues-mcp-kubecost.yaml. Then install with:
 
 ```bash
-helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
-  --namespace mcp-kubecost --create-namespace \
-  --set config.kubecostBaseUrl=https://kubecost.example.com/model \
-  --set config.kubecostApiKey.existingSecret=kubecost-api-key
+helm upgrade --install kubecost-mcp mcp-kubecost \
+  --repo https://kubecost.github.io/mcp-kubecost mcp-kubecost \
+  --namespace kubecost-mcp --create-namespace \
+  -f helmValues-mcp-kubecost.yaml
 ```
 
-Prefer an existing Secret so credentials are not stored in a values file or Helm command history. OIDC, API-key precedence, `REQUIRE_CLIENT_API_KEY`, shared-hostname OAuth routes, and pod hardening are documented in [README-auth.md](../../README-auth.md).
+Prefer an existing Secret so credentials are not stored in a values file or Helm command history. OIDC, API-key precedence, `REQUIRE_CLIENT_API_KEY`, shared-hostname OAuth routes, and pod hardening are documented in [docs/auth](https://github.com/kubecost/mcp-kubecost/blob/HEAD/docs/auth).
 
 All application environment settings from the repository's `.env.example`
 are represented under `config` in `values.yaml`. `values.schema.json` validates
@@ -54,14 +62,28 @@ The debug Caddy proxy is intentionally not part of this production chart.
 
 ## Kubecost parent chart
 
-When this chart is a Kubecost subchart, parent `global` values are merged in:
+The MCP, by default, is bundled with the Kubecost helm installation. This repo may have newer versions of the MCP available for users looking for the latest improvements. The MCP should be compatible with any version of Kubecost 3.x, though be sure to read the release notes for any dependencies.
 
-- `global.imageRegistry` replaces `image.registry` (Kubecost sets this to `icr.io` for IBM Cloud Container Registry distribution).
-- `global.imagePullSecrets` is unioned with `image.pullSecrets`.
-- `global.platforms.cicd.enabled` plus `global.platforms.cicd.skipSanityChecks`
-  skip Secret existence lookups. Set both when Helm cannot see the live
-  cluster (Argo CD) or Secrets are created in a later sync wave.
+[kubecost chart](https://github.com/kubecost/kubecost)
 
-Standalone installs leave `global.imageRegistry` empty and pull from
-`public.ecr.aws` (the default `image.registry`). Other parent `global` keys
-(for example `clusterId`) are ignored.
+When this chart is a subchart, parent `global` values are merged in and take
+precedence over the defaults in this chart's `values.yaml`:
+
+| Parent key                                                                 | Effect in this chart                                                                                                                                                   |
+| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `global.imageRegistry`                                                     | Replaces `image.registry`. Defaults to `icr.io` in both charts.                                                                                                        |
+| `global.imagePullSecrets`                                                  | Unioned with `image.pullSecrets`. Accepts name strings or `{name: ...}` maps.                                                                                          |
+| `global.annotations`                                                       | Added to this chart's Deployment metadata.                                                                                                                             |
+| `global.podAnnotations`                                                    | Merged into the pod template; this chart's `podAnnotations` win on key conflicts, and the config-reload checksums are preserved.                                       |
+| `global.additionalLabels`                                                  | Added to this chart's resources and pod template. Never added to selector labels, which must stay immutable.                                                           |
+| `global.platforms.openshift.enabled`                                       | Replaces `podSecurityContext` with `global.platforms.openshift.securityContext`, because the OpenShift restricted-v2 SCC rejects an explicit `runAsUser`/`runAsGroup`. |
+| `global.platforms.cicd.enabled` + `global.platforms.cicd.skipSanityChecks` | Skip Secret existence lookups. Set both when Helm cannot see the live cluster (Argo CD) or Secrets are created in a later sync wave.                                   |
+
+Standalone installs get the same defaults, so `helm install` of this chart on
+its own renders the same image (`icr.io/kubecost/mcp-kubecost`) as a subchart
+install. Other parent `global` keys (for example `clusterId`) are accepted and
+ignored.
+
+The `enabled` key exists only so the parent's `condition: mcp-kubecost.enabled`
+can gate the subchart. This chart's templates do not read it, so setting it on a
+standalone install has no effect.

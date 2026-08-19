@@ -5,6 +5,10 @@ metadata:
   name: {{ include "mcp-kubecost.fullname" . }}
   labels:
     {{- include "mcp-kubecost.labels" . | nindent 4 }}
+  {{- with include "mcp-kubecost.annotations" . }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: {{ .Values.replicaCount }}
   strategy:
@@ -19,15 +23,19 @@ spec:
     metadata:
       labels:
         {{- include "mcp-kubecost.selectorLabels" . | nindent 8 }}
+        {{- with ((.Values.global).additionalLabels) }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
       {{- $apikeyChecksum := include "mcp-kubecost.apikey-stringdata" . }}
       {{- $oidcChecksum := include "mcp-kubecost.oidc-stringdata" . }}
-      {{- if or .Values.podAnnotations .Values.reloadOnConfigChange }}
+      {{- $podAnnotations := include "mcp-kubecost.podAnnotations" . }}
+      {{- if or $podAnnotations .Values.reloadOnConfigChange }}
       annotations:
-        {{- with .Values.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
+        {{- with $podAnnotations }}
+        {{- . | nindent 8 }}
         {{- end }}
         {{- if .Values.reloadOnConfigChange }}
         checksum/config: {{ include "mcp-kubecost.configmap-data" . | sha256sum }}
@@ -43,7 +51,7 @@ spec:
       automountServiceAccountToken: {{ .Values.automountServiceAccountToken }}
       enableServiceLinks: false
       securityContext:
-        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+        {{- include "mcp-kubecost.podSecurityContext" . | nindent 8 }}
       {{- include "mcp-kubecost.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: mcp-kubecost

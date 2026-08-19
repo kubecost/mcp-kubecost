@@ -5,7 +5,7 @@ metadata:
   labels:
     {{- include "mcp-kubecost.labels" . | nindent 4 }}
 data:
-  KUBECOST_BASE_URL: {{ .Values.config.kubecostBaseUrl | quote }}
+  KUBECOST_BASE_URL: {{ tpl .Values.config.kubecostBaseUrl . | quote }}
   KUBECOST_API_BASE_PATH: {{ .Values.config.kubecostApiBasePath | quote }}
   REQUEST_TIMEOUT_SECONDS: {{ .Values.config.requestTimeoutSeconds | quote }}
   REQUEST_RETRY_COUNT: {{ .Values.config.requestRetryCount | quote }}
