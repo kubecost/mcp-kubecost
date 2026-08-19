@@ -2780,18 +2780,18 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
     ) -> LocalDiskSavingsResponse:
         """Return underutilized node-local disk savings recommendations.
 
-        WHAT: Returns disks that are attached to nodes that are underutilized. 
+        WHAT: Returns disks that are attached to nodes that are underutilized.
         Each row includes:
-        disk name, cluster, utilization ratio (0–1 scale), 
+        disk name, cluster, utilization ratio (0–1 scale),
         current and recommended capacity in bytes, and estimated
-        monthly savings. 
+        monthly savings.
 
         Note: utilization_percent is a 0–1 ratio, NOT a 0–100 percentage.
 
         WHEN TO USE: When investigating node-level local storage waste, or when the
         savings overview shows underutilizedLocalDisks has significant savings.
 
-        WHEN NOT TO USE: For right-sizing storage for workloads (pods): 
+        WHEN NOT TO USE: For right-sizing storage for workloads (pods):
         use get_pv_sizing_recommendations.
         For unclaimed volumes, use get_unclaimed_volumes.
         """
