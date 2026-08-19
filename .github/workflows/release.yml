@@ -193,7 +193,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      image: ghcr.io/kubecost/mcp-kubecost:${{ needs.build.outputs.release_tag }}
+      image: icr.io/kubecost/mcp-kubecost:${{ needs.build.outputs.release_tag }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -202,18 +202,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Log in to GHCR
+      - name: Log in to ICR
         uses: docker/login-action@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: icr.io
+          username: iamapikey
+          password: ${{ secrets.IBM_CLOUD_API_KEY }}
 
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/kubecost/mcp-kubecost
+          images: icr.io/kubecost/mcp-kubecost
           tags: |
             type=raw,value=latest
             type=raw,value=${{ needs.build.outputs.release_tag }}
@@ -229,38 +229,6 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  trigger-copy:
-    needs: [build, publish-image]
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'kubecost/mcp-kubecost'
-    runs-on: Kubecost-Linux-Small-x86
-    steps:
-      - name: Trigger upload to Harbor and ICR
-        env:
-          GH_TOKEN: ${{ secrets.GH_KUBECOST_DEPLOY_PAT_JESSE }}
-          DOCKER_IMAGE: ${{ needs.publish-image.outputs.image }}
-        run: |
-          set -euo pipefail
-          gh workflow run "Copy Cloudy Images to Harbor and ICR" \
-            --repo apptio-pne/kubecost-deploy \
-            --ref main \
-            -f docker_image="${DOCKER_IMAGE}" \
-            -f is_release=true \
-            -f set_latest=true
-
-      - name: Image path summary
-        env:
-          DOCKER_IMAGE: ${{ needs.publish-image.outputs.image }}
-        run: |
-          set -euo pipefail
-          IMAGE_NAME=$(echo "${DOCKER_IMAGE}" | rev | cut -d '/' -f1 | rev)
-          echo "## Container Image Published" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Registry | Image |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| GHCR | \`${DOCKER_IMAGE}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Harbor release (pending) | \`kubecost/releases/${IMAGE_NAME}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| ICR (pending scan) | \`ibm-finops/${IMAGE_NAME}\` |" >> "$GITHUB_STEP_SUMMARY"
 
   update-helm-index:
     needs: [build, publish-image]
