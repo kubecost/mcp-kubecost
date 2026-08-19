@@ -5,6 +5,11 @@ on:
     types: [opened, synchronize]
   push:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'Dockerfile'
+      - 'pyproject.toml'
+      - 'uv.lock'
 
 concurrency:
   group: docker-${{ github.workflow }}-${{ github.ref }}
@@ -17,84 +22,46 @@ permissions:
 jobs:
   docker-build:
     runs-on: ubuntu-latest
-    outputs:
-      image: ${{ steps.image-ref.outputs.value }}
     steps:
       - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Log in to GHCR
-        if: github.event_name == 'push'
+      - name: Log in to ICR
+        if: github.event_name == 'push' && github.repository == 'kubecost/mcp-kubecost'
         uses: docker/login-action@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: icr.io
+          username: iamapikey
+          password: ${{ secrets.IBM_CLOUD_API_KEY }}
 
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ghcr.io/kubecost/mcp-kubecost
+          images: icr.io/kubecost/mcp-kubecost
           tags: |
             type=ref,event=branch
             type=sha,prefix=sha-
 
-      - name: Build and push
+      - name: Build and push to ICR
         uses: docker/build-push-action@v7
         with:
           context: .
-          push: ${{ github.event_name == 'push' }}
-          ## only build arm when pushing
-          platforms: ${{ github.event_name == 'push' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          push: ${{ github.event_name == 'push' && github.repository == 'kubecost/mcp-kubecost' }}
+          platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Set image ref output
-        id: image-ref
-        if: github.event_name == 'push'
-        run: |
-          echo "value=${{ fromJSON(steps.meta.outputs.json).tags[0] }}" >> "$GITHUB_OUTPUT"
-
-  trigger-copy:
-    needs: docker-build
-    if: github.event_name == 'push' && github.repository == 'kubecost/mcp-kubecost'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Generate app token for cross-repo dispatch
-        id: app-token
-        uses: actions/create-github-app-token@v3.2.0
-        with:
-          client-id: ${{ vars.KC_ACTIONS_BOT_APP_CLIENT_ID }}
-          private-key: ${{ secrets.KC_ACTIONS_BOT_APP_PRIVATE_KEY }}
-          owner: apptio-pne
-          repositories: kubecost-deploy
-
-      - name: Trigger Harbor and ICR copy
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          DOCKER_IMAGE: ${{ needs.docker-build.outputs.image }}
-        run: |
-          set -euo pipefail
-          gh workflow run "Copy Cloudy Images to Harbor and ICR" \
-            --repo apptio-pne/kubecost-deploy \
-            --ref main \
-            -f docker_image="${DOCKER_IMAGE}"
-
       - name: Image path summary
-        env:
-          DOCKER_IMAGE: ${{ needs.docker-build.outputs.image }}
+        if: github.event_name == 'push' && github.repository == 'kubecost/mcp-kubecost'
         run: |
           set -euo pipefail
-          IMAGE_NAME=$(echo "${DOCKER_IMAGE}" | rev | cut -d '/' -f1 | rev)
           echo "## Container Image Published" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Registry | Image |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| GHCR | \`${DOCKER_IMAGE}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Harbor (pending) | \`kubecost/${IMAGE_NAME}\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| ICR (pending scan) | \`ibm-finops/${IMAGE_NAME}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" | while IFS= read -r tag; do
+            echo "- \`${tag}\`" >> "$GITHUB_STEP_SUMMARY"
+          done
