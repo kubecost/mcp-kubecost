@@ -1,6 +1,6 @@
 [project]
 name = "mcp-kubecost"
-version = "0.6.1"
+version = "0.6.2"
 description = "FinOps-first MCP server for Kubecost analytics."
 readme = "README.md"
 license = { text = "Apache-2.0" }
