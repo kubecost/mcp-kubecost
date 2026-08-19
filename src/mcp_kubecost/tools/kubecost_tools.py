@@ -1756,23 +1756,19 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
     async def kubecost_list_windows() -> WindowOptionsResponse:
         """List the valid time windows for Kubecost cost queries, each resolved to real dates.
 
-        WHAT: Returns the named windows (7d, 30d, month, etc.) accepted by
-        get_kubecost_workload_costs, each with the concrete UTC date range it maps to
+        WHAT: Returns the named windows (7d, 15d, 30d, month, etc.) accepted by
+        tools that support date windows, each with the concrete UTC date range it maps to
         right now, its day count, and whether the period is still in progress.
+        Note that UTC is the only supported timezone in Kubecost.
 
-        WHEN TO USE: When the user has not yet specified a time window, or when they need
-        to confirm what a token like 'lastmonth' actually covers before an expensive query
-        — useful for leadership reports and users outside UTC.
+        WHEN TO USE: Run any time to understand what the valid time windows are.
 
-        WHEN NOT TO USE: When the user has already stated a window — call
-        get_kubecost_workload_costs directly with their value. Every windowed tool already
-        returns a 'resolved_window' field, so there is no need to call this first purely to
-        learn the dates of a window you are about to query.
+        WHEN NOT TO USE: When a valid time window is already established.
         """
         return WindowOptionsResponse(
             status=QueryStatus.OK,
-            message="Present these window options to the user and wait for a choice.",
-            recommended_action="After the user picks a window, call get_kubecost_workload_costs.",
+            message="Here is a list of possible time window formats accepted by the MCP.",
+            recommended_action="Use any of the window options when running tools that require a time window.",
             windows=[
                 WindowOption(value=k, label=v, resolved=_resolve_window_defensively(k))
                 for k, v in _WINDOW_CHOICES.items()
@@ -1855,11 +1851,10 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         """Return Kubernetes cost allocation from Kubecost grouped by chosen dimensions.
 
         WHAT: Costs aggregated by cluster, namespace, pod, label, or any combination.
-        Results are returned as structured rows directly in the response — no separate
-        resource read required.
+        Results are returned as structured rows.
 
-        WHEN TO USE: For 'spend by cluster/namespace/pod/label' questions. Confirm the
-        time window with the user first (see kubecost_list_windows).
+        WHEN TO USE: For 'spend by cluster/namespace/pod/label' questions.
+        If the user has not specified a window, call kubecost_list_windows first.
 
         WHEN NOT TO USE: For container rightsizing/savings use
         get_container_savings_recommendations. For period-over-period cost
@@ -1870,7 +1865,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 status=QueryStatus.ERROR,
                 message="A time window is required before querying Kubecost allocation.",
                 recommended_action=(
-                    "Call kubecost_list_windows, present the options to the user, then retry with the chosen window."
+                    "Call kubecost_list_windows to understand the accepted time window options. "
+                    "If the request is not clear, present the options to the user."
                 ),
                 window=None,
                 aggregate=aggregate,
@@ -2784,18 +2780,19 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
     ) -> LocalDiskSavingsResponse:
         """Return underutilized node-local disk savings recommendations.
 
-        WHAT: Calls GET /model/savings/localLowDisks and returns disks that are
-        underutilized on their node. Each row includes disk name, cluster, utilization
-        ratio (0–1 scale), current and recommended capacity in bytes, and estimated
-        monthly savings. recommended_capacity_bytes=0 means full decommission is
-        recommended (utilization is effectively zero).
+        WHAT: Returns disks that are attached to nodes that are underutilized. 
+        Each row includes:
+        disk name, cluster, utilization ratio (0–1 scale), 
+        current and recommended capacity in bytes, and estimated
+        monthly savings. 
 
         Note: utilization_percent is a 0–1 ratio, NOT a 0–100 percentage.
 
         WHEN TO USE: When investigating node-level local storage waste, or when the
         savings overview shows underutilizedLocalDisks has significant savings.
 
-        WHEN NOT TO USE: For PVC right-sizing, use get_pv_sizing_recommendations.
+        WHEN NOT TO USE: For right-sizing storage for workloads (pods): 
+        use get_pv_sizing_recommendations.
         For unclaimed volumes, use get_unclaimed_volumes.
         """
         resolved_window = _resolve_window_defensively(window)
@@ -2831,8 +2828,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 f"of ${total_savings:,.2f}" + (f" (showing top {top_n})." if truncated else ".")
             ),
             recommended_action=(
-                "Disks with recommended_capacity_bytes=0 are candidates for full decommission. "
-                "Confirm with node owners before removing storage."
+                "Create a report for significant savings. Also combine savings by namespace or cluster."
             ),
             rows=[
                 LocalDiskRow(
@@ -3036,10 +3032,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
     ) -> UnclaimedVolumesResponse:
         """Return PersistentVolumes that are provisioned but not bound to any PVC.
 
-        WHAT: Calls GET /model/savings/unclaimedVolumes and returns volumes that exist
-        in the cluster but have no PersistentVolumeClaim binding them — pure waste with
-        no right-sizing needed. Each row includes the volume name, monthly cost, cluster,
-        provider, and service. Deleting the volume saves the full monthly_cost.
+        WHAT: Returns volumes that exist in the cluster but have not attached to a workload.
+        This is generally a sign that they are no longer needed (100% wasted cost).
 
         Note: These volumes have no PVC attached — deletion is generally safe, but confirm
         with your storage or platform team before removing any volume.
@@ -3088,8 +3082,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 f"of ${total_cost:,.2f}" + (f" (showing top {top_n})." if truncated else ".")
             ),
             recommended_action=(
-                "These volumes have no PVC — deletion saves the full monthly_cost. "
-                "Confirm with your storage team before removing any volume."
+                "These volumes have no associated workload — this typically means that they are no longer needed. "
+                "This tends to be any easy savings opportunity. Confirm with application owner."
             ),
             rows=[
                 UnclaimedVolumeRow(

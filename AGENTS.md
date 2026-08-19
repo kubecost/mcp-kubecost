@@ -211,5 +211,5 @@ just call-json get_kubecost_cost_comparison '{"aggregate": "namespace"}'
 
 - [DEVELOPMENT.md](DEVELOPMENT.md) — human setup, run, Docker/Kubernetes workflow
 - [README.md](README.md) — overview and client configuration
-- [README-auth.md](README-auth.md) — MCP OIDC, Kubecost API keys, and pod hardening
+- [docs/auth/README.md](docs/auth/README.md) — MCP OIDC, Kubecost API keys, and pod hardening
 - [README-pre-commit.md](README-pre-commit.md) — hook tiers and CI auto-fix workflow

@@ -3,13 +3,13 @@
 This server has two independent auth layers. One protects the **MCP HTTP endpoint** (who may call tools). The other authenticates **outbound calls to Kubecost** (which Kubecost tenant/credential the server uses). They are configured separately and can be combined.
 
 - [Two layers](#two-layers)
-- [AUTH_MODE](#auth_mode)
+- [Authentication options](#authentication-options)
 - [Protecting the MCP HTTP endpoint (OIDC)](#protecting-the-mcp-http-endpoint-oidc)
   - [OAuth proxy flow](#oauth-proxy-flow)
   - [Identity provider setup](#identity-provider-setup)
   - [Shared Kubecost frontend hostname](#shared-kubecost-frontend-hostname)
   - [Unauthenticated HTTP paths](#unauthenticated-http-paths)
-- [Authenticating to Kubecost (API key)](#authenticating-to-kubecost-api-key)
+- [Kubecost API keys](#kubecost-api-keys)
 - [Configuration](#configuration)
   - [Environment](#environment)
   - [Helm](#helm)
@@ -32,23 +32,23 @@ flowchart LR
   MCP -->|"2. X-API-KEY<br/>to Kubecost"| KC
 ```
 
-| Layer | Protects | Default |
-|-------|----------|---------|
-| MCP HTTP (`AUTH_MODE`) | Who can call `/mcp` | `none` — open |
-| Kubecost API key | Outbound Kubecost requests | unset — unauthenticated |
+| Layer                  | Protects                   | Default                 |
+| ---------------------- | -------------------------- | ----------------------- |
+| MCP HTTP (`AUTH_MODE`) | Who can call `/mcp`        | `none` — open           |
+| Kubecost API key       | Outbound Kubecost requests | unset — unauthenticated |
 
 STDIO has no HTTP headers, so MCP OIDC and `REQUIRE_CLIENT_API_KEY` do not apply there. Kubecost can still use `KUBECOST_API_KEY` from the environment.
 
-## AUTH_MODE
+## Authentication options
 
 `AUTH_MODE` (Helm: `config.oidc.authMode`) controls how the MCP HTTP endpoint is protected.
 
-| Mode | MCP `/mcp` | Kubecost `X-API-KEY` |
-|------|------------|----------------------|
-| `none` | No auth | Optional env/header fallback |
-| `oidc` | Valid OIDC token via FastMCP `OIDCProxy` | Optional env/header fallback |
-| `api_key` | Incoming `X-API-KEY` required (same as `REQUIRE_CLIENT_API_KEY=true`) | That header is forwarded to Kubecost |
-| `both` | OIDC token **and** an `X-API-KEY` header (presence check only) | Header is forwarded; env fallback is not used |
+| Mode      | MCP `/mcp`                                                            | Kubecost `X-API-KEY`                          |
+| --------- | --------------------------------------------------------------------- | --------------------------------------------- |
+| `none`    | No auth                                                               | Optional env/header fallback                  |
+| `oidc`    | Valid OIDC token via FastMCP `OIDCProxy`                              | Optional env/header fallback                  |
+| `api_key` | Incoming `X-API-KEY` required (same as `REQUIRE_CLIENT_API_KEY=true`) | That header is forwarded to Kubecost          |
+| `both`    | OIDC token **and** an `X-API-KEY` header (presence check only)        | Header is forwarded; env fallback is not used |
 
 `oidc` and `both` require `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and `OIDC_BASE_URL`.
 
@@ -109,11 +109,11 @@ That nginx typically proxies only `/mcp` and runs `auth_request` on everything e
 
 Keep the callback at `/auth-mcp` (the default) — a sibling of `/mcp`, not a child of `/auth`:
 
-| | Sub-path on Kubecost | Dedicated MCP host |
-|---|---|---|
-| MCP URL | `https://kubecost.example.com/mcp` | `https://mcp.example.com/mcp` |
-| `OIDC_BASE_URL` | `https://kubecost.example.com` | `https://mcp.example.com` |
-| `OIDC_REDIRECT_PATH` | `/auth-mcp` (default) | `/auth/callback` |
+|                        | Sub-path on Kubecost                    | Dedicated MCP host                      |
+| ---------------------- | --------------------------------------- | --------------------------------------- |
+| MCP URL                | `https://kubecost.example.com/mcp`      | `https://mcp.example.com/mcp`           |
+| `OIDC_BASE_URL`        | `https://kubecost.example.com`          | `https://mcp.example.com`               |
+| `OIDC_REDIRECT_PATH`   | `/auth-mcp` (default)                   | `/auth/callback`                        |
 | IdP Valid redirect URI | `https://kubecost.example.com/auth-mcp` | `https://mcp.example.com/auth/callback` |
 
 Helm default: `config.oidc.redirectPath=/auth-mcp`. The IdP URI is `{OIDC_BASE_URL}/auth-mcp` **exactly** — do not append `/callback` (`/auth-mcp/callback` is not a path this server serves).
@@ -145,53 +145,53 @@ A dedicated MCP hostname (chart `httpRoute` / `ingress`) avoids this entirely: s
 
 These FastMCP custom routes are **not** wrapped in OAuth middleware. Kubernetes probes must use them — kubelet cannot present OIDC or `X-API-KEY`.
 
-| Path | Purpose |
-|------|---------|
-| `GET /health` | Liveness / readiness (chart default `probes.path`) |
-| `GET /version` | Package version |
+| Path           | Purpose                                            |
+| -------------- | -------------------------------------------------- |
+| `GET /health`  | Liveness / readiness (chart default `probes.path`) |
+| `GET /version` | Package version                                    |
 
 Uvicorn access logs for `GET /health` are dropped. Do not point probes at `/mcp`.
 
-## Authenticating to Kubecost (API key)
+## Kubecost API keys
 
-By default the server calls Kubecost unauthenticated. That is fine for the public demo, local port-forwards, or when another layer already authenticates to Kubecost.
+By default the server calls Kubecost unauthenticated. That is fine for local port-forwards, or when another layer already authenticates to Kubecost.
 
-Kubecost Enterprise with SAML/OIDC/RBAC expects an API key. The key is sent to Kubecost as an **`X-API-KEY` request header**. There is no Basic auth.
+When using Kubecost Enterprise with SAML/OIDC/RBAC, Kubecost expects an API key. The key is sent as an **`X-API-KEY` request header**.
 
-| Source | Scope |
-|--------|-------|
+The MCP supports both per MCP client keys or a shared key assigned to the MCP server.
+
+| Source                                  | Scope                             |
+| --------------------------------------- | --------------------------------- |
 | `X-API-KEY` on the incoming MCP request | Per request — HTTP transport only |
-| `KUBECOST_API_KEY` environment variable | Process-wide fallback |
+| `KUBECOST_API_KEY` environment variable | Process-wide fallback             |
 
 Header wins when both are set. Neither is required; with no key the outbound request is unauthenticated.
 
 `REQUIRE_CLIENT_API_KEY=true` (Helm: `config.requireClientApiKey`) rejects HTTP requests that arrive without the header. The check runs **before** the environment fallback, so a configured `KUBECOST_API_KEY` does not satisfy it. STDIO is never gated.
 
-`AUTH_MODE=both` is the same presence check alongside OIDC: the client must send `X-API-KEY`; the value is forwarded as-is and not validated here.
-
-Prefer a pre-created Secret (`config.kubecostApiKey.existingSecret`) over putting the key in a values file.
+`AUTH_MODE=both` is the same presence check alongside OIDC: the client must send `X-API-KEY`; the value is forwarded as-is and not validated by the MCP.
 
 ## Configuration
 
-Templates: [`.env.example`](.env.example) and [`charts/mcp-kubecost/values.yaml`](charts/mcp-kubecost/values.yaml). All settings flow through [`get_settings()`](src/mcp_kubecost/config/settings.py).
+Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values.yaml`](../../charts/mcp-kubecost/values.yaml). All settings flow through [`get_settings()`](../../src/mcp_kubecost/config/settings.py).
 
 ### Environment
 
-| Variable | Helm | Role |
-|----------|------|------|
-| `AUTH_MODE` | `config.oidc.authMode` | `none` / `oidc` / `api_key` / `both` |
-| `OIDC_ISSUER_URL` | `config.oidc.issuerUrl` | Provider discovery URL |
-| `OIDC_CLIENT_ID` | `config.oidc.clientId` or Secret | Confidential client id |
-| `OIDC_CLIENT_SECRET` | `config.oidc.clientSecret` or Secret | Confidential client secret |
-| `OIDC_BASE_URL` | `config.oidc.baseUrl` | Public URL of this MCP server |
-| `OIDC_REDIRECT_PATH` | `config.oidc.redirectPath` | IdP callback path. Default `/auth-mcp`. Use `/auth/callback` when MCP has a dedicated hostname |
-| `OIDC_AUDIENCE` | `config.oidc.audience` | Optional token audience (JWT access tokens only; omit for opaque IdPs) |
-| `OIDC_REQUIRED_SCOPES` | `config.oidc.requiredScopes` | Default `openid,profile` |
-| `KUBECOST_API_KEY` | `config.kubecostApiKey` | Fallback key sent to Kubecost |
-| `REQUIRE_CLIENT_API_KEY` | `config.requireClientApiKey` | Require inbound `X-API-KEY` on HTTP |
-| `KUBECOST_SSL_VERIFY` | `config.ssl.verify` | TLS verify for Kubecost |
-| `SSL_CA_BUNDLE` | `config.ssl.caBundle` | Custom CA path (implies verify) |
-| `FASTMCP_HTTP_ALLOWED_HOSTS` | `config.fastmcpHttpAllowedHosts` | JSON array of allowed `Host` headers; empty disables |
+| Variable                     | Helm                                 | Role                                                                                           |
+| ---------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------- |
+| `AUTH_MODE`                  | `config.oidc.authMode`               | `none` / `oidc` / `api_key` / `both`                                                           |
+| `OIDC_ISSUER_URL`            | `config.oidc.issuerUrl`              | Provider discovery URL                                                                         |
+| `OIDC_CLIENT_ID`             | `config.oidc.clientId` or Secret     | Confidential client id                                                                         |
+| `OIDC_CLIENT_SECRET`         | `config.oidc.clientSecret` or Secret | Confidential client secret                                                                     |
+| `OIDC_BASE_URL`              | `config.oidc.baseUrl`                | Public URL of this MCP server                                                                  |
+| `OIDC_REDIRECT_PATH`         | `config.oidc.redirectPath`           | IdP callback path. Default `/auth-mcp`. Use `/auth/callback` when MCP has a dedicated hostname |
+| `OIDC_AUDIENCE`              | `config.oidc.audience`               | Optional token audience (JWT access tokens only; omit for opaque IdPs)                         |
+| `OIDC_REQUIRED_SCOPES`       | `config.oidc.requiredScopes`         | Default `openid,profile`                                                                       |
+| `KUBECOST_API_KEY`           | `config.kubecostApiKey`              | Fallback key sent to Kubecost                                                                  |
+| `REQUIRE_CLIENT_API_KEY`     | `config.requireClientApiKey`         | Require inbound `X-API-KEY` on HTTP                                                            |
+| `KUBECOST_SSL_VERIFY`        | `config.ssl.verify`                  | TLS verify for Kubecost                                                                        |
+| `SSL_CA_BUNDLE`              | `config.ssl.caBundle`                | Custom CA path (implies verify)                                                                |
+| `FASTMCP_HTTP_ALLOWED_HOSTS` | `config.fastmcpHttpAllowedHosts`     | JSON array of allowed `Host` headers; empty disables                                           |
 
 OIDC client credentials in Helm: set `config.oidc.existingSecret` (keys `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`) or `clientId` / `clientSecret` (the chart will mint a Secret).
 
@@ -221,18 +221,16 @@ The chart defaults are meant for a locked-down runtime:
 - `automountServiceAccountToken: false`
 - OIDC state in memory so the root filesystem can stay read-only
 
-For a custom Kubecost CA, put the cert in a Secret and set `config.ssl.caBundle.existingSecret` / `key`. The chart mounts it read-only and sets `SSL_CA_BUNDLE`.
-
-Never commit `.env`, tokens, or secrets. CI scans for secret patterns and large files.
+For a custom CA, put the cert in a Secret and set `config.ssl.caBundle.existingSecret` / `key`. The chart mounts it read-only and sets `SSL_CA_BUNDLE`.
 
 ## STDIO vs HTTP
 
-| | STDIO | HTTP |
-|---|--------|------|
-| Typical use | Local IDE / desktop | Shared or Kubernetes service |
-| MCP OIDC | Not used | `AUTH_MODE=oidc` or `both` |
-| Inbound `X-API-KEY` | Cannot send headers | Optional or required |
-| Kubecost key | `KUBECOST_API_KEY` env | Header, then env |
+|                     | STDIO                  | HTTP                         |
+| ------------------- | ---------------------- | ---------------------------- |
+| Typical use         | Local IDE / desktop    | Shared or Kubernetes service |
+| MCP OIDC            | Not used               | `AUTH_MODE=oidc` or `both`   |
+| Inbound `X-API-KEY` | Cannot send headers    | Optional or required         |
+| Kubecost key        | `KUBECOST_API_KEY` env | Header, then env             |
 
 Local HTTP: `uv run fastmcp run fastmcp-http.json` (port 3030).
 

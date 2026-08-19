@@ -27,7 +27,7 @@ Tracing lives in a separate `otel` extra — add `--extra otel` (or use `just se
 
 ## Configuration
 
-Copy [`.env.example`](.env.example) to `.env` and set any variable needed to change defaults. `KUBECOST_BASE_URL` is the only required one. Auth and TLS variables are documented in [README-auth.md](README-auth.md).
+Copy [`.env.example`](.env.example) to `.env` and set any variable needed to change defaults. `KUBECOST_BASE_URL` is the only required one. Auth and TLS variables are documented in [docs/auth/README.md](docs/auth/README.md).
 
 ## Run
 
@@ -88,31 +88,10 @@ Install or upgrade the application with the Helm chart:
 
 ```bash
 helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
-  --namespace mcp-kubecost --create-namespace \
-  --set config.kubecostBaseUrl=https://kubecost.example.com \
-  --set config.kubecostApiKey.existingSecret=kubecost-api-key
+  --namespace mcp-kubecost --create-namespace
 ```
 
-For external HTTP access, prefer Gateway API. The cluster must provide a
-Gateway API implementation and an existing Gateway:
-
-```bash
-helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
-  --namespace mcp-kubecost --create-namespace \
-  --set config.kubecostBaseUrl=https://kubecost.example.com \
-  --set httpRoute.enabled=true \
-  --set 'httpRoute.parentRefs[0].name=mcp-gateway' \
-  --set 'httpRoute.parentRefs[0].sectionName=https'
-```
-
-Kubernetes Ingress remains available as a fallback with
-`--set ingress.enabled=true` when Gateway API is not available.
-
-The chart's [`values.yaml`](charts/mcp-kubecost/values.yaml) documents the
-deployment and runtime configuration. The debug Caddy proxy remains available
-as the development-only [`k8s/debug-pod.yaml`](k8s/debug-pod.yaml) manifest.
-
-The Docker image's `CMD` is `/app/.venv/bin/mcp-kubecost-http` ([`otel_entrypoint.py`](src/mcp_kubecost/otel_entrypoint.py)), which wraps the server with `opentelemetry-instrument` unless `FASTMCP_TELEMETRY_MODE=off`, and listens on port 3030. The chart's example HTTPRoute hostname is `mcp.demo.kubecost.cloud`; configure it explicitly before using it.
+The Docker image's `CMD` is `/app/.venv/bin/mcp-kubecost-http` ([`otel_entrypoint.py`](src/mcp_kubecost/otel_entrypoint.py)), which wraps the server with `opentelemetry-instrument` unless `FASTMCP_TELEMETRY_MODE=off`, and listens on port 3030.
 
 ## Telemetry
 
@@ -132,9 +111,8 @@ Dropping the distro would forfeit automatic httpx spans on every Kubecost API ca
 
 ## Security
 
-Operator-facing authentication, OIDC, API keys, and pod hardening: [README-auth.md](README-auth.md).
+Authentication, OIDC, API keys, and pod hardening: [docs/auth/README.md](docs/auth/README.md).
 
 - Never hardcode credentials; use environment variables only.
-- Do not commit `.env` files or token files.
 - CI includes a lightweight secret-pattern scan and large-file safety check.
 - The Docker image strips `pip` (and `ensurepip`) from the uv-managed CPython before the distroless copy. The runtime never installs packages, and leaving pip in the image makes Trivy report its vendored `msgpack` 1.1.2 and `setuptools` 70.3.0 (`CVE-2025-47273`, `CVE-2026-59890`). Those are not project dependencies — they are not in `uv.lock`.
