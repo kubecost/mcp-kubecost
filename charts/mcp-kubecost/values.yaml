@@ -34,7 +34,7 @@ image:
   # image.repository is the image path within the registry (no host).
   repository: kubecost/mcp-kubecost
   # image.tag is the container image tag. Defaults to the chart appVersion when empty.
-  tag: 0.5.4
+  tag: ""
   # image.pullPolicy controls when Kubernetes pulls the image.
   pullPolicy: IfNotPresent
   # image.pullSecrets is a list of Secret names for private image registries.

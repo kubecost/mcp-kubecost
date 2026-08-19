@@ -22,19 +22,6 @@ _update_chart_version:
     just _sed 's|^appVersion:.*|appVersion: "'"$VERSION"'"|' charts/mcp-kubecost/Chart.yaml
     echo "Updated charts/mcp-kubecost/Chart.yaml appVersion to $VERSION"
 
-_update_version_refs:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    VERSION=$(uv version --short)
-    echo "Updating version references to $VERSION..."
-
-    # Update the canonical Helm chart image tag.
-    just _sed 's|^  tag:.*|  tag: "'"$VERSION"'"|' charts/mcp-kubecost/values.yaml
-    echo "Updated charts/mcp-kubecost/values.yaml image tag to $VERSION"
-
-    # Keep Chart.yaml appVersion in lockstep.
-    just _update_chart_version
-
 docker-build-run:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -51,28 +38,9 @@ docker-build-run:
       -e KUBECOST_BASE_URL=http://host.docker.internal:9090  \
       mcp-kubecost
 
-docker-build-push:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # just test-basic
-    uv version --bump patch
-    VERSION=$(uv version --short)
-    REGION=us-east-1
-    BASE_REGISTRY_PATH=297945954695.dkr.ecr.$REGION.amazonaws.com
-    CONTAINER_IMAGE=$BASE_REGISTRY_PATH/mcp-kubecost:$VERSION
-    echo "Building and pushing base image..."
-    docker buildx build \
-      --platform linux/amd64,linux/arm64 \
-      -t $CONTAINER_IMAGE \
-      -f Dockerfile \
-      --push .
-    just _update_version_refs
-    echo ""
-    echo "✅ Image pushed to $CONTAINER_IMAGE"
-
 # ── Environment ────────────────────────────────────────────────────────────────
 # Install dependencies and create virtual environment
-setup:
+setup-dev-environment:
     uv venv --clear
     uv sync --all-extras --active
 
@@ -154,3 +122,8 @@ spell-check:
         charts/mcp-kubecost/values.yaml \
         charts/mcp-kubecost/values.schema.json \
         "charts/mcp-kubecost/templates/**"
+
+update-dependencies:
+    just setup-dev-environment
+    ./scripts/update_dependencies.py
+    uv sync --all-extras --active --upgrade
