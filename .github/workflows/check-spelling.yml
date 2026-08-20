@@ -46,7 +46,6 @@ jobs:
           incremental_files_only: true
           files: |
             DEVELOPMENT.md
-            README-pre-commit.md
             README.md
             docs/
             src/mcp_kubecost/tools/**

@@ -4,13 +4,13 @@ This repo uses a fully local pre-commit configuration using custom Python script
 
 Some files have been modified to meet our needs. Others can be found here: <https://github.com/pre-commit/pre-commit-hooks/tree/main/pre_commit_hooks>
 
-The goal of the [default pre-commit config](.pre-commit-config.yaml) is to be very fast and only protect from crimes, like pushing secrets or committing to main.
+The goal of the [`.pre-commit-config.yaml`](../../.pre-commit-config.yaml) is to be very fast and only protect from crimes, like pushing secrets or committing to main.
 
-CI will fix formatting and run other checks when a PR is created. [CI Workflow](.github/workflows/auto-fix-formatting.yml)
+CI will fix formatting and run other checks when a PR is created. [`auto-fix-formatting.yml`](../../.github/workflows/auto-fix-formatting.yml)
 
-The config for CI [.pre-commit-config-ci.yaml](.pre-commit-config-ci.yaml) that is run by the workflow.
+The config for CI [`.pre-commit-config-ci.yaml`](../../.pre-commit-config-ci.yaml) that is run by the workflow.
 
-Run the CI version with:
+Run the CI version from the repository root with:
 
 ```sh
 pre-commit run --config .pre-commit-config-ci.yaml --all-files
@@ -35,6 +35,8 @@ pre-commit run --all-files
 # Run on staged files
 pre-commit run
 ```
+
+Run these commands from the repository root so the config paths above resolve correctly.
 
 Note, we do not need to use the below flag because we do not have remote dependencies:
 

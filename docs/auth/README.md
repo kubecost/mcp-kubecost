@@ -7,6 +7,7 @@ This server has two independent auth layers. One protects the **MCP HTTP endpoin
 - [Protecting the MCP HTTP endpoint (OIDC)](#protecting-the-mcp-http-endpoint-oidc)
   - [OAuth proxy flow](#oauth-proxy-flow)
   - [Identity provider setup](#identity-provider-setup)
+  - [Reusing the Kubecost UI's OIDC client](#reusing-the-kubecost-uis-oidc-client)
   - [Shared Kubecost frontend hostname](#shared-kubecost-frontend-hostname)
   - [Unauthenticated HTTP paths](#unauthenticated-http-paths)
 - [Kubecost API keys](#kubecost-api-keys)
@@ -100,6 +101,12 @@ The MCP client’s own redirect (`http://localhost:<port>/callback` or Claude’
 Optional: `OIDC_AUDIENCE` when the provider issues JWT access tokens for a specific API audience. Do not set it for providers that issue opaque access tokens — those are verified via the `id_token`, whose audience is the OAuth client id. `OIDC_REQUIRED_SCOPES` defaults to `openid,profile`.
 
 Some other providers issue **opaque** access tokens, not JWTs. The server detects that from the token response and verifies the `id_token` instead. JWT access-token issuers (Keycloak, typical Azure/Okta) keep access-token verification. No extra setting is required.
+
+### Reusing the Kubecost UI's OIDC client
+
+Kubecost supports OIDC natively, so a cluster running both Kubecost and this server has two applications needing an OAuth client. One shared client does work if both callbacks are registered on it — but this is not recommended. A second client does not add a second login (the session lives at the identity provider), while a shared one couples the secret, the redirect-URI allowlist, the token audience, and every per-client policy and audit control across a browser UI and an agent-driven API.
+
+Full reasoning, the recommended per-client settings, compensating controls if you must share, and migration steps: [`oidc-client-sharing.md`](oidc-client-sharing.md).
 
 ### Shared Kubecost frontend hostname
 
