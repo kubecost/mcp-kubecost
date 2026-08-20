@@ -95,10 +95,17 @@ runAsUser/runAsGroup and assigns its own IDs instead.
 {{- end }}
 
 {{/*
-Fail when referenced existing Secrets are missing, unless CI/CD skip is on or
-the cluster is unreachable (helm template / dry-run with no kube API).
+Fail on contradictory values, and when referenced existing Secrets are missing
+unless CI/CD skip is on or the cluster is unreachable (helm template / dry-run
+with no kube API). The authMode=both + kubecostApiKey check is not gated by
+skipSanityChecks: that flag only skips live Secret lookups.
 */}}
 {{- define "mcp-kubecost.sanityChecks" -}}
+{{- $mode := .Values.config.oidc.authMode | default "none" }}
+{{- $hasApiKey := or .Values.config.kubecostApiKey.value .Values.config.kubecostApiKey.existingSecret }}
+{{- if and (eq $mode "both") $hasApiKey }}
+{{- fail "config.oidc.authMode=both cannot be combined with config.kubecostApiKey; HTTP callers must send X-API-KEY and the Helm key is never used. Set authMode to oidc to use a shared key, or omit kubecostApiKey." }}
+{{- end }}
 {{- if ne (include "mcp-kubecost.skipSanityChecks" .) "true" }}
 {{- $ns := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- if $ns }}
