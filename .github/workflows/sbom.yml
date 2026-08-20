@@ -88,12 +88,12 @@ jobs:
       VERSION: ${{ needs.determine-version.outputs.version }}
     steps:
       - name: Download SPDX artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: sbom-spdx
 
       - name: Download CycloneDX artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: sbom-cyclonedx
 
