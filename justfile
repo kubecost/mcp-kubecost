@@ -57,7 +57,7 @@ test-all:
 dev:
     fastmcp dev inspector
 
-# Start FastMCP as HTTP server on port 9000 (for debugging with logs)
+# Start FastMCP as HTTP server on port 3030 (for debugging with logs)
 serve:
     fastmcp run ./fastmcp-http.json
 
@@ -110,9 +110,8 @@ spell-check:
     fi
     cspell lint --no-progress --config .github/cspell.json \
         DEVELOPMENT.md \
-        README-pre-commit.md \
         README.md \
-        README-auth.md \
+        docs/ \
         "src/mcp_kubecost/tools/**" \
         "src/mcp_kubecost/skills/**" \
         "src/mcp_kubecost/prompts/**" \

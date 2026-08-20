@@ -237,11 +237,7 @@ __marimo__/
 .bob/rules-ask/AGENTS.md
 .bob/rules-code/AGENTS.md
 .bob/rules-plan/AGENTS.md
-.openpost/collections.json
-.openpost/config.json
-.openpost/history.json
-.openpost/session.json
-.openpost/snapshots.json
+.openpost/
 sample-data/assets-by-provider.json
 sample-data/assets-by-type.json
 scripts/sync-from-cldy.py
@@ -251,3 +247,4 @@ mcp-http.json
 k8s/debug-pod.yaml
 todo-list.md
 .kiro/
+.bobtmp/
