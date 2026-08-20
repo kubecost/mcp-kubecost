@@ -124,13 +124,54 @@ jobs:
             exit 1
           fi
 
+      - name: Render authMode both with kubecostApiKey.value (expect failure)
+        run: |
+          if helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.oidc.authMode=both \
+            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
+            --set config.oidc.clientId=x \
+            --set config.oidc.clientSecret=y \
+            --set config.oidc.baseUrl=https://mcp.example.com \
+            --set config.kubecostApiKey.value=dummy-key > /dev/null 2>&1; then
+            echo "expected helm template to fail with authMode=both and kubecostApiKey.value" >&2
+            exit 1
+          fi
+
+      - name: Render authMode both with kubecostApiKey.existingSecret (expect failure)
+        run: |
+          if helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.oidc.authMode=both \
+            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
+            --set config.oidc.clientId=x \
+            --set config.oidc.clientSecret=y \
+            --set config.oidc.baseUrl=https://mcp.example.com \
+            --set config.kubecostApiKey.existingSecret=kubecost-api-key > /dev/null 2>&1; then
+            echo "expected helm template to fail with authMode=both and kubecostApiKey.existingSecret" >&2
+            exit 1
+          fi
+
+      - name: Render authMode both without kubecostApiKey
+        run: |
+          helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.oidc.authMode=both \
+            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
+            --set config.oidc.clientId=x \
+            --set config.oidc.clientSecret=y \
+            --set config.oidc.baseUrl=https://mcp.example.com \
+            > .helm-render/mcp-kubecost-authmode-both.yaml
+          grep -q 'AUTH_MODE: "both"' .helm-render/mcp-kubecost-authmode-both.yaml
+          ! grep -q 'name: KUBECOST_API_KEY' .helm-render/mcp-kubecost-authmode-both.yaml
+
       - name: Validate rendered Kubernetes resources
         run: >-
           docker run --rm
           -v "$PWD:/work:ro"
           ghcr.io/yannh/kubeconform:v0.8.0
           -strict -summary -kubernetes-version "$KUBERNETES_VERSION"
-          /work/.helm-render/mcp-kubecost-default.yaml /work/.helm-render/mcp-kubecost-secure.yaml /work/.helm-render/mcp-kubecost-oauth-ingress.yaml
+          /work/.helm-render/mcp-kubecost-default.yaml /work/.helm-render/mcp-kubecost-secure.yaml /work/.helm-render/mcp-kubecost-oauth-ingress.yaml /work/.helm-render/mcp-kubecost-authmode-both.yaml
 
       - name: Validate core resources in HTTPRoute render
         run: >-
