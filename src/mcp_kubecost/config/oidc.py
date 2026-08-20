@@ -20,6 +20,7 @@ from fastmcp.server.auth import AccessToken, TokenVerifier
 from fastmcp.server.auth.oauth_proxy.models import ProxyDCRClient, UpstreamTokenSet
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from fastmcp.server.auth.providers.jwt import JWTVerifier
+from fastmcp.server.auth.redirect_validation import DEFAULT_LOCALHOST_PATTERNS
 from fastmcp.utilities.auth import decode_jwt_header
 from key_value.aio.stores.memory import MemoryStore
 from mcp.shared.auth import OAuthClientInformationFull
@@ -32,6 +33,14 @@ logger = logging.getLogger(__name__)
 
 # Per-request: True when the current verification token is the OIDC id_token.
 _verify_id_token: ContextVar[bool] = ContextVar("oidc_verify_id_token", default=False)
+
+# MCP-client redirect allowlist (not the IdP callback). Without this, FastMCP
+# leaves patterns as None and validate_redirect_uri accepts any ordinary URI —
+# unsafe when combined with the unknown-client fallback after MemoryStore wipe.
+ALLOWED_CLIENT_REDIRECT_URIS: list[str] = [
+    *DEFAULT_LOCALHOST_PATTERNS,  # http://localhost:*, http://127.0.0.1:*
+    "https://claude.ai/api/mcp/auth_callback",
+]
 
 
 def looks_like_jwt(token: str) -> bool:
@@ -98,14 +107,19 @@ class AdaptiveOidcProxy(OIDCProxy):
         return _verify_id_token.get()
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
-        """Return client by ID, synthesizing a permissive fallback for unknown IDs.
+        """Return client by ID, synthesizing a fallback for unknown DCR client IDs.
 
-        MemoryStore loses all registrations on server restart.  When the MCP
-        client retries /authorize with a stale ``client_id`` it cached from the
+        MemoryStore loses all registrations on server restart. When an MCP client
+        retries ``/authorize`` with a stale ``client_id`` it cached from the
         previous session, the normal lookup returns ``None`` → 400 HTML error
-        page.  Synthesize a permissive ``ProxyDCRClient`` for any unknown
-        ``client_id`` so the authorization flow can complete and issue a fresh
-        token set.  The client will re-register itself on the next normal startup.
+        page. Synthesize a ``ProxyDCRClient`` for any unknown ``client_id`` so
+        the flow can complete; redirect URIs are still bounded by
+        ``allowed_client_redirect_uris``.
+
+        FastMCP's ``OAuthProxy.get_client`` only synthesizes when
+        ``client_id == upstream_client_id`` (clients that skip DCR). That does
+        not cover stale random DCR IDs after a MemoryStore wipe — keep this
+        override.
         """
         client = await super().get_client(client_id)
         if client is not None:
@@ -178,6 +192,7 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
             base_url=settings.oidc_base_url,
             redirect_path=settings.oidc_redirect_path,
             required_scopes=settings.oidc_required_scopes or None,
+            allowed_client_redirect_uris=ALLOWED_CLIENT_REDIRECT_URIS,
             client_storage=MemoryStore(),
             require_authorization_consent="external",
         )
