@@ -3,6 +3,7 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "enabled": { "type": "boolean" },
     "global": {
       "type": "object",
       "additionalProperties": true,
@@ -22,10 +23,21 @@
             ]
           }
         },
+        "annotations": { "type": "object" },
+        "podAnnotations": { "type": "object" },
+        "additionalLabels": { "type": "object" },
         "platforms": {
           "type": "object",
           "additionalProperties": true,
           "properties": {
+            "openshift": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "securityContext": { "type": "object" }
+              }
+            },
             "cicd": {
               "type": "object",
               "additionalProperties": true,
@@ -193,7 +205,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "kubecostBaseUrl": { "type": "string", "format": "uri", "pattern": "^https?://" },
+        "kubecostBaseUrl": { "type": "string", "pattern": "^https?://" },
         "kubecostApiBasePath": { "type": "string", "pattern": "^/" },
         "kubecostApiKey": {
           "type": "object",

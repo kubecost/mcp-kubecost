@@ -58,6 +58,43 @@ imagePullSecrets:
 {{- end }}
 
 {{/*
+Controller annotations from `global.annotations`. Mirrors the parent chart, where
+global.annotations is applied to every Deployment/StatefulSet/DaemonSet.
+*/}}
+{{- define "mcp-kubecost.annotations" -}}
+{{- with ((.Values.global).annotations) }}
+{{- toYaml . }}
+{{- end }}
+{{- end }}
+
+{{/*
+Pod template annotations: `global.podAnnotations` merged with this chart's
+`podAnnotations`. Chart-local keys win on conflict.
+*/}}
+{{- define "mcp-kubecost.podAnnotations" -}}
+{{- $global := ((.Values.global).podAnnotations) | default dict -}}
+{{- $local := .Values.podAnnotations | default dict -}}
+{{- with merge (deepCopy $local) $global }}
+{{- toYaml . }}
+{{- end }}
+{{- end }}
+
+{{/*
+Pod securityContext. On OpenShift the parent chart's
+`global.platforms.openshift.securityContext` replaces this chart's
+`podSecurityContext`, because the restricted-v2 SCC rejects an explicit
+runAsUser/runAsGroup and assigns its own IDs instead.
+*/}}
+{{- define "mcp-kubecost.podSecurityContext" -}}
+{{- $openshift := (((.Values.global).platforms).openshift) | default dict -}}
+{{- if and $openshift.enabled $openshift.securityContext -}}
+{{- toYaml $openshift.securityContext -}}
+{{- else -}}
+{{- toYaml .Values.podSecurityContext -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Fail when referenced existing Secrets are missing, unless CI/CD skip is on or
 the cluster is unreachable (helm template / dry-run with no kube API).
 */}}
@@ -125,13 +162,19 @@ the cluster is unreachable (helm template / dry-run with no kube API).
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/* Standard Kubernetes metadata labels. */}}
+{{/*
+Standard Kubernetes metadata labels, plus the parent chart's
+`global.additionalLabels`. Never used for selectors, which must stay immutable.
+*/}}
 {{- define "mcp-kubecost.labels" -}}
 helm.sh/chart: {{ include "mcp-kubecost.chart" . }}
 {{ include "mcp-kubecost.selectorLabels" . }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- with .Chart.AppVersion }}
 app.kubernetes.io/version: {{ . | quote }}
+{{- end }}
+{{- with ((.Values.global).additionalLabels) }}
+{{ toYaml . | trim }}
 {{- end }}
 {{- end }}
 
@@ -161,7 +204,7 @@ Stable string of all ConfigMap data values used for checksum annotation.
 Must stay in sync with the data block in configmap.yaml.
 */}}
 {{- define "mcp-kubecost.configmap-data" -}}
-KUBECOST_BASE_URL={{ .Values.config.kubecostBaseUrl | quote }}
+KUBECOST_BASE_URL={{ tpl .Values.config.kubecostBaseUrl . | quote }}
 KUBECOST_API_BASE_PATH={{ .Values.config.kubecostApiBasePath | quote }}
 REQUEST_TIMEOUT_SECONDS={{ .Values.config.requestTimeoutSeconds | quote }}
 REQUEST_RETRY_COUNT={{ .Values.config.requestRetryCount | quote }}
