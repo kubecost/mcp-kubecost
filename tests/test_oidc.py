@@ -11,9 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastmcp.server.auth.oauth_proxy.models import ProxyDCRClient, UpstreamTokenSet
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
+from fastmcp.server.auth.redirect_validation import validate_redirect_uri
 from key_value.aio.stores.memory import MemoryStore
 
 from mcp_kubecost.config.oidc import (
+    ALLOWED_CLIENT_REDIRECT_URIS,
     AdaptiveOidcProxy,
     AdaptiveTokenVerifier,
     create_oidc_provider,
@@ -109,6 +111,7 @@ class TestCreateOidcProvider:
         assert isinstance(kwargs["client_storage"], MemoryStore)
         assert kwargs["require_authorization_consent"] == "external"
         assert kwargs["redirect_path"] == "/auth-mcp"
+        assert kwargs["allowed_client_redirect_uris"] == ALLOWED_CLIENT_REDIRECT_URIS
         assert "verify_id_token" not in kwargs
         # _install_adaptive_verifier is now called from AdaptiveOidcProxy.__init__,
         # not from create_oidc_provider, so no explicit call assertion needed here.
@@ -151,6 +154,7 @@ class TestOidcProxyKwargConformance:
             "client_storage",
             "require_authorization_consent",
             "audience",
+            "allowed_client_redirect_uris",
         ):
             assert kwarg in sig.parameters, f"OIDCProxy.__init__ no longer accepts {kwarg!r}"
 
@@ -247,12 +251,13 @@ class TestAdaptiveTokenVerifier:
 
 
 class TestGetClientFallback:
-    """get_client synthesizes a permissive ProxyDCRClient for unknown client IDs.
+    """get_client synthesizes a ProxyDCRClient for unknown DCR client IDs.
 
-    After a server restart the MemoryStore is empty.  MCP clients that cached a
+    After a server restart the MemoryStore is empty. MCP clients that cached a
     client_id from a previous session would otherwise receive a 400 HTML error
-    when hitting /authorize.  The override in AdaptiveOidcProxy synthesizes a
-    ProxyDCRClient so the flow can complete and the client gets a fresh token.
+    when hitting /authorize. FastMCP's OAuthProxy only synthesizes when
+    client_id equals the upstream IdP client_id; AdaptiveOidcProxy covers
+    stale random DCR IDs and still wires allowed_client_redirect_uris through.
     """
 
     @pytest.mark.asyncio
@@ -267,7 +272,7 @@ class TestGetClientFallback:
     @pytest.mark.asyncio
     async def test_unknown_client_synthesized(self):
         proxy = _uninitialized_proxy()
-        proxy._allowed_client_redirect_uris = None
+        proxy._allowed_client_redirect_uris = ALLOWED_CLIENT_REDIRECT_URIS
         proxy._default_scope_str = "openid profile"
         # Simulate parent returning None (client not found in store)
         with patch.object(type(proxy).__mro__[1], "get_client", AsyncMock(return_value=None)):
@@ -275,3 +280,13 @@ class TestGetClientFallback:
         assert isinstance(result, ProxyDCRClient)
         assert result.client_id == "stale-id-from-restart"
         assert result.allow_unregistered_redirect_uris is True
+        assert result.allowed_redirect_uri_patterns == ALLOWED_CLIENT_REDIRECT_URIS
+
+
+class TestAllowedClientRedirectUris:
+    def test_rejects_arbitrary_host(self):
+        assert validate_redirect_uri("https://evil.example/x", ALLOWED_CLIENT_REDIRECT_URIS) is False
+
+    def test_allows_localhost_and_claude(self):
+        assert validate_redirect_uri("http://localhost:54321/callback", ALLOWED_CLIENT_REDIRECT_URIS) is True
+        assert validate_redirect_uri("https://claude.ai/api/mcp/auth_callback", ALLOWED_CLIENT_REDIRECT_URIS) is True
