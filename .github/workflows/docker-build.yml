@@ -18,6 +18,7 @@ concurrency:
 permissions:
   contents: read
   packages: write
+  pull-requests: write
 
 jobs:
   docker-build:
@@ -46,6 +47,7 @@ jobs:
             type=sha,prefix=sha-
 
       - name: Build and push to ICR
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -65,3 +67,24 @@ jobs:
           echo "${{ steps.meta.outputs.tags }}" | while IFS= read -r tag; do
             echo "- \`${tag}\`" >> "$GITHUB_STEP_SUMMARY"
           done
+
+      - name: Comment image digest on PR
+        if: github.event_name == 'pull_request' && github.repository == 'kubecost/mcp-kubecost'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const digest = '${{ steps.build.outputs.digest }}';
+            const image = 'icr.io/kubecost/mcp-kubecost';
+            const shaTag = '${{ steps.meta.outputs.tags }}'.split('\n').find(t => t.includes('sha-')) || '';
+            const body = [
+              '### 🐳 Docker build succeeded',
+              '',
+              `**Image:** \`${shaTag || image + '@' + digest}\``,
+              digest ? `**Digest:** \`${image}@${digest}\`` : '',
+            ].filter(Boolean).join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
