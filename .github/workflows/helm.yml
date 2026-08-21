@@ -79,7 +79,7 @@ jobs:
         run: |
           helm template mcp-kubecost "$CHART_DIR" \
             --namespace mcp-kubecost \
-            --set config.oidc.authMode=oidc \
+            --set config.authMode=oidc \
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
             --set config.oidc.clientSecret=y \
@@ -98,7 +98,7 @@ jobs:
         run: |
           if helm template mcp-kubecost "$CHART_DIR" \
             --namespace mcp-kubecost \
-            --set config.oidc.authMode=oidc \
+            --set config.authMode=oidc \
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
             --set config.oidc.clientSecret=y \
@@ -112,7 +112,7 @@ jobs:
         run: |
           if helm template mcp-kubecost "$CHART_DIR" \
             --namespace mcp-kubecost \
-            --set config.oidc.authMode=oidc \
+            --set config.authMode=oidc \
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
             --set config.oidc.clientSecret=y \
@@ -128,7 +128,7 @@ jobs:
         run: |
           if helm template mcp-kubecost "$CHART_DIR" \
             --namespace mcp-kubecost \
-            --set config.oidc.authMode=both \
+            --set config.authMode=both \
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
             --set config.oidc.clientSecret=y \
@@ -142,7 +142,7 @@ jobs:
         run: |
           if helm template mcp-kubecost "$CHART_DIR" \
             --namespace mcp-kubecost \
-            --set config.oidc.authMode=both \
+            --set config.authMode=both \
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
             --set config.oidc.clientSecret=y \
@@ -156,7 +156,7 @@ jobs:
         run: |
           helm template mcp-kubecost "$CHART_DIR" \
             --namespace mcp-kubecost \
-            --set config.oidc.authMode=both \
+            --set config.authMode=both \
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
             --set config.oidc.clientSecret=y \

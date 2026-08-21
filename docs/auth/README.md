@@ -42,7 +42,7 @@ STDIO has no HTTP headers, so MCP OIDC and `REQUIRE_CLIENT_API_KEY` do not apply
 
 ## Authentication options
 
-`AUTH_MODE` (Helm: `config.oidc.authMode`) controls how the MCP HTTP endpoint is protected.
+`AUTH_MODE` (Helm: `config.authMode`) controls how the MCP HTTP endpoint is protected.
 
 | Mode      | MCP `/mcp`                                                            | Kubecost `X-API-KEY`                                                                              |
 | --------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
@@ -176,7 +176,7 @@ Header wins when both are set. Neither is required; with no key the outbound req
 
 `REQUIRE_CLIENT_API_KEY=true` (Helm: `config.requireClientApiKey`) rejects HTTP requests that arrive without the header. The check runs **before** the environment fallback, so a configured `KUBECOST_API_KEY` does not satisfy it. STDIO is never gated.
 
-`AUTH_MODE=both` is the same presence check alongside OIDC: the client must send `X-API-KEY`; the value is forwarded as-is and not validated by the MCP. Helm rejects `config.oidc.authMode=both` together with `config.kubecostApiKey` (`value` or `existingSecret`) because that key would never be used over HTTP — set `authMode` to `oidc` for a shared key, or omit `kubecostApiKey`.
+`AUTH_MODE=both` is the same presence check alongside OIDC: the client must send `X-API-KEY`; the value is forwarded as-is and not validated by the MCP. Helm rejects `config.authMode=both` together with `config.kubecostApiKey` (`value` or `existingSecret`) because that key would never be used over HTTP — set `authMode` to `oidc` for a shared key, or omit `kubecostApiKey`.
 
 ## Configuration
 
@@ -186,7 +186,7 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 
 | Variable                     | Helm                                 | Role                                                                                           |
 | ---------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `AUTH_MODE`                  | `config.oidc.authMode`               | `none` / `oidc` / `api_key` / `both`                                                           |
+| `AUTH_MODE`                  | `config.authMode`                    | `none` / `oidc` / `api_key` / `both`                                                           |
 | `OIDC_ISSUER_URL`            | `config.oidc.issuerUrl`              | Provider discovery URL                                                                         |
 | `OIDC_CLIENT_ID`             | `config.oidc.clientId` or Secret     | Confidential client id                                                                         |
 | `OIDC_CLIENT_SECRET`         | `config.oidc.clientSecret` or Secret | Confidential client secret                                                                     |
@@ -209,7 +209,7 @@ helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
   --namespace mcp-kubecost --create-namespace \
   --set config.kubecostBaseUrl=https://kubecost.example.com \
   --set config.kubecostApiKey.existingSecret=kubecost-api-key \
-  --set config.oidc.authMode=oidc \
+  --set config.authMode=oidc \
   --set config.oidc.issuerUrl=https://keycloak.example.com/realms/kubecost/.well-known/openid-configuration \
   --set config.oidc.baseUrl=https://mcp.example.com \
   --set config.oidc.existingSecret=mcp-oidc \
@@ -261,7 +261,7 @@ OIDC file storage tried to write to disk. Current builds use `MemoryStore`; rebu
 `OIDC_ISSUER_URL` must be the provider’s `/.well-known/openid-configuration` JSON URL, not a login page and not this server’s `/mcp` URL.
 
 **Helm fails: `authMode=both cannot be combined with config.kubecostApiKey`**
-`both` requires every HTTP caller to send `X-API-KEY`, so a Helm key is unused. Set `config.oidc.authMode=oidc` to use the shared key, or omit `config.kubecostApiKey`.
+`both` requires every HTTP caller to send `X-API-KEY`, so a Helm key is unused. Set `config.authMode=oidc` to use the shared key, or omit `config.kubecostApiKey`.
 
 **Login succeeds but `/mcp` returns `invalid_token` / tools never appear**
 Confirm the IdP returned an `id_token` (request `openid`). Opaque access tokens are verified via that `id_token` automatically. If `OIDC_AUDIENCE` is set for an opaque IdP, remove it — the `id_token` audience is the OAuth client id. Check logs for `Upstream token validation failed` or `no id_token was in the token response`.
