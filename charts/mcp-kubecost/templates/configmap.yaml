@@ -28,8 +28,8 @@ data:
   {{- if .Values.config.ssl.caBundle.existingSecret }}
   SSL_CA_BUNDLE: {{ .Values.config.ssl.caBundle.mountPath | quote }}
   {{- end }}
-  {{- if ne .Values.config.oidc.authMode "none" }}
-  AUTH_MODE: {{ .Values.config.oidc.authMode | quote }}
+  {{- if ne .Values.config.authMode "none" }}
+  AUTH_MODE: {{ .Values.config.authMode | quote }}
   {{- if .Values.config.oidc.issuerUrl }}
   OIDC_ISSUER_URL: {{ .Values.config.oidc.issuerUrl | quote }}
   {{- end }}

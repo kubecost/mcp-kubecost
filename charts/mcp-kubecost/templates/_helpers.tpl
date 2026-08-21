@@ -101,10 +101,10 @@ with no kube API). The authMode=both + kubecostApiKey check is not gated by
 skipSanityChecks: that flag only skips live Secret lookups.
 */}}
 {{- define "mcp-kubecost.sanityChecks" -}}
-{{- $mode := .Values.config.oidc.authMode | default "none" }}
+{{- $mode := .Values.config.authMode | default "none" }}
 {{- $hasApiKey := or .Values.config.kubecostApiKey.value .Values.config.kubecostApiKey.existingSecret }}
 {{- if and (eq $mode "both") $hasApiKey }}
-{{- fail "config.oidc.authMode=both cannot be combined with config.kubecostApiKey; HTTP callers must send X-API-KEY and the Helm key is never used. Set authMode to oidc to use a shared key, or omit kubecostApiKey." }}
+{{- fail "config.authMode=both cannot be combined with config.kubecostApiKey; HTTP callers must send X-API-KEY and the Helm key is never used. Set authMode to oidc to use a shared key, or omit kubecostApiKey." }}
 {{- end }}
 {{- if ne (include "mcp-kubecost.skipSanityChecks" .) "true" }}
 {{- $ns := lookup "v1" "Namespace" "" .Release.Namespace }}
@@ -234,8 +234,8 @@ FASTMCP_HTTP_ALLOWED_HOSTS={{ .Values.config.fastmcpHttpAllowedHosts | quote }}
 {{- if .Values.config.ssl.caBundle.existingSecret }}
 SSL_CA_BUNDLE={{ .Values.config.ssl.caBundle.mountPath | quote }}
 {{- end }}
-{{- if ne .Values.config.oidc.authMode "none" }}
-AUTH_MODE={{ .Values.config.oidc.authMode | quote }}
+{{- if ne .Values.config.authMode "none" }}
+AUTH_MODE={{ .Values.config.authMode | quote }}
 {{- if .Values.config.oidc.issuerUrl }}
 OIDC_ISSUER_URL={{ .Values.config.oidc.issuerUrl | quote }}
 {{- end }}

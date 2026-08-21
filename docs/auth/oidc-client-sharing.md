@@ -125,12 +125,12 @@ Then point the chart at a Secret holding only the MCP client's credentials:
 kubectl create secret generic mcp-oidc \
   --namespace mcp-kubecost \
   --from-literal=OIDC_CLIENT_ID=kubecost-mcp \
-  --from-literal=OIDC_CLIENT_SECRET='<secret>'
+  --from-literal=OIDC_CLIENT_SECRET="$OIDC_CLIENT_SECRET"
 
 helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
   --namespace mcp-kubecost --create-namespace \
   --set config.kubecostBaseUrl=https://kubecost.example.com \
-  --set config.oidc.authMode=oidc \
+  --set config.authMode=oidc \
   --set config.oidc.issuerUrl=https://keycloak.example.com/realms/kubecost/.well-known/openid-configuration \
   --set config.oidc.baseUrl=https://mcp.example.com \
   --set config.oidc.existingSecret=mcp-oidc

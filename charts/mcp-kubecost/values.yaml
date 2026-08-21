@@ -173,6 +173,14 @@ probes:
   failureThreshold: 3
 
 config:
+  # config.authMode controls how the MCP HTTP endpoint is protected.
+  # Supported values: none, oidc, api_key, both.
+  #   none    — no auth (default)
+  #   oidc    — require a valid OIDC token via FastMCP's OIDCProxy
+  #   api_key — require X-API-KEY header (same as requireClientApiKey: true)
+  #   both    — require OIDC token AND X-API-KEY header (presence check only).
+  #             Helm rejects this mode when kubecostApiKey.value or existingSecret is set.
+  authMode: "none"
   # config.kubecostBaseUrl is the required base URL of the Kubecost API.
   # Evaluated with tpl, so umbrella charts may pass "{{ .Release.Name }}-frontend".
   # The standalone default assumes the Kubecost frontend is in the kubecost namespace.
@@ -229,14 +237,6 @@ config:
       mountPath: /etc/mcp-kubecost/ca/ca.crt
 
   oidc:
-    # config.oidc.authMode controls how the MCP HTTP endpoint is protected.
-    # Supported values: none, oidc, api_key, both.
-    #   none    — no auth (default)
-    #   oidc    — require a valid OIDC token via FastMCP's OIDCProxy
-    #   api_key — require X-API-KEY header (same as requireClientApiKey: true)
-    #   both    — require OIDC token AND X-API-KEY header (presence check only).
-    #             Helm rejects this mode when kubecostApiKey.value or existingSecret is set.
-    authMode: "none"
     # config.oidc.issuerUrl is the provider's .well-known/openid-configuration URL.
     # Example: https://{domain}/.well-known/openid-configuration
     issuerUrl: ""
