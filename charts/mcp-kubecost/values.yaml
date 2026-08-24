@@ -118,7 +118,7 @@ httpRoute:
       sectionName: https
   # httpRoute.hostnames are the hostnames matched by the Gateway listener.
   hostnames:
-    - mcp.demo.kubecost.cloud
+    - mcp.example.com
   # httpRoute.rules defines Gateway API matches, filters, timeouts, and backendRefs.
   # If backendRefs is omitted from a rule, this chart routes it to its own Service.
   rules:
@@ -138,7 +138,7 @@ ingress:
     cert-manager.io/cluster-issuer: letsencrypt-http
   # ingress.hosts configures hostnames and paths routed to the MCP server.
   hosts:
-    - host: mcp.demo.kubecost.cloud
+    - host: mcp.example.com
       paths:
         - path: /
           pathType: Prefix
@@ -146,7 +146,7 @@ ingress:
   tls:
     - secretName: kubecost-mcp-server-tls
       hosts:
-        - mcp.demo.kubecost.cloud
+        - mcp.example.com
 
 resources:
   # resources.requests and resources.limits define the pod's CPU and memory budget.
@@ -182,10 +182,13 @@ config:
   #   both    — require OIDC token AND X-API-KEY header (presence check only).
   #             Helm rejects this mode when kubecostApiKey.value or existingSecret is set.
   authMode: "none"
-  # config.kubecostBaseUrl is the required base URL of the Kubecost API.
-  # Evaluated with tpl, so umbrella charts may pass "{{ .Release.Name }}-frontend".
+  # config.kubecostApiBaseUrl is the required base URL of the Kubecost API (scheme + host only).
+  # Must not include a port — use kubecostApiPort for that.
+  # Evaluated with tpl, so umbrella charts may pass "http://{{ .Release.Name }}-frontend".
   # The standalone default assumes the Kubecost frontend is in the kubecost namespace.
-  kubecostBaseUrl: http://kubecost-frontend.kubecost.svc.cluster.local:9090
+  kubecostApiBaseUrl: http://kubecost-frontend.kubecost.svc.cluster.local
+  # config.kubecostApiPort is appended to kubecostApiBaseUrl to form KUBECOST_BASE_URL.
+  kubecostApiPort: 9090
   # config.kubecostApiBasePath is the path prefix used for Kubecost API calls.
   kubecostApiBasePath: /model
   # config.kubecostApiKey is sent to Kubecost as an X-API-KEY request header.
