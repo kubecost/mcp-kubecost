@@ -46,12 +46,26 @@ STDIO has no HTTP headers, so MCP OIDC and `REQUIRE_CLIENT_API_KEY` do not apply
 
 | Mode      | MCP `/mcp`                                                            | Kubecost `X-API-KEY`                                                                              |
 | --------- | --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `none`    | No auth                                                               | Optional env/header fallback                                                                      |
+| `none`    | No auth — **not permitted when `httproute` or `ingress` is enabled**  | Optional env/header fallback                                                                      |
+| `open`    | No auth enforcement; explicitly acknowledged as exposed               | Optional env/header fallback                                                                      |
 | `oidc`    | Valid OIDC token via FastMCP `OIDCProxy`                              | Optional env/header fallback                                                                      |
 | `api_key` | Incoming `X-API-KEY` required (same as `REQUIRE_CLIENT_API_KEY=true`) | That header is forwarded to Kubecost                                                              |
 | `both`    | OIDC token **and** an `X-API-KEY` header (presence check only)        | Header is forwarded; env fallback is not used. Helm fails if `config.kubecostApiKey` is also set. |
 
 `oidc` and `both` require `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and `OIDC_BASE_URL`.
+
+> [!WARNING]
+> If `httproute.enabled: true` or `ingress.enabled: true`, `authMode` must **not** be `"none"`.
+> Set `authMode` to at least `"open"` to acknowledge the exposure, or to a stricter mode such as `"oidc"` or `"api_key"`.
+> Helm will fail pre-install/pre-upgrade if this constraint is violated.
+>
+> ```yaml
+> # values.yaml — minimum required when exposing a route
+> config:
+>   authMode: "open"   # or oidc / api_key / both
+> httpRoute:
+>   enabled: true
+> ```
 
 ## Protecting the MCP HTTP endpoint (OIDC)
 
@@ -186,7 +200,7 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 
 | Variable                     | Helm                                 | Role                                                                                           |
 | ---------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `AUTH_MODE`                  | `config.authMode`                    | `none` / `oidc` / `api_key` / `both`                                                           |
+| `AUTH_MODE`                  | `config.authMode`                    | `none` / `open` / `oidc` / `api_key` / `both`                                                 |
 | `OIDC_ISSUER_URL`            | `config.oidc.issuerUrl`              | Provider discovery URL                                                                         |
 | `OIDC_CLIENT_ID`             | `config.oidc.clientId` or Secret     | Confidential client id                                                                         |
 | `OIDC_CLIENT_SECRET`         | `config.oidc.clientSecret` or Secret | Confidential client secret                                                                     |
@@ -262,6 +276,9 @@ OIDC file storage tried to write to disk. Current builds use `MemoryStore`; rebu
 
 **Helm fails: `authMode=both cannot be combined with config.kubecostApiKey`**
 `both` requires every HTTP caller to send `X-API-KEY`, so a Helm key is unused. Set `config.authMode=oidc` to use the shared key, or omit `config.kubecostApiKey`.
+
+**Helm fails: `ERROR: authMode must be configured before enabling httproute or ingress`**
+`httpRoute.enabled` or `ingress.enabled` is `true` but `config.authMode` is `"none"`. Set `config.authMode` to `"open"` (no auth, explicitly acknowledged) or a stricter mode (`oidc`, `api_key`, `both`). Leaving an exposed route with `authMode: none` is not permitted.
 
 **Login succeeds but `/mcp` returns `invalid_token` / tools never appear**
 Confirm the IdP returned an `id_token` (request `openid`). Opaque access tokens are verified via that `id_token` automatically. If `OIDC_AUDIENCE` is set for an opaque IdP, remove it — the `id_token` audience is the OAuth client id. Check logs for `Upstream token validation failed` or `no id_token was in the token response`.

@@ -10,6 +10,9 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
   - [Container sizing profiles](#container-sizing-profiles)
 - [Telemetry (experimental)](#telemetry-experimental)
 - [Installation / Helm Chart](#installation--helm-chart)
+  - [Authentication Options](#authentication-options)
+- [Development](#development)
+- [License](#license)
 
 ## Who This Is For
 
@@ -94,4 +97,15 @@ The MCP, by default, is bundled with the Kubecost helm installation. For many, t
 
 This repo may have newer versions of the MCP available for users looking for the latest improvements. The MCP should be compatible with any version of Kubecost 3.x, though be sure to read the release notes for any dependencies. Additional detail can be found in the [helm chart readme](charts/mcp-kubecost/README.md).
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for build, test, and deployment instructions. Authentication, OIDC, API keys, and pod hardening are in [docs/auth/README.md](docs/auth/README.md).
+### Authentication Options
+
+Authentication, OIDC, API keys, and pod hardening are in [docs/auth/README.md](docs/auth/README.md).
+
+
+## Development
+
+See [DEVELOPMENT.md](DEVELOPMENT.md) for build, test, and deployment instructions.
+
+## License
+
+This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
