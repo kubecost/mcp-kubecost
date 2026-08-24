@@ -97,14 +97,19 @@ runAsUser/runAsGroup and assigns its own IDs instead.
 {{/*
 Fail on contradictory values, and when referenced existing Secrets are missing
 unless CI/CD skip is on or the cluster is unreachable (helm template / dry-run
-with no kube API). The authMode=both + kubecostApiKey check is not gated by
-skipSanityChecks: that flag only skips live Secret lookups.
+with no kube API). The authMode=both + kubecostApiKey check and the routing +
+authMode=none check are not gated by skipSanityChecks: that flag only skips
+live Secret lookups.
 */}}
 {{- define "mcp-kubecost.sanityChecks" -}}
 {{- $mode := .Values.config.authMode | default "none" }}
 {{- $hasApiKey := or .Values.config.kubecostApiKey.value .Values.config.kubecostApiKey.existingSecret }}
 {{- if and (eq $mode "both") $hasApiKey }}
 {{- fail "config.authMode=both cannot be combined with config.kubecostApiKey; HTTP callers must send X-API-KEY and the Helm key is never used. Set authMode to oidc to use a shared key, or omit kubecostApiKey." }}
+{{- end }}
+{{- $routeEnabled := or .Values.httpRoute.enabled .Values.ingress.enabled }}
+{{- if and $routeEnabled (eq $mode "none") }}
+{{- fail "ERROR: \n\n authMode must be configured before enabling httproute or ingress.\n Please set authMode to a valid option.\n If anonymous access is required (for example if the ingress is behind a VPN), set  (e.g., \"authMode=open\").\n authMode = \"none\" with an exposed route is not permitted." }}
 {{- end }}
 {{- if ne (include "mcp-kubecost.skipSanityChecks" .) "true" }}
 {{- $ns := lookup "v1" "Namespace" "" .Release.Namespace }}

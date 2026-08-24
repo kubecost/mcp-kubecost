@@ -174,8 +174,9 @@ probes:
 
 config:
   # config.authMode controls how the MCP HTTP endpoint is protected.
-  # Supported values: none, oidc, api_key, both.
-  #   none    — no auth (default)
+  # Supported values: none, open, oidc, api_key, both.
+  #   none    — no auth (default); NOT permitted when httproute or ingress is enabled
+  #   open    — no auth enforcement, but explicitly acknowledged as exposed (required minimum when httproute or ingress is enabled)
   #   oidc    — require a valid OIDC token via FastMCP's OIDCProxy
   #   api_key — require X-API-KEY header (same as requireClientApiKey: true)
   #   both    — require OIDC token AND X-API-KEY header (presence check only).
