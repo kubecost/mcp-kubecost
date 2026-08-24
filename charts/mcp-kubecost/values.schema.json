@@ -205,7 +205,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "kubecostBaseUrl": { "type": "string", "pattern": "^https?://" },
+        "kubecostApiBaseUrl": { "type": "string", "pattern": "^https?://[^:/?#]+$" },
+        "kubecostApiPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "kubecostApiBasePath": { "type": "string", "pattern": "^/" },
         "kubecostApiKey": {
           "type": "object",
@@ -274,7 +275,7 @@
           }
         }
       },
-      "required": ["authMode", "kubecostBaseUrl", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "defaultWindow", "fastmcpLogLevel", "useCacViews", "requireClientApiKey", "fastmcpHttpAllowedHosts", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "ssl", "oidc"]
+      "required": ["authMode", "kubecostApiBaseUrl", "kubecostApiPort", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "defaultWindow", "fastmcpLogLevel", "useCacViews", "requireClientApiKey", "fastmcpHttpAllowedHosts", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "ssl", "oidc"]
     },
     "nodeSelector": { "type": "object" },
     "tolerations": { "type": "array" },

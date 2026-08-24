@@ -62,7 +62,7 @@ STDIO has no HTTP headers, so MCP OIDC and `REQUIRE_CLIENT_API_KEY` do not apply
 > ```yaml
 > # values.yaml — minimum required when exposing a route
 > config:
->   authMode: "open"   # or oidc / api_key / both
+>   authMode: "open" # or oidc / api_key / both
 > httpRoute:
 >   enabled: true
 > ```
@@ -200,7 +200,7 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 
 | Variable                     | Helm                                 | Role                                                                                           |
 | ---------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `AUTH_MODE`                  | `config.authMode`                    | `none` / `open` / `oidc` / `api_key` / `both`                                                 |
+| `AUTH_MODE`                  | `config.authMode`                    | `none` / `open` / `oidc` / `api_key` / `both`                                                  |
 | `OIDC_ISSUER_URL`            | `config.oidc.issuerUrl`              | Provider discovery URL                                                                         |
 | `OIDC_CLIENT_ID`             | `config.oidc.clientId` or Secret     | Confidential client id                                                                         |
 | `OIDC_CLIENT_SECRET`         | `config.oidc.clientSecret` or Secret | Confidential client secret                                                                     |
@@ -221,7 +221,9 @@ OIDC client credentials in Helm: set `config.oidc.existingSecret` (keys `OIDC_CL
 ```bash
 helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
   --namespace mcp-kubecost --create-namespace \
-  --set config.kubecostBaseUrl=https://kubecost.example.com \
+  --set config.kubecostApiBaseUrl=https://kubecost.example.com \
+  --set config.kubecostApiPort=443 \
+  --set config.kubecostApiBasePath=/model \
   --set config.kubecostApiKey.existingSecret=kubecost-api-key \
   --set config.authMode=oidc \
   --set config.oidc.issuerUrl=https://keycloak.example.com/realms/kubecost/.well-known/openid-configuration \

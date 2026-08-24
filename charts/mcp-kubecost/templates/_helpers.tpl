@@ -216,7 +216,7 @@ Stable string of all ConfigMap data values used for checksum annotation.
 Must stay in sync with the data block in configmap.yaml.
 */}}
 {{- define "mcp-kubecost.configmap-data" -}}
-KUBECOST_BASE_URL={{ tpl .Values.config.kubecostBaseUrl . | quote }}
+KUBECOST_BASE_URL={{ printf "%s:%v" (tpl .Values.config.kubecostApiBaseUrl .) .Values.config.kubecostApiPort | quote }}
 KUBECOST_API_BASE_PATH={{ .Values.config.kubecostApiBasePath | quote }}
 REQUEST_TIMEOUT_SECONDS={{ .Values.config.requestTimeoutSeconds | quote }}
 REQUEST_RETRY_COUNT={{ .Values.config.requestRetryCount | quote }}

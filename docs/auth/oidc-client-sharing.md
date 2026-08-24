@@ -129,7 +129,9 @@ kubectl create secret generic mcp-oidc \
 
 helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
   --namespace mcp-kubecost --create-namespace \
-  --set config.kubecostBaseUrl=https://kubecost.example.com \
+  --set config.kubecostApiBaseUrl=https://kubecost.example.com \
+  --set config.kubecostApiPort=443 \
+  --set config.kubecostApiBasePath=/model \
   --set config.authMode=oidc \
   --set config.oidc.issuerUrl=https://keycloak.example.com/realms/kubecost/.well-known/openid-configuration \
   --set config.oidc.baseUrl=https://mcp.example.com \
