@@ -7,7 +7,7 @@
 - [Readme Generation](#readme-generation)
 - [Testing and Quality](#testing-and-quality)
 - [Docker / Kubernetes](#docker--kubernetes)
-- [the Telemetry section](#telemetry)
+- [Telemetry](#telemetry)
   - [On the "beta" version numbers](#on-the-beta-version-numbers)
 - [Security](#security)
 
@@ -56,7 +56,9 @@ helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
 
 ## Readme Generation
 
-Regenerate the README tools and prompts tables from the live MCP server:
+This project uses the vscode extension `Markdown All in One` for formatting and generating the table of contents and in the README.md files.
+
+In addition, there is a script that can be run to regenerate the README tools and prompts tables from the live MCP server.
 
 ```bash
 just readme-tools

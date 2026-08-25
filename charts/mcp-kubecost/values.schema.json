@@ -221,7 +221,7 @@
         "requestTimeoutSeconds": { "type": "number", "exclusiveMinimum": 0 },
         "requestRetryCount": { "type": "integer", "minimum": 0 },
         "defaultWindow": { "type": "string", "minLength": 1 },
-        "fastmcpLogLevel": { "type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] },
+        "logLevel": { "type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "debug", "info", "warning", "error", "critical"] },
         "useCacViews": { "type": "boolean" },
         "authMode": { "type": "string", "enum": ["none", "open", "oidc", "api_key"] },
         "requireClientApiKey": { "type": "boolean" },
@@ -275,7 +275,7 @@
           }
         }
       },
-      "required": ["authMode", "kubecostApiBaseUrl", "kubecostApiPort", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "defaultWindow", "fastmcpLogLevel", "useCacViews", "requireClientApiKey", "fastmcpHttpAllowedHosts", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "ssl", "oidc"]
+      "required": ["authMode", "kubecostApiBaseUrl", "kubecostApiPort", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "defaultWindow", "logLevel", "useCacViews", "requireClientApiKey", "fastmcpHttpAllowedHosts", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "ssl", "oidc"]
     },
     "nodeSelector": { "type": "object" },
     "tolerations": { "type": "array" },
