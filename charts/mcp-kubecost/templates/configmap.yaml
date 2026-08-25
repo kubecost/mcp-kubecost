@@ -12,7 +12,7 @@ data:
   DEFAULT_WINDOW: {{ .Values.config.defaultWindow | quote }}
   FASTMCP_LOG_LEVEL: {{ .Values.config.fastmcpLogLevel | quote }}
   USE_CAC_VIEWS: {{ .Values.config.useCacViews | quote }}
-  REQUIRE_CLIENT_API_KEY: {{ .Values.config.requireClientApiKey | quote }}
+  REQUIRE_CLIENT_API_KEY: {{ (or .Values.config.requireClientApiKey (eq .Values.config.authMode "api_key")) | quote }}
   MCP_SERVER_NAME: {{ .Values.config.mcpServerName | quote }}
   FASTMCP_TELEMETRY_MODE: {{ .Values.config.telemetryMode | quote }}
   OTEL_SERVICE_NAME: {{ .Values.config.otelServiceName | quote }}

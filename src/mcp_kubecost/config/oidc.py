@@ -1,8 +1,8 @@
 """OIDC authentication provider factory.
 
 Builds a FastMCP ``OIDCProxy`` from environment-backed settings when
-``AUTH_MODE`` includes OIDC. Returns ``None`` when OIDC is not enabled,
-letting the server start without auth on the MCP endpoint.
+``AUTH_MODE=oidc``. Returns ``None`` when OIDC is not enabled, letting
+the server start without auth on the MCP endpoint.
 
 Access-token format is detected from the IdP token response: JWT access
 tokens are verified as-is; opaque tokens fall back to the
@@ -158,7 +158,7 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
     if settings is None:
         settings = get_settings()
 
-    if settings.auth_mode not in (AuthMode.OIDC, AuthMode.BOTH):
+    if settings.auth_mode != AuthMode.OIDC:
         return None
 
     # These are guaranteed non-None by Settings validation when OIDC is active.

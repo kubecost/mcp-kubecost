@@ -18,9 +18,9 @@ class AuthMode(Enum):
     """Supported authentication modes for the HTTP transport."""
 
     NONE = "none"
+    OPEN = "open"  # Helm: explicit no-auth when a route is exposed; runtime same as none
     OIDC = "oidc"
     API_KEY = "api_key"
-    BOTH = "both"
 
 
 _HTTP_TRANSPORTS = frozenset({"http", "sse", "streamable-http"})
@@ -161,6 +161,8 @@ def _get_float_env(name: str, default: float) -> float:
 def _get_auth_mode() -> AuthMode:
     """Parse AUTH_MODE from environment, defaulting to 'none'."""
     raw = os.getenv("AUTH_MODE", "none").strip().lower()
+    if raw == "both":
+        raise ConfigError("AUTH_MODE='both' was removed; set AUTH_MODE=oidc and REQUIRE_CLIENT_API_KEY=true")
     try:
         return AuthMode(raw)
     except ValueError as exc:
@@ -217,7 +219,7 @@ def get_settings() -> Settings:
     oidc_audience: str | None = os.getenv("OIDC_AUDIENCE", "").strip() or None
     oidc_base_url: str | None = os.getenv("OIDC_BASE_URL", "").strip() or None
 
-    if auth_mode in (AuthMode.OIDC, AuthMode.BOTH):
+    if auth_mode == AuthMode.OIDC:
         missing = []
         if not oidc_issuer_url:
             missing.append("OIDC_ISSUER_URL")
@@ -230,11 +232,14 @@ def get_settings() -> Settings:
         if missing:
             raise ConfigError(f"AUTH_MODE={auth_mode.value} requires: {', '.join(missing)}")
 
+    # AUTH_MODE=api_key is the same gate as REQUIRE_CLIENT_API_KEY=true.
+    require_client_api_key = _get_bool_env("REQUIRE_CLIENT_API_KEY", False) or auth_mode == AuthMode.API_KEY
+
     return Settings(
         kubecost_base_url=kubecost_base_url,
         kubecost_api_base_path=os.getenv("KUBECOST_API_BASE_PATH", "/model").strip().rstrip("/"),
         KUBECOST_API_KEY=os.getenv("KUBECOST_API_KEY", "").strip() or None,
-        require_client_api_key=_get_bool_env("REQUIRE_CLIENT_API_KEY", False),
+        require_client_api_key=require_client_api_key,
         ssl_verify=_get_ssl_verify_env(),
         request_timeout_seconds=_get_float_env("REQUEST_TIMEOUT_SECONDS", 15.0),
         retry_count=_get_int_env("REQUEST_RETRY_COUNT", 2),

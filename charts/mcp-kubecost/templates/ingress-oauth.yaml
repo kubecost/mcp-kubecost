@@ -1,6 +1,6 @@
 {{- $oidc := .Values.config.oidc }}
 {{- $mode := .Values.config.authMode | default "none" }}
-{{- if and $oidc.exposeAuthRoutes (or (eq $mode "oidc") (eq $mode "both")) }}
+{{- if and $oidc.exposeAuthRoutes (eq $mode "oidc") }}
 {{- if not $oidc.baseUrl }}
 {{- fail "config.oidc.exposeAuthRoutes requires config.oidc.baseUrl" }}
 {{- end }}
