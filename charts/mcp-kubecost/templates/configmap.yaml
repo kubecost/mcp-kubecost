@@ -14,6 +14,7 @@ data:
   USE_CAC_VIEWS: {{ .Values.config.useCacViews | quote }}
   REQUIRE_CLIENT_API_KEY: {{ (or .Values.config.requireClientApiKey (eq .Values.config.authMode "api_key")) | quote }}
   MCP_SERVER_NAME: {{ .Values.config.mcpServerName | quote }}
+  MCP_HTTP_PATH: {{ include "mcp-kubecost.httpPath" . | quote }}
   FASTMCP_TELEMETRY_MODE: {{ .Values.config.telemetryMode | quote }}
   OTEL_SERVICE_NAME: {{ .Values.config.otelServiceName | quote }}
   OTEL_METRICS_EXPORTER: {{ .Values.config.otelMetricsExporter | quote }}

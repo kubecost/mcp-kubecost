@@ -226,6 +226,14 @@
         "authMode": { "type": "string", "enum": ["none", "open", "oidc", "api_key"] },
         "requireClientApiKey": { "type": "boolean" },
         "fastmcpHttpAllowedHosts": { "type": "string" },
+        "http": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": { "type": "string", "pattern": "^(|/.*)$" }
+          },
+          "required": ["path"]
+        },
         "mcpServerName": { "type": "string", "minLength": 1 },
         "telemetryMode": { "type": "string", "minLength": 1 },
         "otelServiceName": { "type": "string", "minLength": 1 },

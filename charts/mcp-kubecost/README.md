@@ -24,8 +24,10 @@ helm upgrade --install kubecost-mcp mcp-kubecost \
 Prefer an existing Secret so credentials are not stored in a values file or Helm command history. OIDC, API-key precedence, `REQUIRE_CLIENT_API_KEY`, shared-hostname OAuth routes, and pod hardening are documented in [docs/auth](https://github.com/kubecost/mcp-kubecost/blob/HEAD/docs/auth).
 
 All application environment settings from the repository's `.env.example`
-are represented under `config` in `values.yaml`. `values.schema.json` validates
-the supported value types and common deployment mistakes.
+are represented under `config` in `values.yaml`, except
+`FASTMCP_ENABLE_RICH_LOGGING` — this chart only runs the HTTP transport, where
+rich logging is forced off. `values.schema.json` validates the supported value
+types and common deployment mistakes.
 
 ## Gateway API HTTPRoute (preferred)
 
