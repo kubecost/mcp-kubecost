@@ -209,8 +209,8 @@ config:
   requestRetryCount: 2
   # config.defaultWindow is the default Kubecost query window.
   defaultWindow: 15d
-  # config.fastmcpLogLevel is the FastMCP log level.
-  fastmcpLogLevel: INFO
+  # config.logLevel is the FastMCP log level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL').
+  logLevel: INFO
   # config.useCacViews enables Kubecost CAC views.
   useCacViews: false
   # config.fastmcpHttpAllowedHosts is a JSON array string of permitted HTTP Host headers; empty disables the allowlist.

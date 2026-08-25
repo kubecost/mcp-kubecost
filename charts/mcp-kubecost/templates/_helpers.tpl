@@ -216,7 +216,7 @@ KUBECOST_API_BASE_PATH={{ .Values.config.kubecostApiBasePath | quote }}
 REQUEST_TIMEOUT_SECONDS={{ .Values.config.requestTimeoutSeconds | quote }}
 REQUEST_RETRY_COUNT={{ .Values.config.requestRetryCount | quote }}
 DEFAULT_WINDOW={{ .Values.config.defaultWindow | quote }}
-FASTMCP_LOG_LEVEL={{ .Values.config.fastmcpLogLevel | quote }}
+FASTMCP_LOG_LEVEL={{ .Values.config.logLevel | upper | quote }}
 USE_CAC_VIEWS={{ .Values.config.useCacViews | quote }}
 REQUIRE_CLIENT_API_KEY={{ (or .Values.config.requireClientApiKey (eq .Values.config.authMode "api_key")) | quote }}
 MCP_SERVER_NAME={{ .Values.config.mcpServerName | quote }}
@@ -274,3 +274,32 @@ OIDC_CLIENT_ID={{ .Values.config.oidc.clientId }}
 OIDC_CLIENT_SECRET={{ .Values.config.oidc.clientSecret }}
 {{- end }}
 {{- end }}
+
+{{/*
+Fail when authMode is "oidc" but no OIDC credentials are configured.
+Valid credential state = either (clientId AND clientSecret both non-empty)
+OR existingSecret non-empty. This check is NOT gated by skipSanityChecks:
+credential presence is a hard logical requirement, not a live cluster lookup,
+so bypassing it for CI/CD pipelines would silently produce a broken deployment.
+
+CONCERNS:
+- No mutual-exclusivity guard: if the user sets both existingSecret AND inline
+  clientId/clientSecret, this check passes. At runtime the deployment favours
+  existingSecret, but secret.yaml also renders an inline Secret — unused plaintext
+  credentials are committed to cluster state (secret sprawl). This is intentional:
+  enforcing mutual exclusivity is not implemented here.
+- Presence != validity: a clientSecret of a single space passes this check.
+  The real gate is the OIDC token exchange at runtime.
+- skipSanityChecks is intentionally absent: that flag documents a bypass for live
+  Secret lookups (kube API unavailable). Credential presence is a static value
+  check with no lookup cost; bypassing it would silently break OIDC auth.
+*/}}
+{{- define "mcp-kubecost.validateOIDC" -}}
+{{- if eq (.Values.config.authMode | default "none") "oidc" -}}
+{{- $hasInline := and .Values.config.oidc.clientId .Values.config.oidc.clientSecret -}}
+{{- $hasExisting := .Values.config.oidc.existingSecret -}}
+{{- if not (or $hasInline $hasExisting) -}}
+{{- fail "\n\nFAILURE [mcp-kubecost]: config.authMode is \"oidc\" but no OIDC credentials are configured.\n\nTo fix, choose one of:\n  Option A — inline credentials:\n    config.oidc.clientId: \"<your-client-id>\"\n    config.oidc.clientSecret: \"<your-client-secret>\"\n\n  Option B — reference a pre-existing Secret (required keys: OIDC_CLIENT_ID, OIDC_CLIENT_SECRET):\n    config.oidc.existingSecret: \"<secret-name>\"\n" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
