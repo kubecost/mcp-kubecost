@@ -223,7 +223,7 @@
         "defaultWindow": { "type": "string", "minLength": 1 },
         "fastmcpLogLevel": { "type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] },
         "useCacViews": { "type": "boolean" },
-        "authMode": { "type": "string", "enum": ["none", "open", "oidc", "api_key", "both"] },
+        "authMode": { "type": "string", "enum": ["none", "open", "oidc", "api_key"] },
         "requireClientApiKey": { "type": "boolean" },
         "fastmcpHttpAllowedHosts": { "type": "string" },
         "mcpServerName": { "type": "string", "minLength": 1 },

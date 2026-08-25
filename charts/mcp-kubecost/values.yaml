@@ -174,13 +174,12 @@ probes:
 
 config:
   # config.authMode controls how the MCP HTTP endpoint is protected.
-  # Supported values: none, open, oidc, api_key, both.
+  # Supported values: none, open, oidc, api_key.
   #   none    — no auth (default); NOT permitted when httproute or ingress is enabled
   #   open    — no auth enforcement, but explicitly acknowledged as exposed (required minimum when httproute or ingress is enabled)
   #   oidc    — require a valid OIDC token via FastMCP's OIDCProxy
   #   api_key — require X-API-KEY header (same as requireClientApiKey: true)
-  #   both    — require OIDC token AND X-API-KEY header (presence check only).
-  #             Helm rejects this mode when kubecostApiKey.value or existingSecret is set.
+  # To require both OIDC and X-API-KEY, set authMode: oidc and requireClientApiKey: true.
   authMode: "none"
   # config.kubecostApiBaseUrl is the required base URL of the Kubecost API (scheme + host only).
   # Must not include a port — use kubecostApiPort for that.
@@ -193,8 +192,7 @@ config:
   kubecostApiBasePath: /model
   # config.kubecostApiKey is sent to Kubecost as an X-API-KEY request header.
   # An MCP client may override it per request by sending its own X-API-KEY header.
-  # Use with authMode oidc or none for a shared outbound key. Combined with
-  # authMode both, Helm fails: that mode requires callers to send X-API-KEY.
+  # Use with authMode oidc, open, or none for a shared outbound key.
   # config.kubecostApiKey.value optionally creates a Secret containing the API key; prefer existingSecret.
   kubecostApiKey:
     value: ""

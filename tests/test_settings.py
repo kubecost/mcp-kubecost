@@ -6,7 +6,7 @@ import os
 
 import fastmcp
 
-from mcp_kubecost.config.settings import apply_http_rich_logging, get_settings, is_http_mode
+from mcp_kubecost.config.settings import AuthMode, _get_auth_mode, apply_http_rich_logging, get_settings, is_http_mode
 from mcp_kubecost.errors import ConfigError
 
 
@@ -102,6 +102,56 @@ class TestRequireClientApiKeySetting:
         get_settings.cache_clear()
         try:
             assert get_settings().to_loggable_dict()["KUBECOST_API_KEY"] == "***"
+        finally:
+            get_settings.cache_clear()
+
+
+class TestAuthModeSetting:
+    def test_both_is_rejected(self, monkeypatch):
+        """AUTH_MODE=both was removed; it must raise ConfigError with migration hint."""
+        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+        monkeypatch.setenv("AUTH_MODE", "both")
+        get_settings.cache_clear()
+        try:
+            try:
+                get_settings()
+            except ConfigError as exc:
+                msg = str(exc)
+                assert "AUTH_MODE='both' was removed" in msg
+                assert "REQUIRE_CLIENT_API_KEY=true" in msg
+            else:
+                raise AssertionError("expected ConfigError for AUTH_MODE=both")
+        finally:
+            get_settings.cache_clear()
+
+    def test_valid_modes_accepted(self, monkeypatch):
+        for mode, expected in (
+            ("none", AuthMode.NONE),
+            ("open", AuthMode.OPEN),
+            ("oidc", AuthMode.OIDC),
+            ("api_key", AuthMode.API_KEY),
+        ):
+            monkeypatch.setenv("AUTH_MODE", mode)
+            assert _get_auth_mode() == expected
+
+    def test_open_does_not_require_oidc_vars(self, monkeypatch):
+        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+        monkeypatch.setenv("AUTH_MODE", "open")
+        get_settings.cache_clear()
+        try:
+            settings = get_settings()
+            assert settings.auth_mode is AuthMode.OPEN
+            assert settings.require_client_api_key is False
+        finally:
+            get_settings.cache_clear()
+
+    def test_api_key_implies_require_client_api_key(self, monkeypatch):
+        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+        monkeypatch.setenv("AUTH_MODE", "api_key")
+        monkeypatch.delenv("REQUIRE_CLIENT_API_KEY", raising=False)
+        get_settings.cache_clear()
+        try:
+            assert get_settings().require_client_api_key is True
         finally:
             get_settings.cache_clear()
 

@@ -151,44 +151,18 @@ jobs:
             exit 1
           }
 
-      - name: Render authMode both with kubecostApiKey.value (expect failure)
+      - name: Reject removed authMode both
         run: |
           if out=$(helm template mcp-kubecost "$CHART_DIR" \
             --namespace mcp-kubecost \
-            --set config.authMode=both \
-            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
-            --set config.oidc.clientId=x \
-            --set config.oidc.clientSecret=y \
-            --set config.oidc.baseUrl=https://mcp.example.com \
-            --set config.kubecostApiKey.value=dummy-key 2>&1); then
-            echo "expected helm template to fail with authMode=both and kubecostApiKey.value" >&2
+            --set config.authMode=both 2>&1); then
+            echo "expected helm template to fail with removed authMode=both" >&2
             echo "$out" >&2
             exit 1
           fi
           echo "$out"
-          echo "$out" | grep -F -q 'config.authMode=both cannot be combined with config.kubecostApiKey' || {
-            echo "helm failed, but not because authMode=both was combined with kubecostApiKey.value:" >&2
-            echo "$out" >&2
-            exit 1
-          }
-
-      - name: Render authMode both with kubecostApiKey.existingSecret (expect failure)
-        run: |
-          if out=$(helm template mcp-kubecost "$CHART_DIR" \
-            --namespace mcp-kubecost \
-            --set config.authMode=both \
-            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
-            --set config.oidc.clientId=x \
-            --set config.oidc.clientSecret=y \
-            --set config.oidc.baseUrl=https://mcp.example.com \
-            --set config.kubecostApiKey.existingSecret=kubecost-api-key 2>&1); then
-            echo "expected helm template to fail with authMode=both and kubecostApiKey.existingSecret" >&2
-            echo "$out" >&2
-            exit 1
-          fi
-          echo "$out"
-          echo "$out" | grep -F -q 'config.authMode=both cannot be combined with config.kubecostApiKey' || {
-            echo "helm failed, but not because authMode=both was combined with kubecostApiKey.existingSecret:" >&2
+          echo "$out" | grep -F -q "value must be one of 'none', 'open', 'oidc', 'api_key'" || {
+            echo "helm failed, but not because authMode=both was rejected by the schema:" >&2
             echo "$out" >&2
             exit 1
           }
@@ -210,18 +184,21 @@ jobs:
             exit 1
           }
 
-      - name: Render authMode both without kubecostApiKey
+      - name: Render authMode oidc with requireClientApiKey and shared kubecostApiKey
         run: |
           helm template mcp-kubecost "$CHART_DIR" \
             --namespace mcp-kubecost \
-            --set config.authMode=both \
+            --set config.authMode=oidc \
+            --set config.requireClientApiKey=true \
+            --set config.kubecostApiKey.value=dummy-key \
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
             --set config.oidc.clientSecret=y \
             --set config.oidc.baseUrl=https://mcp.example.com \
-            > .helm-render/mcp-kubecost-authmode-both.yaml
-          grep -q 'AUTH_MODE: "both"' .helm-render/mcp-kubecost-authmode-both.yaml
-          ! grep -q 'name: KUBECOST_API_KEY' .helm-render/mcp-kubecost-authmode-both.yaml
+            > .helm-render/mcp-kubecost-oidc-apikey.yaml
+          grep -q 'AUTH_MODE: "oidc"' .helm-render/mcp-kubecost-oidc-apikey.yaml
+          grep -q 'REQUIRE_CLIENT_API_KEY: "true"' .helm-render/mcp-kubecost-oidc-apikey.yaml
+          grep -q 'name: KUBECOST_API_KEY' .helm-render/mcp-kubecost-oidc-apikey.yaml
 
       - name: Validate rendered Kubernetes resources
         run: >-
@@ -233,7 +210,7 @@ jobs:
           /work/.helm-render/mcp-kubecost-global.yaml
           /work/.helm-render/mcp-kubecost-secure.yaml
           /work/.helm-render/mcp-kubecost-oauth-ingress.yaml
-          /work/.helm-render/mcp-kubecost-authmode-both.yaml
+          /work/.helm-render/mcp-kubecost-oidc-apikey.yaml
 
       - name: Run Kubernetes best-practice linter
         run: >-
