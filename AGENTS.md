@@ -142,7 +142,7 @@ uv run scripts/show_sizing_profiles.py --check  # invariants only, exit 1 on fai
 
 FastMCP serializes each returned Pydantic model **twice** — once as a JSON `TextContent` block and once as `structuredContent`. This is deliberate: the MCP specification (2025-11-25) says a tool returning structured content SHOULD also return the serialized JSON in a text block, for clients that do not read `structuredContent`. Do not "optimize" it away with `ToolResult` or middleware. To shrink a response, shrink the payload — fewer fields, lower `top_n`.
 
-`_VERSION` in `kubecost_tools.py` is a single module constant applied to **every** tool's `version=`, so bumping it relabels all 11. Bump on a breaking response-shape change and update the "Contract version" line in the module docstring to match. Currently **7.0**.
+`_VERSION` in `kubecost_tools.py` is a single module constant applied to **every** tool's `version=`, so bumping it relabels all 11. Bump on a breaking response-shape change and update the "Contract version" line in the module docstring to match. Currently **8.0**.
 
 ## Code Conventions
 
@@ -160,6 +160,8 @@ FastMCP serializes each returned Pydantic model **twice** — once as a JSON `Te
 All configuration flows through `get_settings()` in [`config/settings.py`](src/mcp_kubecost/config/settings.py) — `client.py` reads no environment variables directly. [`.env.example`](.env.example) is the complete, accurate template; copy it to `.env`.
 
 `KUBECOST_BASE_URL` is the only required variable. The rest have defaults: `KUBECOST_API_BASE_PATH`, `KUBECOST_API_KEY`, `REQUIRE_CLIENT_API_KEY`, `KUBECOST_SSL_VERIFY`, `SSL_CA_BUNDLE`, `REQUEST_TIMEOUT_SECONDS`, `REQUEST_RETRY_COUNT`, `DEFAULT_WINDOW`, `USE_CAC_VIEWS`, `FASTMCP_LOG_LEVEL`, `FASTMCP_ENABLE_RICH_LOGGING` (forced off in HTTP mode), `FASTMCP_TELEMETRY_MODE`, `OTEL_*`, `OIDC_REDIRECT_PATH` (`/auth-mcp`; use `/auth/callback` when MCP has a dedicated hostname). Opaque OIDC access tokens are detected from the token response — there is no `OIDC_VERIFY_ID_TOKEN` setting. `MCP_SERVER_NAME` is read in `server.py` and is not in `.env.example`.
+
+Two variables are read outside `get_settings()`, in [`otel_entrypoint.py`](src/mcp_kubecost/otel_entrypoint.py), because they shape the `fastmcp run` argv before the server process exists: `FASTMCP_TELEMETRY_MODE` and `MCP_HTTP_PATH` (the route the MCP endpoint is served on, `--path`; default `/mcp`, set `/` behind a prefix-stripping proxy). The entrypoint calls `load_dotenv()` itself so both still work from `.env`, and validates `MCP_HTTP_PATH` the way `_get_oidc_redirect_path()` validates its input. Running `fastmcp run fastmcp-http.json` directly bypasses the entrypoint and ignores both.
 
 Add new settings to `Settings` and `.env.example` together; do not read `os.getenv` from a tool or client module.
 

@@ -37,6 +37,7 @@ jobs:
           mkdir -p .helm-render
           helm template mcp-kubecost "$CHART_DIR" --namespace mcp-kubecost > .helm-render/mcp-kubecost-default.yaml
           grep -q 'image: "icr.io/kubecost/mcp-kubecost:' .helm-render/mcp-kubecost-default.yaml
+          grep -q 'MCP_HTTP_PATH: "/mcp"' .helm-render/mcp-kubecost-default.yaml
 
       - name: Render Kubecost parent global image settings (public.ecr.aws override)
         run: |
@@ -200,6 +201,178 @@ jobs:
           grep -q 'REQUIRE_CLIENT_API_KEY: "true"' .helm-render/mcp-kubecost-oidc-apikey.yaml
           grep -q 'name: KUBECOST_API_KEY' .helm-render/mcp-kubecost-oidc-apikey.yaml
 
+      # A path-prefixed config.oidc.baseUrl means a reverse proxy strips that
+      # prefix, so the MCP endpoint must move to "/". This is the recommended
+      # shared-Kubecost-hostname layout.
+      - name: Render OIDC sub-path layout (prefixed baseUrl derives MCP_HTTP_PATH=/)
+        run: |
+          helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.authMode=oidc \
+            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
+            --set config.oidc.clientId=x \
+            --set config.oidc.clientSecret=y \
+            --set config.oidc.baseUrl=https://kubecost.example.com/mcp \
+            > .helm-render/mcp-kubecost-oidc-subpath.yaml
+          grep -q 'MCP_HTTP_PATH: "/"' .helm-render/mcp-kubecost-oidc-subpath.yaml
+          grep -q 'OIDC_BASE_URL: "https://kubecost.example.com/mcp"' .helm-render/mcp-kubecost-oidc-subpath.yaml
+
+      # The derivation reads config.oidc.baseUrl, which is only honoured at
+      # runtime under authMode=oidc. A deployment that moved off OIDC but kept
+      # its old baseUrl must keep serving /mcp rather than silently relocating.
+      - name: Derive MCP route without OIDC (authMode gate)
+        run: |
+          helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.oidc.baseUrl=https://kubecost.example.com/mcp \
+            > .helm-render/mcp-kubecost-nonoidc-prefix.yaml
+          grep -q 'MCP_HTTP_PATH: "/mcp"' .helm-render/mcp-kubecost-nonoidc-prefix.yaml
+          # exposeAuthRoutes is likewise inert outside authMode=oidc: no OAuth
+          # Ingress renders, so there is nothing for the prefix to conflict with.
+          helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.oidc.baseUrl=https://kubecost.example.com/mcp \
+            --set config.oidc.exposeAuthRoutes=true \
+            > /dev/null
+          # A dedicated MCP hostname keeps the default route.
+          helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.authMode=oidc \
+            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
+            --set config.oidc.clientId=x \
+            --set config.oidc.clientSecret=y \
+            --set config.oidc.baseUrl=https://mcp.example.com \
+            > .helm-render/mcp-kubecost-oidc-dedicated-host.yaml
+          grep -q 'MCP_HTTP_PATH: "/mcp"' .helm-render/mcp-kubecost-oidc-dedicated-host.yaml
+
+      - name: Render explicit config.http.path override
+        run: |
+          helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.http.path=/custom \
+            > .helm-render/mcp-kubecost-http-path.yaml
+          grep -q 'MCP_HTTP_PATH: "/custom"' .helm-render/mcp-kubecost-http-path.yaml
+          # config.http may be absent entirely (umbrella charts that omit it).
+          helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.http=null \
+            > .helm-render/mcp-kubecost-http-null.yaml
+          grep -q 'MCP_HTTP_PATH: "/mcp"' .helm-render/mcp-kubecost-http-null.yaml
+
+      - name: Reject config.http.path without a leading slash (expect failure)
+        run: |
+          if out=$(helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.http.path=mcp 2>&1); then
+            echo "expected helm template to fail with a schema-invalid config.http.path" >&2
+            echo "$out" >&2
+            exit 1
+          fi
+          echo "$out"
+          echo "$out" | grep -F -q "does not match pattern '^(|/.*)$'" || {
+            echo "helm failed, but not because config.http.path lacked a leading slash:" >&2
+            echo "$out" >&2
+            exit 1
+          }
+
+      - name: Render prefixed baseUrl with exposeAuthRoutes (expect failure)
+        run: |
+          if out=$(helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.authMode=oidc \
+            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
+            --set config.oidc.clientId=x \
+            --set config.oidc.clientSecret=y \
+            --set config.oidc.baseUrl=https://kubecost.example.com/mcp \
+            --set config.oidc.exposeAuthRoutes=true 2>&1); then
+            echo "expected helm template to fail combining a baseUrl path prefix with exposeAuthRoutes" >&2
+            echo "$out" >&2
+            exit 1
+          fi
+          echo "$out"
+          echo "$out" | grep -F -q 'config.oidc.exposeAuthRoutes cannot be combined with the path prefix' || {
+            echo "helm failed, but not because exposeAuthRoutes conflicted with the path prefix:" >&2
+            echo "$out" >&2
+            exit 1
+          }
+
+      - name: Render prefixed baseUrl with a non-root config.http.path (expect failure)
+        run: |
+          if out=$(helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.authMode=oidc \
+            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
+            --set config.oidc.clientId=x \
+            --set config.oidc.clientSecret=y \
+            --set config.oidc.baseUrl=https://kubecost.example.com/mcp \
+            --set config.http.path=/mcp 2>&1); then
+            echo "expected helm template to fail with a baseUrl prefix and a non-root config.http.path" >&2
+            echo "$out" >&2
+            exit 1
+          fi
+          echo "$out"
+          echo "$out" | grep -F -q 'config.http.path must then be "/"' || {
+            echo "helm failed, but not because config.http.path disagreed with the path prefix:" >&2
+            echo "$out" >&2
+            exit 1
+          }
+
+      # Without a scheme, urlParse reads the whole value as a path, so
+      # "kubecost.example.com/mcp" would relocate the endpoint on the strength
+      # of a hostname.
+      - name: Render scheme-less baseUrl (expect failure)
+        run: |
+          if out=$(helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.authMode=oidc \
+            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
+            --set config.oidc.clientId=x \
+            --set config.oidc.clientSecret=y \
+            --set config.oidc.baseUrl=kubecost.example.com/mcp 2>&1); then
+            echo "expected helm template to fail with a scheme-less config.oidc.baseUrl" >&2
+            echo "$out" >&2
+            exit 1
+          fi
+          echo "$out"
+          echo "$out" | grep -F -q 'is missing a scheme' || {
+            echo "helm failed, but not because config.oidc.baseUrl had no scheme:" >&2
+            echo "$out" >&2
+            exit 1
+          }
+
+      # The issuer scheme rule mirrors the MCP SDK's validate_issuer_url:
+      # https everywhere, with an http carve-out for localhost only.
+      - name: Accept an http localhost issuer
+        run: |
+          helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.authMode=oidc \
+            --set config.oidc.issuerUrl=http://localhost:8080/realms/x/.well-known/openid-configuration \
+            --set config.oidc.clientId=x \
+            --set config.oidc.clientSecret=y \
+            --set config.oidc.baseUrl=https://mcp.example.com \
+            > /dev/null
+
+      - name: Render plaintext non-localhost issuer (expect failure)
+        run: |
+          if out=$(helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.authMode=oidc \
+            --set config.oidc.issuerUrl=http://keycloak.keycloak.svc/realms/x/.well-known/openid-configuration \
+            --set config.oidc.clientId=x \
+            --set config.oidc.clientSecret=y \
+            --set config.oidc.baseUrl=https://mcp.example.com 2>&1); then
+            echo "expected helm template to fail with a plaintext non-localhost issuerUrl" >&2
+            echo "$out" >&2
+            exit 1
+          fi
+          echo "$out"
+          echo "$out" | grep -F -q 'config.oidc.issuerUrl must be an https:// URL' || {
+            echo "helm failed, but not because issuerUrl was plaintext on a non-localhost host:" >&2
+            echo "$out" >&2
+            exit 1
+          }
+
       - name: Validate rendered Kubernetes resources
         run: >-
           docker run --rm
@@ -211,6 +384,8 @@ jobs:
           /work/.helm-render/mcp-kubecost-secure.yaml
           /work/.helm-render/mcp-kubecost-oauth-ingress.yaml
           /work/.helm-render/mcp-kubecost-oidc-apikey.yaml
+          /work/.helm-render/mcp-kubecost-oidc-subpath.yaml
+          /work/.helm-render/mcp-kubecost-nonoidc-prefix.yaml
 
       - name: Run Kubernetes best-practice linter
         run: >-
