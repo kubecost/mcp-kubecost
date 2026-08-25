@@ -1,1 +1,2 @@
+{{- include "mcp-kubecost.validateOIDC" . -}}
 The mcp-kubecost server has been installed as {{ include "mcp-kubecost.fullname" . }}.
