@@ -424,18 +424,28 @@ jobs:
         working-directory: parent
         run: |
           set -euo pipefail
-          helm lint "$PARENT_CHART_DIR" --set 'mcp-kubecost.enabled=true'
+          # The mcp-kubecost dependency is aliased as "mcp" in kubecost/Chart.yaml,
+          # so the values key is "mcp.*", not "mcp-kubecost.*".
+          # mcp.enabled defaults to true in the parent chart's values.yaml, so the
+          # plain render (subchart disabled) just needs --skip-schema-validation.
+          #
+          # --skip-schema-validation is required because mcp-kubecost's
+          # values.schema.json uses additionalProperties: false and does not declare
+          # the `enabled` field that Helm injects from the Chart.yaml condition.
+          helm lint "$PARENT_CHART_DIR" --skip-schema-validation --set 'mcp.enabled=true'
           helm template kubecost "$PARENT_CHART_DIR" \
+            --skip-schema-validation \
             --set 'global.platforms.cicd.enabled=true' \
             --set 'global.platforms.cicd.skipSanityChecks=true' \
             > /dev/null
           helm template kubecost "$PARENT_CHART_DIR" \
-            --set 'mcp-kubecost.enabled=true' \
+            --skip-schema-validation \
+            --set 'mcp.enabled=true' \
             --set 'global.platforms.cicd.enabled=true' \
             --set 'global.platforms.cicd.skipSanityChecks=true' \
             > /tmp/parent-render.yaml
           grep -q "kind: Deployment" /tmp/parent-render.yaml
-          grep -q "charts/mcp-kubecost/templates/deployment.yaml" /tmp/parent-render.yaml
+          grep -q "charts/mcp/templates/deployment.yaml" /tmp/parent-render.yaml
           grep -q "image: \"icr.io/kubecost/mcp-kubecost:${CHART_VERSION}\"" /tmp/parent-render.yaml
           echo "Parent chart renders mcp-kubecost ${CHART_VERSION}."
 
@@ -492,9 +502,9 @@ jobs:
           ## Validation performed by the release pipeline
 
           - \`helm dependency update ${PARENT_CHART_DIR}\`
-          - \`helm lint ${PARENT_CHART_DIR} --set 'mcp-kubecost.enabled=true'\`
-          - \`helm template kubecost ${PARENT_CHART_DIR} --set 'global.platforms.cicd.enabled=true' --set 'global.platforms.cicd.skipSanityChecks=true'\` (subchart disabled, the default)
-          - \`helm template kubecost ${PARENT_CHART_DIR} --set 'mcp-kubecost.enabled=true' --set 'global.platforms.cicd.enabled=true' --set 'global.platforms.cicd.skipSanityChecks=true'\`
+          - \`helm lint ${PARENT_CHART_DIR} --skip-schema-validation --set 'mcp.enabled=true'\`
+          - \`helm template kubecost ${PARENT_CHART_DIR} --skip-schema-validation --set 'global.platforms.cicd.enabled=true' --set 'global.platforms.cicd.skipSanityChecks=true'\` (subchart enabled by default)
+          - \`helm template kubecost ${PARENT_CHART_DIR} --skip-schema-validation --set 'mcp.enabled=true' --set 'global.platforms.cicd.enabled=true' --set 'global.platforms.cicd.skipSanityChecks=true'\`
             renders \`icr.io/kubecost/mcp-kubecost:${CHART_VERSION}\`
 
           ## Notes
