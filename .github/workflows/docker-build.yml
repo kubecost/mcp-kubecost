@@ -70,7 +70,7 @@ jobs:
 
       - name: Comment image digest on PR
         if: github.event_name == 'pull_request' && github.repository == 'kubecost/mcp-kubecost'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const digest = '${{ steps.build.outputs.digest }}';
