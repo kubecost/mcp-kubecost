@@ -114,11 +114,11 @@ Create a second confidential client for the MCP with these settings:
 | ----------------------- | ------------------------------------------------------------------------------------ |
 | Client authentication   | On — this is a confidential client with a secret                                     |
 | Authorization code flow | Enabled (standard flow)                                                              |
-| Valid redirect URIs     | `{config.oidc.baseUrl}{onfig.oidc.redirectPath}`                                     |
+| Valid redirect URIs     | `{config.oidc.baseUrl}{config.oidc.redirectPath}`                                    |
 | Scopes                  | Must include `openid` and `profile` (the `OIDC_REQUIRED_SCOPES` default)             |
 | Consent                 | Off, unless you specifically want a consent screen for agent access                  |
 
-Install the mcp-kubecost chart at a Secret holding only the MCP client's credentials:
+Then point the chart at a Secret holding only the MCP client's credentials:
 
 ```bash
 kubectl create secret generic mcp-oidc \

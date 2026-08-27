@@ -1,6 +1,6 @@
 # Authentication and Security<!-- omit in toc -->
 
-This server has two independent auth, optional, layers. One protects the **MCP HTTP endpoint** (who may call tools). The other authenticates **outbound calls to Kubecost** (which Kubecost tenant/credential the server uses). They are configured separately and can be combined.
+This server has two independent, optional auth layers. One protects the **MCP HTTP endpoint** (who may call tools). The other authenticates **outbound calls to Kubecost** (which Kubecost tenant/credential the server uses). They are configured separately and can be combined.
 
 - [Authentication options](#authentication-options)
 - [Protecting the MCP HTTP endpoint (OIDC)](#protecting-the-mcp-http-endpoint-oidc)
@@ -185,7 +185,7 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 | `OIDC_REDIRECT_PATH`         | `config.oidc.redirectPath`           | IdP callback path. Default `/auth-mcp`. Use `/auth/callback` when MCP has a dedicated hostname |
 | `OIDC_AUDIENCE`              | `config.oidc.audience`               | Optional token audience (JWT access tokens only; omit for opaque IdPs)                         |
 | `OIDC_REQUIRED_SCOPES`       | `config.oidc.requiredScopes`         | Default `openid,profile`                                                                       |
-| `KUBECOST_API_KEY`           | `config.kubecostApiKey.existingSecret` | Name of a pre-created Secret whose key (default `KUBECOST_API_KEY`) holds the fallback key sent to Kubecost. Create with: `kubectl create secret generic <name> --from-literal=KUBECOST_API_KEY=<key>` — or provision via CI/CD. |
+| `KUBECOST_API_KEY`           | `config.kubecostApiKey` (`.value` or `.existingSecret`) | Fallback key sent to Kubecost. Prefer `.existingSecret` naming a pre-created Secret (`kubectl create secret generic <name> --from-literal=KUBECOST_API_KEY=<key>`, or provision via CI/CD); `.value` inline makes the chart mint the Secret. `.key` sets the Secret key, default `KUBECOST_API_KEY` |
 | `REQUIRE_CLIENT_API_KEY`     | `config.requireClientApiKey`         | Require inbound `X-API-KEY` on HTTP                                                            |
 | `KUBECOST_SSL_VERIFY`        | `config.ssl.verify`                  | TLS verify for Kubecost                                                                        |
 | `SSL_CA_BUNDLE`              | `config.ssl.caBundle`                | Custom CA path (implies verify)                                                                |
