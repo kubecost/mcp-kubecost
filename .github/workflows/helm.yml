@@ -291,7 +291,6 @@ jobs:
           /work/.helm-render/mcp-kubecost-default.yaml
           /work/.helm-render/mcp-kubecost-global.yaml
           /work/.helm-render/mcp-kubecost-secure.yaml
-          /work/.helm-render/mcp-kubecost-oauth-ingress.yaml
           /work/.helm-render/mcp-kubecost-oidc-apikey.yaml
           /work/.helm-render/mcp-kubecost-oidc-subpath.yaml
           /work/.helm-render/mcp-kubecost-nonoidc-prefix.yaml
