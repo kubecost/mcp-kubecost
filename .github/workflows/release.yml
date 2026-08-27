@@ -425,9 +425,15 @@ jobs:
         run: |
           set -euo pipefail
           helm lint "$PARENT_CHART_DIR" --set 'mcp-kubecost.enabled=true'
-          helm template kubecost "$PARENT_CHART_DIR" > /dev/null
           helm template kubecost "$PARENT_CHART_DIR" \
-            --set 'mcp-kubecost.enabled=true' > /tmp/parent-render.yaml
+            --set 'global.platforms.cicd.enabled=true' \
+            --set 'global.platforms.cicd.skipSanityChecks=true' \
+            > /dev/null
+          helm template kubecost "$PARENT_CHART_DIR" \
+            --set 'mcp-kubecost.enabled=true' \
+            --set 'global.platforms.cicd.enabled=true' \
+            --set 'global.platforms.cicd.skipSanityChecks=true' \
+            > /tmp/parent-render.yaml
           grep -q "kind: Deployment" /tmp/parent-render.yaml
           grep -q "charts/mcp-kubecost/templates/deployment.yaml" /tmp/parent-render.yaml
           grep -q "image: \"icr.io/kubecost/mcp-kubecost:${CHART_VERSION}\"" /tmp/parent-render.yaml
@@ -487,8 +493,8 @@ jobs:
 
           - \`helm dependency update ${PARENT_CHART_DIR}\`
           - \`helm lint ${PARENT_CHART_DIR} --set 'mcp-kubecost.enabled=true'\`
-          - \`helm template kubecost ${PARENT_CHART_DIR}\` (subchart disabled, the default)
-          - \`helm template kubecost ${PARENT_CHART_DIR} --set 'mcp-kubecost.enabled=true'\`
+          - \`helm template kubecost ${PARENT_CHART_DIR} --set 'global.platforms.cicd.enabled=true' --set 'global.platforms.cicd.skipSanityChecks=true'\` (subchart disabled, the default)
+          - \`helm template kubecost ${PARENT_CHART_DIR} --set 'mcp-kubecost.enabled=true' --set 'global.platforms.cicd.enabled=true' --set 'global.platforms.cicd.skipSanityChecks=true'\`
             renders \`icr.io/kubecost/mcp-kubecost:${CHART_VERSION}\`
 
           ## Notes
