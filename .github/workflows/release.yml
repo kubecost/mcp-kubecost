@@ -68,7 +68,7 @@ jobs:
           CHART_FILE="charts/mcp-kubecost/Chart.yaml"
           if [ -f "$CHART_FILE" ]; then
             sed -i "s|^version:.*|version: ${PY_VERSION}|" "$CHART_FILE"
-            sed -i "s|^appVersion:.*|appVersion: \"${PY_VERSION}\"|" "$CHART_FILE"
+            sed -i "s|^appVersion:.*|appVersion: ${PY_VERSION}|" "$CHART_FILE"
             echo "Updated $CHART_FILE version and appVersion to $PY_VERSION"
           fi
 

@@ -1,11 +1,9 @@
 # Authentication and Security<!-- omit in toc -->
 
-This server has two independent auth layers. One protects the **MCP HTTP endpoint** (who may call tools). The other authenticates **outbound calls to Kubecost** (which Kubecost tenant/credential the server uses). They are configured separately and can be combined.
+This server has two independent auth, optional, layers. One protects the **MCP HTTP endpoint** (who may call tools). The other authenticates **outbound calls to Kubecost** (which Kubecost tenant/credential the server uses). They are configured separately and can be combined.
 
-- [Two layers](#two-layers)
 - [Authentication options](#authentication-options)
 - [Protecting the MCP HTTP endpoint (OIDC)](#protecting-the-mcp-http-endpoint-oidc)
-  - [OAuth proxy flow](#oauth-proxy-flow)
   - [Identity provider setup](#identity-provider-setup)
   - [Reusing the Kubecost UI's OIDC client](#reusing-the-kubecost-uis-oidc-client)
   - [Shared Kubecost frontend hostname](#shared-kubecost-frontend-hostname)
@@ -17,28 +15,6 @@ This server has two independent auth layers. One protects the **MCP HTTP endpoin
 - [Pod hardening and TLS](#pod-hardening-and-tls)
 - [STDIO vs HTTP](#stdio-vs-http)
 - [Troubleshooting](#troubleshooting)
-
-## Two layers
-
-```mermaid
-flowchart LR
-  Client["MCP client<br/>Claude, Codex, fastmcp"]
-  MCP["mcp-kubecost<br/>HTTP :3030"]
-  IdP["OIDC provider<br/>Keycloak, Azure, Okta"]
-  KC["Kubecost API"]
-
-  Client -->|"1. OIDC / OAuth<br/>Bearer token"| MCP
-  MCP -->|"login / token exchange"| IdP
-  Client -->|"optional X-API-KEY"| MCP
-  MCP -->|"2. X-API-KEY<br/>to Kubecost"| KC
-```
-
-| Layer                  | Protects                   | Default                 |
-| ---------------------- | -------------------------- | ----------------------- |
-| MCP HTTP (`AUTH_MODE`) | Who can call `/mcp`        | `none` — open           |
-| Kubecost API key       | Outbound Kubecost requests | unset — unauthenticated |
-
-STDIO has no HTTP headers, so MCP OIDC and `REQUIRE_CLIENT_API_KEY` do not apply there. Kubecost can still use `KUBECOST_API_KEY` from the environment.
 
 ## Authentication options
 
@@ -75,40 +51,13 @@ When `AUTH_MODE=oidc`, the server builds a FastMCP [`OIDCProxy`](https://gofastm
 
 OAuth client registrations and tokens stay in **process memory** (`MemoryStore`). That is required for `readOnlyRootFilesystem`: FastMCP’s default file store mkdirs under `~/.local/share/fastmcp/oauth-proxy/` and fails on a read-only root. Clients re-register after a pod restart. Consent is delegated to the identity provider (`require_authorization_consent="external"`).
 
-### OAuth proxy flow
-
-```mermaid
-sequenceDiagram
-  participant C as MCP client
-  participant M as mcp-kubecost
-  participant I as Identity provider
-
-  C->>M: POST /mcp (no token)
-  M-->>C: 401 WWW-Authenticate resource_metadata
-  C->>M: GET /.well-known/oauth-protected-resource/mcp
-  C->>M: POST /register (DCR)
-  M-->>C: 201 client_id / client_secret
-  C->>M: GET /authorize
-  M->>I: redirect to IdP authorize
-  I-->>C: login / consent
-  I->>M: GET callback?code=...
-  M->>I: POST token endpoint
-  M-->>C: redirect to client loopback with code
-  C->>M: POST /token
-  C->>M: POST /mcp Authorization: Bearer
-```
 
 ### Identity provider setup
 
-Register a confidential OAuth client on the provider. The **Valid redirect URI** is this server’s callback, not the MCP client’s localhost URL:
-
-```
-{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}
-```
 
 `OIDC_REDIRECT_PATH` defaults to `/auth-mcp` — most deployments run this server as a sub-path on an existing Kubecost frontend, so the default targets that case. Example: `OIDC_BASE_URL=https://kubecost.example.com/mcp` → add `https://kubecost.example.com/mcp/auth-mcp`. Register that path **exactly**; do not append `/callback`. The redirect URI always includes the path prefix from `OIDC_BASE_URL`, so changing that prefix means re-registering the URI at the IdP.
 
-When this server has a **dedicated hostname** (not a Kubecost sub-path), use `/auth/callback` instead — FastMCP's own `OIDCProxy` default — see [Shared Kubecost frontend hostname](#shared-kubecost-frontend-hostname) for why `/auth-mcp` is otherwise required.
+When this server has a **dedicated hostname** (not a Kubecost sub-path), use `/auth/callback` instead — see [Shared Kubecost frontend hostname](#shared-kubecost-frontend-hostname) for why `/auth-mcp` is otherwise required.
 
 The MCP client’s own redirect (`http://localhost:<port>/callback` or Claude’s `https://claude.ai/api/mcp/auth_callback`) is registered with FastMCP via DCR. Do not put those URLs on the identity provider. This server allowlists those MCP-client redirects (`http://localhost:*`, `http://127.0.0.1:*`, and Claude’s callback) so an unknown `client_id` after a pod restart cannot open-redirect to an arbitrary host. The IdP Valid redirect URI remains only `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}`.
 
@@ -149,9 +98,7 @@ The IdP URI is `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}` **exactly** — do not appe
 With a path-prefixed `OIDC_BASE_URL`, the frontend nginx strips the prefix and
 this server serves everything at its root, so `config.http.path` must be `/`
 (this chart derives that for you from `config.oidc.baseUrl`). The prefix-stripping
-locations themselves belong to whoever owns the Kubecost frontend nginx — this
-chart cannot render them, since `config.oidc.exposeAuthRoutes` publishes the OAuth
-paths at the host **root** and is rejected alongside a path prefix. The paths that
+locations belong to whoever owns the Kubecost frontend nginx. The paths that
 must reach this Service **without** `auth_request`, with the prefix stripped:
 
 - `/mcp` and `/mcp/*` — the MCP endpoint plus `/mcp/authorize`, `/mcp/token`, `/mcp/register`, `/mcp/consent`, `/mcp/auth-mcp`
@@ -179,7 +126,7 @@ Kubecost's `/auth`, or it is still treated as `auth_request`.
 
 ```mermaid
 flowchart TB
-  subgraph before ["Without exposeAuthRoutes or frontend locations"]
+  subgraph before ["Without frontend nginx locations"]
     C1[MCP client] --> N1[Kubecost frontend nginx]
     N1 -->|"/mcp"| M1[mcp-kubecost]
     N1 -->|"/register, /.well-known/*, /auth/*"| S1[Kubecost SSO → Keycloak HTML]
@@ -191,9 +138,7 @@ flowchart TB
   end
 ```
 
-If you cannot change the Kubecost frontend nginx, set `config.oidc.exposeAuthRoutes=true` so this chart creates an Ingress for those paths on the host from `config.oidc.baseUrl`. This is mutually exclusive with a path-prefixed `baseUrl` (which requires that nginx to strip the prefix); setting both fails the render. Point `config.oidc.authIngress.tlsSecretName` at the existing TLS secret when the host already terminates TLS. Do **not** Ingress-prefix `/auth`.
-
-A dedicated MCP hostname (chart `httpRoute` / `ingress`) avoids this entirely: set `config.oidc.redirectPath=/auth/callback` explicitly (it is no longer the default) and put OAuth routes at `/` on that host.
+If you cannot change the Kubecost frontend nginx, the cleanest resolution is to give the MCP server its own hostname via `httpRoute` or `ingress`, set `config.oidc.baseUrl` to that root hostname (no path prefix), and set `config.oidc.redirectPath=/auth/callback`.
 
 ### Unauthenticated HTTP paths
 
@@ -210,7 +155,7 @@ Uvicorn access logs for `GET /health` are dropped. Do not point probes at `/mcp`
 
 By default the server calls Kubecost unauthenticated. That is fine for local port-forwards, or when another layer already authenticates to Kubecost.
 
-When using Kubecost Enterprise with SAML/OIDC/RBAC, Kubecost expects an API key. The key is sent as an **`X-API-KEY` request header**.
+When using Kubecost Enterprise with SSO enabled, Kubecost expects an API key. The key is sent as an **`X-API-KEY` request header**.
 
 The MCP supports both per MCP client keys or a shared key assigned to the MCP server.
 
@@ -240,7 +185,7 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 | `OIDC_REDIRECT_PATH`         | `config.oidc.redirectPath`           | IdP callback path. Default `/auth-mcp`. Use `/auth/callback` when MCP has a dedicated hostname |
 | `OIDC_AUDIENCE`              | `config.oidc.audience`               | Optional token audience (JWT access tokens only; omit for opaque IdPs)                         |
 | `OIDC_REQUIRED_SCOPES`       | `config.oidc.requiredScopes`         | Default `openid,profile`                                                                       |
-| `KUBECOST_API_KEY`           | `config.kubecostApiKey`              | Fallback key sent to Kubecost                                                                  |
+| `KUBECOST_API_KEY`           | `config.kubecostApiKey.existingSecret` | Name of a pre-created Secret whose key (default `KUBECOST_API_KEY`) holds the fallback key sent to Kubecost. Create with: `kubectl create secret generic <name> --from-literal=KUBECOST_API_KEY=<key>` — or provision via CI/CD. |
 | `REQUIRE_CLIENT_API_KEY`     | `config.requireClientApiKey`         | Require inbound `X-API-KEY` on HTTP                                                            |
 | `KUBECOST_SSL_VERIFY`        | `config.ssl.verify`                  | TLS verify for Kubecost                                                                        |
 | `SSL_CA_BUNDLE`              | `config.ssl.caBundle`                | Custom CA path (implies verify)                                                                |
@@ -262,14 +207,10 @@ helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
   --set config.authMode=oidc \
   --set config.oidc.issuerUrl=https://keycloak.example.com/realms/kubecost/.well-known/openid-configuration \
   --set config.oidc.baseUrl=https://mcp.example.com \
-  --set config.oidc.existingSecret=mcp-oidc \
-  --set config.oidc.exposeAuthRoutes=true \
-  --set config.oidc.authIngress.tlsSecretName=mcp-tls
+  --set config.oidc.existingSecret=mcp-oidc
 ```
 
-That example is the shared-key layout (`authMode: oidc` plus `kubecostApiKey`). To also require each caller to send `X-API-KEY`, set `config.requireClientApiKey: true`.
-
-When MCP has a dedicated hostname, set `config.oidc.redirectPath=/auth/callback` and register that URI on the IdP. `exposeAuthRoutes` is off by default; turn it on only if the frontend nginx does not already proxy the OAuth paths.
+That example is the dedicated-hostname layout (`authMode: oidc` with a root `baseUrl`). Set `config.oidc.redirectPath=/auth/callback` and register that URI on the IdP. To also require each caller to send `X-API-KEY`, set `config.requireClientApiKey: true`.
 
 ## Pod hardening and TLS
 
@@ -296,7 +237,7 @@ Local HTTP: `uv run fastmcp run fastmcp-http.json` (port 3030).
 ## Troubleshooting
 
 **MCP client panics parsing HTML on `/register` or `/.well-known/...`**
-Kubecost frontend SSO intercepted the OAuth path. Give `config.oidc.baseUrl` a path prefix (`https://kubecost.example.com/mcp`) so the OAuth paths move under `/mcp/`, enable `config.oidc.exposeAuthRoutes`, or give the MCP server its own hostname.
+Kubecost frontend SSO intercepted the OAuth path. Give `config.oidc.baseUrl` a path prefix (`https://kubecost.example.com/mcp`) so OAuth paths move under `/mcp/` (and update the frontend nginx to proxy them), or give the MCP server its own dedicated hostname.
 
 **Keycloak `invalid_redirect_uri`**
 Add `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}` to the client’s Valid redirect URIs — the value in the Keycloak error URL’s `redirect_uri=` query param. Default is `{OIDC_BASE_URL}/auth-mcp` with no extra `/callback`. Dedicated hostname: `{OIDC_BASE_URL}/auth/callback`. Do not add the MCP client’s localhost or Claude callback there.

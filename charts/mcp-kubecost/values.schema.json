@@ -269,17 +269,7 @@
             "requiredScopes": { "type": "string" },
             "clientId": { "type": "string" },
             "clientSecret": { "type": "string" },
-            "existingSecret": { "type": "string" },
-            "exposeAuthRoutes": { "type": "boolean" },
-            "authIngress": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "className": { "type": "string" },
-                "annotations": { "type": "object" },
-                "tlsSecretName": { "type": "string" }
-              }
-            }
+            "existingSecret": { "type": "string" }
           }
         }
       },
