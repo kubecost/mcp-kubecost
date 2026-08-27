@@ -203,17 +203,11 @@ Fail when a path-prefixed config.oidc.baseUrl is combined with an MCP endpoint
 that is not served at "/". These two settings must agree or OAuth discovery
 silently resolves to the wrong URLs.
 
-Both checks inherit the authMode == "oidc" gate from oidcBasePathPrefix, so a
-non-OIDC deployment carrying a stale baseUrl is never failed here. That matters
-for the exposeAuthRoutes check in particular: ingress-oauth.yaml only renders
-when authMode is "oidc", so outside that mode there is no Ingress to conflict
-with and nothing to report.
+The check inherits the authMode == "oidc" gate from oidcBasePathPrefix, so a
+non-OIDC deployment carrying a stale baseUrl is never failed here.
 */}}
 {{- define "mcp-kubecost.validateHttpPath" -}}
 {{- $prefix := include "mcp-kubecost.oidcBasePathPrefix" . }}
-{{- if and $prefix .Values.config.oidc.exposeAuthRoutes }}
-{{- fail (printf "\n\nFAILURE [mcp-kubecost]: config.oidc.exposeAuthRoutes cannot be combined with the path prefix %q in config.oidc.baseUrl. exposeAuthRoutes publishes the OAuth paths at the root of the baseUrl host for deployments that cannot change the Kubecost frontend nginx; the path prefix requires that nginx to strip the prefix. Pick one.\n" $prefix) }}
-{{- end }}
 {{- if and $prefix (ne (include "mcp-kubecost.httpPath" .) "/") }}
 {{- fail (printf "\n\nFAILURE [mcp-kubecost]: config.oidc.baseUrl has the path prefix %q, which means a reverse proxy strips that prefix before requests reach this Service. config.http.path must then be \"/\" so the MCP endpoint and the prefix-stripped OAuth paths both resolve here.\n\nTo fix, either:\n  - set config.http.path: \"/\"  (leave it empty to derive this automatically), or\n  - drop the path from config.oidc.baseUrl and serve the MCP endpoint at its own hostname.\n" $prefix) }}
 {{- end }}

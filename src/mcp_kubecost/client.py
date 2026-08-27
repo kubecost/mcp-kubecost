@@ -45,7 +45,7 @@ class KubecostClientError(Exception):
                 code=ErrorCode.PERMISSION_DENIED,
                 message=f"Permission denied for this resource: {self.redacted_url}",
                 retryable=False,
-                suggested_action="Check that the API key has the required permissions for this endpoint.",
+                suggested_action="When using Kubecost Enterprise with SSO enabled, see this guide: https://github.com/kubecost/mcp-kubecost/tree/main/docs/auth",
                 context={"status_code": self.status_code, "url": self.redacted_url},
             )
         elif self.status_code == 404:

@@ -114,10 +114,9 @@ Create a second confidential client for the MCP with these settings:
 | ----------------------- | ------------------------------------------------------------------------------------ |
 | Client authentication   | On — this is a confidential client with a secret                                     |
 | Authorization code flow | Enabled (standard flow)                                                              |
-| Valid redirect URIs     | `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}` **exactly**, no wildcard, no extra `/callback` |
+| Valid redirect URIs     | `{config.oidc.baseUrl}{config.oidc.redirectPath}`                                    |
 | Scopes                  | Must include `openid` and `profile` (the `OIDC_REQUIRED_SCOPES` default)             |
 | Consent                 | Off, unless you specifically want a consent screen for agent access                  |
-| Token lifetimes         | Tune independently — this is the main thing a second client buys you                 |
 
 Then point the chart at a Secret holding only the MCP client's credentials:
 
@@ -127,7 +126,8 @@ kubectl create secret generic mcp-oidc \
   --from-literal=OIDC_CLIENT_ID=kubecost-mcp \
   --from-literal=OIDC_CLIENT_SECRET="$OIDC_CLIENT_SECRET"
 
-helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
+helm upgrade --install mcp-kubecost \
+  --repo https://kubecost.github.io/mcp-kubecost mcp-kubecost \
   --namespace mcp-kubecost --create-namespace \
   --set config.kubecostApiBaseUrl=https://kubecost.example.com \
   --set config.kubecostApiPort=443 \
@@ -135,6 +135,7 @@ helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
   --set config.authMode=oidc \
   --set config.oidc.issuerUrl=https://keycloak.example.com/realms/kubecost/.well-known/openid-configuration \
   --set config.oidc.baseUrl=https://mcp.example.com \
+  --set config.oidc.redirectPath=/auth/callback \
   --set config.oidc.existingSecret=mcp-oidc
 ```
 

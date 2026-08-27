@@ -205,6 +205,7 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
             f"({type(exc).__name__}): {exc}. "
             "Most often this means OIDC_ISSUER_URL returned an HTML login page instead of "
             "JSON discovery metadata. If this MCP server shares a Kubecost frontend hostname, "
-            "OAuth paths (/register, /authorize, /token, /.well-known/oauth-*) must reach this "
-            "Service without Kubecost SSO in front — set config.oidc.exposeAuthRoutes."
+            "set a path-prefixed OIDC_BASE_URL (e.g. https://kubecost.example.com/mcp) and "
+            "configure the frontend nginx to proxy OAuth paths to this Service, or give the "
+            "MCP server its own dedicated hostname."
         ) from exc
