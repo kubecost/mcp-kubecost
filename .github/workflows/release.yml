@@ -565,6 +565,9 @@ jobs:
 
           Opened automatically by the [mcp-kubecost release pipeline](https://github.com/kubecost/mcp-kubecost/actions/runs/${GITHUB_RUN_ID}).
 
+          Please review the below mcp-kubecost helm values.yaml changes and update the mcp: values of this chart as needed.
+          Note: not all keys from the subchart need to be included in this parent chart.
+
           ## \`values.yaml\` diff (${PREVIOUS_VERSION} → ${CHART_VERSION})
 
           ${VALUES_DIFF_BODY}
