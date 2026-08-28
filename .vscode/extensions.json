@@ -1,0 +1,9 @@
+{
+    "recommendations": [
+        "charliermarsh.ruff",
+        "davidanson.vscode-markdownlint",
+        "meta.pyrefly",
+        "nefrob.vscode-just-syntax",
+        "yzhang.markdown-all-in-one"
+    ]
+}

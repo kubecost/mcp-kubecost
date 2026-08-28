@@ -8,6 +8,7 @@ on:
     paths:
       - 'src/**'
       - 'Dockerfile'
+      - 'config/fastmcp-http.json'
       - 'pyproject.toml'
       - 'uv.lock'
 

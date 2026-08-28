@@ -1,6 +1,6 @@
 # this is the job run by the auto-fix ci workflow
 # you can run it locally with:
-# pre-commit run --config .pre-commit-config-ci.yaml --all-files
+# pre-commit run --config .github/pre-commit-config-ci.yaml --all-files
 # note that all scripts are local, avoiding 3rd party vulnerabilities
 repos:
 - repo: local

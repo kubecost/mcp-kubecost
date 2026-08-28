@@ -31,7 +31,6 @@ This server has two independent, optional auth layers. One protects the **MCP HT
 
 > [!TIP]
 > To require **both** OIDC identity and a per-request `X-API-KEY`, set `authMode: oidc` and `requireClientApiKey: true`.
-
 > [!WARNING]
 > If `httproute.enabled: true` or `ingress.enabled: true`, `authMode` must **not** be `"none"`.
 > Set `authMode` to at least `"open"` to acknowledge the exposure, or to a stricter mode such as `"oidc"` or `"api_key"`.
@@ -49,11 +48,7 @@ This server has two independent, optional auth layers. One protects the **MCP HT
 
 When `AUTH_MODE=oidc`, the server builds a FastMCP [`OIDCProxy`](https://gofastmcp.com/servers/auth/oidc-proxy). MCP clients speak the MCP OAuth spec to **this server**. This server then talks to the upstream identity provider.
 
-OAuth client registrations and tokens stay in **process memory** (`MemoryStore`). That is required for `readOnlyRootFilesystem`: FastMCP’s default file store mkdirs under `~/.local/share/fastmcp/oauth-proxy/` and fails on a read-only root. Clients re-register after a pod restart. Consent is delegated to the identity provider (`require_authorization_consent="external"`).
-
-
 ### Identity provider setup
-
 
 `OIDC_REDIRECT_PATH` defaults to `/auth-mcp` — most deployments run this server as a sub-path on an existing Kubecost frontend, so the default targets that case. Example: `OIDC_BASE_URL=https://kubecost.example.com/mcp` → add `https://kubecost.example.com/mcp/auth-mcp`. Register that path **exactly**; do not append `/callback`. The redirect URI always includes the path prefix from `OIDC_BASE_URL`, so changing that prefix means re-registering the URI at the IdP.
 
@@ -174,24 +169,24 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 
 ### Environment
 
-| Variable                     | Helm                                 | Role                                                                                           |
-| ---------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------- |
-| `AUTH_MODE`                  | `config.authMode`                    | `none` / `open` / `oidc` / `api_key`                                                           |
-| `OIDC_ISSUER_URL`            | `config.oidc.issuerUrl`              | Provider discovery URL                                                                         |
-| `OIDC_CLIENT_ID`             | `config.oidc.clientId` or Secret     | Confidential client id                                                                         |
-| `OIDC_CLIENT_SECRET`         | `config.oidc.clientSecret` or Secret | Confidential client secret                                                                     |
-| `OIDC_BASE_URL`              | `config.oidc.baseUrl`                | Public URL of this MCP server. A path prefix (`https://host/mcp`) moves every OAuth endpoint under it |
-| `MCP_HTTP_PATH`              | `config.http.path`                   | Route the MCP endpoint is served on. Derived: `/` when `OIDC_BASE_URL` has a path prefix, else `/mcp`. Read by the container entrypoint, not `get_settings()` — see note below |
-| `OIDC_REDIRECT_PATH`         | `config.oidc.redirectPath`           | IdP callback path. Default `/auth-mcp`. Use `/auth/callback` when MCP has a dedicated hostname |
-| `OIDC_AUDIENCE`              | `config.oidc.audience`               | Optional token audience (JWT access tokens only; omit for opaque IdPs)                         |
-| `OIDC_REQUIRED_SCOPES`       | `config.oidc.requiredScopes`         | Default `openid,profile`                                                                       |
+| Variable                     | Helm                                                    | Role                                                                                                                                                                                                                                                                                                |
+| ---------------------------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_MODE`                  | `config.authMode`                                       | `none` / `open` / `oidc` / `api_key`                                                                                                                                                                                                                                                                |
+| `OIDC_ISSUER_URL`            | `config.oidc.issuerUrl`                                 | Provider discovery URL                                                                                                                                                                                                                                                                              |
+| `OIDC_CLIENT_ID`             | `config.oidc.clientId` or Secret                        | Confidential client id                                                                                                                                                                                                                                                                              |
+| `OIDC_CLIENT_SECRET`         | `config.oidc.clientSecret` or Secret                    | Confidential client secret                                                                                                                                                                                                                                                                          |
+| `OIDC_BASE_URL`              | `config.oidc.baseUrl`                                   | Public URL of this MCP server. A path prefix (`https://host/mcp`) moves every OAuth endpoint under it                                                                                                                                                                                               |
+| `MCP_HTTP_PATH`              | `config.http.path`                                      | Route the MCP endpoint is served on. Derived: `/` when `OIDC_BASE_URL` has a path prefix, else `/mcp`. Read by the container entrypoint, not `get_settings()` — see note below                                                                                                                      |
+| `OIDC_REDIRECT_PATH`         | `config.oidc.redirectPath`                              | IdP callback path. Default `/auth-mcp`. Use `/auth/callback` when MCP has a dedicated hostname                                                                                                                                                                                                      |
+| `OIDC_AUDIENCE`              | `config.oidc.audience`                                  | Optional token audience (JWT access tokens only; omit for opaque IdPs)                                                                                                                                                                                                                              |
+| `OIDC_REQUIRED_SCOPES`       | `config.oidc.requiredScopes`                            | Default `openid,profile`                                                                                                                                                                                                                                                                            |
 | `KUBECOST_API_KEY`           | `config.kubecostApiKey` (`.value` or `.existingSecret`) | Fallback key sent to Kubecost. Prefer `.existingSecret` naming a pre-created Secret (`kubectl create secret generic <name> --from-literal=KUBECOST_API_KEY=<key>`, or provision via CI/CD); `.value` inline makes the chart mint the Secret. `.key` sets the Secret key, default `KUBECOST_API_KEY` |
-| `REQUIRE_CLIENT_API_KEY`     | `config.requireClientApiKey`         | Require inbound `X-API-KEY` on HTTP                                                            |
-| `KUBECOST_SSL_VERIFY`        | `config.ssl.verify`                  | TLS verify for Kubecost                                                                        |
-| `SSL_CA_BUNDLE`              | `config.ssl.caBundle`                | Custom CA path (implies verify)                                                                |
-| `FASTMCP_HTTP_ALLOWED_HOSTS` | `config.fastmcpHttpAllowedHosts`     | JSON array of allowed `Host` headers; empty disables                                           |
+| `REQUIRE_CLIENT_API_KEY`     | `config.requireClientApiKey`                            | Require inbound `X-API-KEY` on HTTP                                                                                                                                                                                                                                                                 |
+| `KUBECOST_SSL_VERIFY`        | `config.ssl.verify`                                     | TLS verify for Kubecost                                                                                                                                                                                                                                                                             |
+| `SSL_CA_BUNDLE`              | `config.ssl.caBundle`                                   | Custom CA path (implies verify)                                                                                                                                                                                                                                                                     |
+| `FASTMCP_HTTP_ALLOWED_HOSTS` | `config.fastmcpHttpAllowedHosts`                        | JSON array of allowed `Host` headers; empty disables                                                                                                                                                                                                                                                |
 
-`MCP_HTTP_PATH` is the one entry in that table not read through `get_settings()`. It shapes the `fastmcp run --path` argv, so [`otel_entrypoint.py`](../../src/mcp_kubecost/otel_entrypoint.py) reads it before the server process exists. The entrypoint calls `load_dotenv()` itself, so `.env` works; but running `uv run fastmcp run fastmcp-http.json` bypasses the entrypoint entirely and ignores the variable — pass `--path` on the command line for that case.
+`MCP_HTTP_PATH` is the one entry in that table not read through `get_settings()`. It shapes the `fastmcp run --path` argv, so [`otel_entrypoint.py`](../../src/mcp_kubecost/otel_entrypoint.py) reads it before the server process exists. The entrypoint calls `load_dotenv()` itself, so `.env` works; but running `uv run fastmcp run config/fastmcp-http.json` bypasses the entrypoint entirely and ignores the variable — pass `--path` on the command line for that case.
 
 OIDC client credentials in Helm: set `config.oidc.existingSecret` (keys `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`) or `clientId` / `clientSecret` (the chart will mint a Secret).
 
@@ -232,7 +227,7 @@ For a custom CA, put the cert in a Secret and set `config.ssl.caBundle.existingS
 | Inbound `X-API-KEY` | Cannot send headers    | Optional or required         |
 | Kubecost key        | `KUBECOST_API_KEY` env | Header, then env             |
 
-Local HTTP: `uv run fastmcp run fastmcp-http.json` (port 3030).
+Local HTTP: `uv run fastmcp run config/fastmcp-http.json` (port 3030).
 
 ## Troubleshooting
 

@@ -104,7 +104,7 @@ Authentication, OIDC, API keys, and pod hardening are in [docs/auth/README.md](d
 
 ## Development
 
-See [DEVELOPMENT.md](DEVELOPMENT.md) for build, test, and deployment instructions.
+See [docs/development/README.md](docs/development/README.md) for build, test, and deployment instructions.
 
 ## License
 

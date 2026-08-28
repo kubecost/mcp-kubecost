@@ -8,12 +8,12 @@ The goal of the [`.pre-commit-config.yaml`](../../.pre-commit-config.yaml) is to
 
 CI will fix formatting and run other checks when a PR is created. [`auto-fix-formatting.yml`](../../.github/workflows/auto-fix-formatting.yml)
 
-The config for CI [`.pre-commit-config-ci.yaml`](../../.pre-commit-config-ci.yaml) that is run by the workflow.
+The config for CI [`.github/pre-commit-config-ci.yaml`](../../.github/pre-commit-config-ci.yaml) that is run by the workflow.
 
 Run the CI version from the repository root with:
 
 ```sh
-pre-commit run --config .pre-commit-config-ci.yaml --all-files
+pre-commit run --config .github/pre-commit-config-ci.yaml --all-files
 ```
 
 ## Benefits

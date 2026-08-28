@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-install-project --no-editable --extra otel
 
 COPY src/ /app/src/
-COPY fastmcp-http.json /app/fastmcp-http.json
+COPY config/fastmcp-http.json /app/config/fastmcp-http.json
 
 # Install the application as a non-editable production package.
 RUN --mount=type=bind,source=uv.lock,target=uv.lock \
