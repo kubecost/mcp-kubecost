@@ -392,11 +392,11 @@ jobs:
           # Rewrite only the version line of the mcp-kubecost dependency. `yq -i`
           # would reformat the whole document, and its one-space inline comment
           # style fails the `ct lint` yamllint config used by kubecost/kubecost.
-          awk -v newver="$CHART_VERSION" '
+          awk -v newVersion="$CHART_VERSION" '
             $0 ~ /^[[:space:]]*-[[:space:]]+name:[[:space:]]*mcp-kubecost[[:space:]]*$/ { found = 1 }
             found && $0 ~ /^[[:space:]]*version:/ {
               match($0, /^[[:space:]]*/)
-              printf "%sversion: \"%s\"\n", substr($0, 1, RLENGTH), newver
+              printf "%sversion: \"%s\"\n", substr($0, 1, RLENGTH), newVersion
               found = 0
               next
             }
@@ -461,12 +461,71 @@ jobs:
           grep -q "image: \"icr.io/kubecost/mcp-kubecost:${CHART_VERSION}\"" /tmp/parent-render.yaml
           echo "Parent chart renders mcp-kubecost ${CHART_VERSION}."
 
+      - name: Diff mcp-kubecost values.yaml between versions
+        if: steps.bump.outputs.changed == 'true'
+        id: values-diff
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/mcp-values-diff
+
+          # Fetch the current pinned version live from the develop branch of the
+          # parent chart repo, so the diff is always against what is on develop
+          # right now — not the stale checked-out state.
+          PARENT_CHART_YAML_URL="https://raw.githubusercontent.com/${PARENT_REPO}/refs/heads/${PARENT_BRANCH}/${PARENT_CHART_DIR}/Chart.yaml"
+          PREVIOUS_VERSION=$(curl -fsSL "$PARENT_CHART_YAML_URL" \
+            | yq -r '.dependencies[] | select(.name == "mcp-kubecost") | .version // ""')
+          if [ -z "$PREVIOUS_VERSION" ]; then
+            echo "::warning::Could not determine current mcp-kubecost version from ${PARENT_CHART_YAML_URL}; skipping diff."
+            echo "values_diff_body=Could not determine previous version from \`${PARENT_CHART_YAML_URL}\`; diff unavailable." \
+              >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Previous version (from ${PARENT_REPO}/${PARENT_BRANCH}): ${PREVIOUS_VERSION}"
+          echo "previous_version=${PREVIOUS_VERSION}" >> "$GITHUB_OUTPUT"
+
+          # Pull both chart tarballs; the repo was already added by the "Wait" step.
+          helm pull "${HELM_REPO_NAME}/mcp-kubecost" --version "${PREVIOUS_VERSION}" \
+            --destination /tmp/mcp-values-diff
+          helm pull "${HELM_REPO_NAME}/mcp-kubecost" --version "${CHART_VERSION}" \
+            --destination /tmp/mcp-values-diff
+
+          tar -xzf "/tmp/mcp-values-diff/mcp-kubecost-${PREVIOUS_VERSION}.tgz" \
+            -C /tmp/mcp-values-diff --strip-components=1 mcp-kubecost/values.yaml
+          mv /tmp/mcp-values-diff/values.yaml /tmp/mcp-values-diff/values-prev.yaml
+
+          tar -xzf "/tmp/mcp-values-diff/mcp-kubecost-${CHART_VERSION}.tgz" \
+            -C /tmp/mcp-values-diff --strip-components=1 mcp-kubecost/values.yaml
+          mv /tmp/mcp-values-diff/values.yaml /tmp/mcp-values-diff/values-new.yaml
+
+          DIFF=$(diff -u \
+            --label "values.yaml (${PREVIOUS_VERSION})" \
+            --label "values.yaml (${CHART_VERSION})" \
+            /tmp/mcp-values-diff/values-prev.yaml \
+            /tmp/mcp-values-diff/values-new.yaml || true)
+
+          if [ -z "$DIFF" ]; then
+            echo "values_diff_body=No changes to \`values.yaml\` between \`${PREVIOUS_VERSION}\` and \`${CHART_VERSION}\`." \
+              >> "$GITHUB_OUTPUT"
+          else
+            # Write the diff to a temp file so it survives newlines in GITHUB_OUTPUT.
+            echo "$DIFF" > /tmp/mcp-values-diff/values.diff
+            # Encode as a multiline GITHUB_OUTPUT value.
+            {
+              echo "values_diff_body<<VALUES_DIFF_EOF"
+              printf '```diff\n'
+              cat /tmp/mcp-values-diff/values.diff
+              printf '```\n'
+              echo "VALUES_DIFF_EOF"
+            } >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Commit, push, and open the pull request
         if: steps.bump.outputs.changed == 'true'
         working-directory: parent
         env:
           GH_TOKEN: ${{ steps.parent-token.outputs.token }}
-          PREVIOUS_VERSION: ${{ steps.bump.outputs.previous }}
+          PREVIOUS_VERSION: ${{ steps.values-diff.outputs.previous_version }}
+          VALUES_DIFF_BODY: ${{ steps.values-diff.outputs.values_diff_body }}
         run: |
           set -euo pipefail
           BRANCH_PREFIX="automation/mcp-kubecost-${CHART_VERSION}"
@@ -506,6 +565,10 @@ jobs:
 
           Opened automatically by the [mcp-kubecost release pipeline](https://github.com/kubecost/mcp-kubecost/actions/runs/${GITHUB_RUN_ID}).
 
+          ## \`values.yaml\` diff (${PREVIOUS_VERSION} → ${CHART_VERSION})
+
+          ${VALUES_DIFF_BODY}
+
           ## Changes
 
           - \`${PARENT_CHART_DIR}/Chart.yaml\`: \`dependencies[mcp-kubecost].version\` -> \`${CHART_VERSION}\`
@@ -521,8 +584,6 @@ jobs:
 
           ## Notes
 
-          - The subchart stays disabled by default (\`mcp-kubecost.enabled: false\`), so this
-            does not change the rendered output of a default Kubecost install.
           - Release notes: https://github.com/kubecost/mcp-kubecost/releases/tag/v${CHART_VERSION}
           EOF
 
