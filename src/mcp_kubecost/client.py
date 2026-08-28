@@ -1,5 +1,7 @@
 """HTTP client for the Kubecost V3 API."""
 
+from __future__ import annotations
+
 import logging
 from typing import Any
 
@@ -10,6 +12,9 @@ from mcp_kubecost.config.settings import get_settings
 from mcp_kubecost.errors import ErrorCode, ToolError
 
 logger = logging.getLogger(__name__)
+
+# Retry these status codes; 4xx (except 429) fail immediately.
+_RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 
 class KubecostClientError(Exception):
@@ -102,32 +107,89 @@ def _build_headers() -> dict[str, str]:
     return headers
 
 
-def wrap_list(data: list, key: str) -> dict[str, Any]:
-    """Wrap a bare API list response in a dict so MCP structured content is valid.
-
-    The MCP framework requires tool structured content to be a dict or None.
-    Some Kubecost endpoints (e.g. /internal/tag_mappings) return a top-level
-    JSON array. Call this helper to wrap before returning from a tool handler:
-
-        raw = await get("/internal/tag_mappings")
-        return wrap_list(raw, "tag_mappings")
-
-    Args:
-        data: The list returned by the API.
-        key:  A descriptive dict key (e.g. "tag_mappings", "views").
-
-    Returns:
-        {"<key>": data}
-    """
-    return {key: data}
-
-
 def _build_params(params: dict[str, Any] | None) -> dict[str, Any]:
     """Merge caller-supplied params with server-wide query flags (e.g. viewId)."""
     merged: dict[str, Any] = dict(params) if params else {}
     if get_settings().use_cac_views:
         merged.setdefault("viewId", 0)
     return merged or None  # type: ignore[return-value]
+
+
+def _max_attempts() -> int:
+    """First try plus ``retry_count`` additional attempts (minimum 1)."""
+    return max(1, get_settings().retry_count + 1)
+
+
+async def _request(
+    method: str,
+    path: str,
+    *,
+    params: dict[str, Any] | None = None,
+    json: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> Any:
+    """Send one HTTP request, retrying transport errors and retryable status codes."""
+    settings = get_settings()
+    url = f"{_get_base_url()}{path}"
+    headers = _build_headers() if headers is None else headers
+    attempts = _max_attempts()
+
+    for attempt in range(1, attempts + 1):
+        try:
+            async with httpx.AsyncClient(
+                timeout=settings.request_timeout_seconds,
+                verify=settings.ssl_verify,
+            ) as client:
+                response = await client.request(
+                    method,
+                    url,
+                    params=_build_params(params),
+                    headers=headers,
+                    json=json,
+                )
+        except httpx.RequestError:
+            if attempt >= attempts:
+                raise
+            logger.warning(
+                "Kubecost %s %s transport error on attempt %s/%s; retrying",
+                method,
+                path,
+                attempt,
+                attempts,
+            )
+            continue
+
+        if response.status_code >= 400:
+            if response.status_code in _RETRYABLE_STATUS_CODES and attempt < attempts:
+                logger.warning(
+                    "Kubecost %s %s returned HTTP %s on attempt %s/%s; retrying",
+                    method,
+                    path,
+                    response.status_code,
+                    attempt,
+                    attempts,
+                )
+                continue
+            raise KubecostClientError(
+                status_code=response.status_code,
+                message=response.text,
+                url=url,
+                path=path,
+            )
+
+        try:
+            return response.json()
+        except Exception as exc:
+            logger.error(
+                "Failed to parse JSON response from %s (status=%s, body=%r): %s",
+                str(response.url),
+                response.status_code,
+                response.text[:500],
+                exc,
+            )
+            raise
+
+    raise RuntimeError("unreachable: retry loop exited without return or raise")
 
 
 async def get(path: str, params: dict[str, Any] | None = None) -> Any:
@@ -145,37 +207,9 @@ async def get(path: str, params: dict[str, Any] | None = None) -> Any:
 
     Raises:
         KubecostClientError: If the API returns a non-2xx status.
+        httpx.RequestError: If the request fails after retries (timeout, connect, etc.).
     """
-    base_url = _get_base_url()
-    url = f"{base_url}{path}"
-
-    async with httpx.AsyncClient(timeout=60.0, verify=get_settings().ssl_verify) as client:
-        response = await client.get(
-            url,
-            params=_build_params(params),
-            headers=_build_headers(),
-        )
-
-    if response.status_code >= 400:
-        raise KubecostClientError(
-            status_code=response.status_code,
-            message=response.text,
-            url=url,
-            path=path,
-        )
-
-    try:
-        return response.json()
-    except Exception as exc:
-        full_url = str(response.url)
-        logger.error(
-            "Failed to parse JSON response from %s (status=%s, body=%r): %s",
-            full_url,
-            response.status_code,
-            response.text[:500],
-            exc,
-        )
-        raise
+    return await _request("GET", path, params=params)
 
 
 async def post(path: str, json: dict[str, Any] | None = None, params: dict[str, Any] | None = None) -> Any:
@@ -197,9 +231,8 @@ async def post(path: str, json: dict[str, Any] | None = None, params: dict[str, 
     Raises:
         ValueError: If neither an X-API-KEY header nor KUBECOST_API_KEY supplies a key.
         KubecostClientError: If the API returns a non-2xx status.
+        httpx.RequestError: If the request fails after retries (timeout, connect, etc.).
     """
-    base_url = _get_base_url()
-    url = f"{base_url}{path}"
     headers = _build_headers()
 
     if KUBECOST_API_KEY_HEADER not in headers:
@@ -208,20 +241,4 @@ async def post(path: str, json: dict[str, Any] | None = None, params: dict[str, 
             f"or send an {KUBECOST_API_KEY_HEADER} header with the request."
         )
 
-    async with httpx.AsyncClient(timeout=60.0, verify=get_settings().ssl_verify) as client:
-        response = await client.post(
-            url,
-            json=json,
-            params=_build_params(params),
-            headers=headers,
-        )
-
-    if response.status_code >= 400:
-        raise KubecostClientError(
-            status_code=response.status_code,
-            message=response.text,
-            url=url,
-            path=path,
-        )
-
-    return response.json()
+    return await _request("POST", path, params=params, json=json, headers=headers)
