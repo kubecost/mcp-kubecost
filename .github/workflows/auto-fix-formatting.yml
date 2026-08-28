@@ -28,7 +28,7 @@ jobs:
 
       - name: Run pre-commit fixers
         id: precommit
-        run: uvx pre-commit run --config .pre-commit-config-ci.yaml --all-files || true   # don't fail if fixes were made
+        run: uvx pre-commit run --config .github/pre-commit-config-ci.yaml --all-files || true   # don't fail if fixes were made
 
       - name: Sort cspell words list
         run: |

@@ -760,32 +760,12 @@ def _classify_node_recommendation(rec_str: str, before_state: NodeGroupState, af
     return "capacity" if delta > 0 else "cost_saving"
 
 
-SAVINGS_AGGREGATE_OPTIONS: tuple[str, ...] = ("containerName", "namespace", "clusterID")
-
 SAVINGS_METADATA_FIELDS: list[str] = [
     "clusterID",
     "namespace",
     "controllerKind",
     "controllerName",
     "containerName",
-]
-
-SAVINGS_FIELDS: list[str] = SAVINGS_METADATA_FIELDS + [
-    "monthlySavings_cpu",
-    "monthlySavings_memory",
-    "monthlySavings_total",
-    "Recommended_cpuInMilliCores",
-    "Recommended_memoryInMiB",
-    "current_cpuInMilliCores",
-    "current_memoryInMiB",
-    "currentEfficiency_cpu",
-    "currentEfficiency_memory",
-    "currentEfficiency",
-    "AvgUsage_cpuInMilliCores",
-    "AvgUsage_memoryInMiB",
-    "MaxUsage_cpuInMilliCores",
-    "MaxUsage_memoryInMiB",
-    "notes",
 ]
 
 NOTE_MEM_RECOMMENDATION_LESS_THAN_MAX = "memRecommendationLessThanMax"
@@ -844,7 +824,7 @@ def parse_request_sizing_response(
     Returns:
         total_monthly_savings: top-level TotalMonthlySavings value.
         count: top-level Count value.
-        rows: flat dicts (SAVINGS_FIELDS columns) sorted by monthlySavings_total descending.
+        rows: flat dicts sorted by monthlySavings_total descending.
     """
     total_monthly_savings: float = float(response.get("TotalMonthlySavings", 0.0))
     count: int = int(response.get("Count", 0))

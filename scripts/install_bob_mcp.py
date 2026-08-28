@@ -7,9 +7,9 @@ Runs `fastmcp install mcp-json` to generate the server command/args, wraps the
 result in Bob's `mcpServers` structure, adds `transport: "stdio"`, and upserts
 into the output file (creates it if missing).
 
-Usage (run from a project that has fastmcp.json):
+Usage (run from a project that has a FastMCP config):
 
-uv run scripts/install_bob_mcp.py ./fastmcp.json \
+uv run scripts/install_bob_mcp.py ./config/fastmcp.json \
     --project "$PWD" \
     --env-file .env
 
@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "fastmcp_json",
         type=Path,
-        help="Path to fastmcp.json or server.py",
+        help="Path to FastMCP config JSON or server.py",
     )
     parser.add_argument(
         "--project",

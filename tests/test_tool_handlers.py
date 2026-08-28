@@ -46,6 +46,11 @@ def _sc(result) -> dict:
     return result.structured_content
 
 
+def _stub_http_500(httpx_mock: HTTPXMock, url: re.Pattern) -> None:
+    """Register a reusable 500 so client retries (default retry_count=2) still match."""
+    httpx_mock.add_response(method="GET", url=url, status_code=500, is_reusable=True)
+
+
 # ── fixtures ──────────────────────────────────────────────────────────────────
 
 
@@ -167,11 +172,7 @@ class TestGetKubecostWorkloadCosts:
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error_status(self, httpx_mock: HTTPXMock, mcp_app):
-        httpx_mock.add_response(
-            method="GET",
-            url=_allocation_url(),
-            status_code=500,
-        )
+        _stub_http_500(httpx_mock, _allocation_url())
         tool = await mcp_app.get_tool("get_kubecost_workload_costs")
         result = await tool.run({"window": "7d"})
         assert _sc(result)["status"] == "error"
@@ -578,7 +579,7 @@ class TestGetAbandonedWorkloads:
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error_status(self, httpx_mock: HTTPXMock, mcp_app):
-        httpx_mock.add_response(method="GET", url=_abandoned_url(), status_code=500)
+        _stub_http_500(httpx_mock, _abandoned_url())
         tool = await mcp_app.get_tool("get_abandoned_workloads")
         result = await tool.run({})
         assert _sc(result)["status"] == "error"
@@ -681,7 +682,7 @@ class TestGetSavingsOverview:
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error_status(self, httpx_mock: HTTPXMock, mcp_app):
-        httpx_mock.add_response(method="GET", url=_savings_overview_url(), status_code=500)
+        _stub_http_500(httpx_mock, _savings_overview_url())
         tool = await mcp_app.get_tool("get_savings_overview")
         result = await tool.run({})
         assert _sc(result)["status"] == "error"
@@ -724,7 +725,7 @@ class TestGetPVSizingRecommendations:
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error(self, httpx_mock: HTTPXMock, mcp_app):
-        httpx_mock.add_response(method="GET", url=_pv_sizing_url(), status_code=500)
+        _stub_http_500(httpx_mock, _pv_sizing_url())
         tool = await mcp_app.get_tool("get_pv_sizing_recommendations")
         result = await tool.run({})
         assert _sc(result)["status"] == "error"
@@ -768,7 +769,7 @@ class TestGetLocalDiskSavings:
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error(self, httpx_mock: HTTPXMock, mcp_app):
-        httpx_mock.add_response(method="GET", url=_local_disks_url(), status_code=500)
+        _stub_http_500(httpx_mock, _local_disks_url())
         tool = await mcp_app.get_tool("get_local_disk_savings")
         result = await tool.run({})
         assert _sc(result)["status"] == "error"
@@ -821,7 +822,7 @@ class TestGetClusterRightsizingRecommendations:
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error(self, httpx_mock: HTTPXMock, mcp_app):
-        httpx_mock.add_response(method="GET", url=_node_group_url(), status_code=500)
+        _stub_http_500(httpx_mock, _node_group_url())
         tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
         result = await tool.run({"cluster": "kc-demo-prod"})
         assert _sc(result)["status"] == "error"
@@ -860,7 +861,7 @@ class TestGetUnclaimedVolumes:
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error(self, httpx_mock: HTTPXMock, mcp_app):
-        httpx_mock.add_response(method="GET", url=_unclaimed_volumes_url(), status_code=500)
+        _stub_http_500(httpx_mock, _unclaimed_volumes_url())
         tool = await mcp_app.get_tool("get_unclaimed_volumes")
         result = await tool.run({})
         assert _sc(result)["status"] == "error"
@@ -930,7 +931,7 @@ class TestGetResourceQuotaRecommendations:
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error(self, httpx_mock: HTTPXMock, mcp_app):
-        httpx_mock.add_response(method="GET", url=_resource_quota_url(), status_code=500)
+        _stub_http_500(httpx_mock, _resource_quota_url())
         tool = await mcp_app.get_tool("get_resource_quota_recommendations")
         result = await tool.run({})
         assert _sc(result)["status"] == "error"
@@ -1191,7 +1192,7 @@ class TestGetKubecostCostComparison:
 
     @pytest.mark.asyncio
     async def test_http_error_on_either_call(self, httpx_mock: HTTPXMock, mcp_app):
-        httpx_mock.add_response(method="GET", url=_allocation_url(), status_code=500)
+        _stub_http_500(httpx_mock, _allocation_url())
         tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
         result = await tool.run(
             {

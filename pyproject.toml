@@ -29,6 +29,7 @@ dev = [
   "pytest-cov",
   "pytest-httpx",
   "ruff",
+  "vulture",
 ]
 
 [build-system]
@@ -59,6 +60,7 @@ show_missing = true
 line-length = 120
 target-version = "py312"
 src = ["src", "tests"]
+extend-exclude = ["scripts/vulture_allowlist.py"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["mcp_kubecost"]
@@ -86,3 +88,10 @@ reportUnknownVariableType = "none"
 reportAny = "none"
 reportExplicitAny = "none"
 reportAttributeAccessIssue = "none"
+
+# FastMCP registers nested tools/resources/prompts via decorator; Pydantic fields
+# exist for JSON serialization. CLI paths replace these — run `just vulture`.
+[tool.vulture]
+paths = ["src/mcp_kubecost", "./scripts/vulture_allowlist.py"]
+ignore_decorators = ["@mcp.tool", "@mcp.resource", "@mcp.prompt", "@mcp.custom_route"]
+ignore_names = ["model_config"]

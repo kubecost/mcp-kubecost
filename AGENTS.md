@@ -21,12 +21,13 @@ The virtual environment lives at `.venv/`. Invoke its interpreter directly — d
 .venv/bin/ruff format .
 .venv/bin/ruff check . --fix
 .venv/bin/pyrefly check                 # type check
-uvx pre-commit run --config .pre-commit-config-ci.yaml --all-files
+just vulture                            # dead-code scan (configured; do not pass extra paths)
+uvx pre-commit run --config .github/pre-commit-config-ci.yaml --all-files
 ```
 
 Run `ruff format`, `ruff check --fix`, and `pyrefly check` after every Python edit. If the venv is stale after a dependency change, refresh it with `uv sync --extra dev` (or `just setup`).
 
-`just --list` shows the full task runner surface (`just test`, `just serve`, `just inspect`, `just call-json <tool> '<json>'`).
+`just --list` shows the full task runner surface (`just test`, `just serve`, `just inspect`, `just vulture`, `just call-json <tool> '<json>'`).
 
 ## Architecture Map
 
@@ -39,6 +40,7 @@ Run `ruff format`, `ruff check --fix`, and `pyrefly check` after every Python ed
 | HTTP client / auth | [`src/mcp_kubecost/client.py`](src/mcp_kubecost/client.py) |
 | HTTP custom routes (`/health`, `/version`) | [`server.py`](src/mcp_kubecost/server.py) |
 | Env-backed settings | [`src/mcp_kubecost/config/settings.py`](src/mcp_kubecost/config/settings.py) |
+| FastMCP run configs (stdio / HTTP / public demo client) | [`config/`](config/) |
 
 **Pattern A for tools:** thin handler → `call_get_api()` → domain helpers → typed Pydantic response. Do not create separate `prompts/`, `resources/`, or `api/` packages unless deliberately refactoring.
 
@@ -161,7 +163,7 @@ All configuration flows through `get_settings()` in [`config/settings.py`](src/m
 
 `KUBECOST_BASE_URL` is the only required variable. The rest have defaults: `KUBECOST_API_BASE_PATH`, `KUBECOST_API_KEY`, `REQUIRE_CLIENT_API_KEY`, `KUBECOST_SSL_VERIFY`, `SSL_CA_BUNDLE`, `REQUEST_TIMEOUT_SECONDS`, `REQUEST_RETRY_COUNT`, `DEFAULT_WINDOW`, `USE_CAC_VIEWS`, `FASTMCP_LOG_LEVEL`, `FASTMCP_ENABLE_RICH_LOGGING` (forced off in HTTP mode), `FASTMCP_TELEMETRY_MODE`, `OTEL_*`, `OIDC_REDIRECT_PATH` (`/auth-mcp`; use `/auth/callback` when MCP has a dedicated hostname). Opaque OIDC access tokens are detected from the token response — there is no `OIDC_VERIFY_ID_TOKEN` setting. `MCP_SERVER_NAME` is read in `server.py` and is not in `.env.example`.
 
-Two variables are read outside `get_settings()`, in [`otel_entrypoint.py`](src/mcp_kubecost/otel_entrypoint.py), because they shape the `fastmcp run` argv before the server process exists: `FASTMCP_TELEMETRY_MODE` and `MCP_HTTP_PATH` (the route the MCP endpoint is served on, `--path`; default `/mcp`, set `/` behind a prefix-stripping proxy). The entrypoint calls `load_dotenv()` itself so both still work from `.env`, and validates `MCP_HTTP_PATH` the way `_get_oidc_redirect_path()` validates its input. Running `fastmcp run fastmcp-http.json` directly bypasses the entrypoint and ignores both.
+Two variables are read outside `get_settings()`, in [`otel_entrypoint.py`](src/mcp_kubecost/otel_entrypoint.py), because they shape the `fastmcp run` argv before the server process exists: `FASTMCP_TELEMETRY_MODE` and `MCP_HTTP_PATH` (the route the MCP endpoint is served on, `--path`; default `/mcp`, set `/` behind a prefix-stripping proxy). The entrypoint calls `load_dotenv()` itself so both still work from `.env`, and validates `MCP_HTTP_PATH` the way `_get_oidc_redirect_path()` validates its input. Running `fastmcp run config/fastmcp-http.json` directly bypasses the entrypoint and ignores both.
 
 Add new settings to `Settings` and `.env.example` together; do not read `os.getenv` from a tool or client module.
 
@@ -182,11 +184,11 @@ The per-request read uses FastMCP's `get_http_headers()`, which returns `{}` whe
 
 ## Transport / Local Verification
 
-- **STDIO:** `.venv/bin/mcp-kubecost`, `.venv/bin/python -m mcp_kubecost.server`, or `uv run fastmcp run fastmcp.json`
-- **HTTP:** `uv run fastmcp run fastmcp-http.json` (port 3030)
+- **STDIO:** `.venv/bin/mcp-kubecost`, `.venv/bin/python -m mcp_kubecost.server`, or `uv run fastmcp run config/fastmcp.json`
+- **HTTP:** `uv run fastmcp run config/fastmcp-http.json` (port 3030)
 - **Docker:** `CMD` is `/app/.venv/bin/mcp-kubecost-http` ([`otel_entrypoint.py`](src/mcp_kubecost/otel_entrypoint.py)), which wraps the server with `opentelemetry-instrument` unless `FASTMCP_TELEMETRY_MODE=off`
 
-OpenTelemetry lives in an optional `otel` extra; the Dockerfile installs it with `--extra otel`, plain `uv sync --extra dev` does not. Nothing under `src/` imports `opentelemetry` — `otel_entrypoint.py` only names the binary in an `execvp` argv, and falls back to starting untraced if it is missing. `FASTMCP_TELEMETRY_MODE` is this server's own switch: FastMCP 3.4.7 does not read it (verified — zero hits in the installed package). The `0.65b0` versions are OpenTelemetry's permanent prerelease track for instrumentation, not a maturity signal; see [DEVELOPMENT.md](DEVELOPMENT.md#telemetry) before "upgrading" away from them.
+OpenTelemetry lives in an optional `otel` extra; the Dockerfile installs it with `--extra otel`, plain `uv sync --extra dev` does not. Nothing under `src/` imports `opentelemetry` — `otel_entrypoint.py` only names the binary in an `execvp` argv, and falls back to starting untraced if it is missing. `FASTMCP_TELEMETRY_MODE` is this server's own switch: FastMCP 3.4.7 does not read it (verified — zero hits in the installed package). The `0.65b0` versions are OpenTelemetry's permanent prerelease track for instrumentation, not a maturity signal; see [docs/development/README.md](docs/development/README.md#telemetry) before "upgrading" away from them.
 
 There is no `run_http()` helper — use the FastMCP config files above.
 
@@ -205,13 +207,11 @@ just call-json get_kubecost_cost_comparison '{"aggregate": "namespace"}'
 
 ## Known Gaps
 
-- `settings.py` `request_timeout_seconds` and `retry_count` are not wired to `client.py`, which hardcodes `timeout=60.0` and has no retry loop. (`kubecost_base_url`, `KUBECOST_API_KEY`, `ssl_verify`, `kubecost_api_base_path`, and `use_cac_views` are wired.)
 - `_default_wow_windows()` is evaluated at import time, so default comparison windows go stale in a long-running process.
-- The `just serve` comment says port 9000; `fastmcp-http.json` actually binds 3030.
 
 ## Related Docs
 
-- [DEVELOPMENT.md](DEVELOPMENT.md) — human setup, run, Docker/Kubernetes workflow
+- [docs/development/README.md](docs/development/README.md) — human setup, run, Docker/Kubernetes workflow
 - [README.md](README.md) — overview and client configuration
 - [docs/auth/README.md](docs/auth/README.md) — MCP OIDC, Kubecost API keys, and pod hardening
-- [README-pre-commit.md](README-pre-commit.md) — hook tiers and CI auto-fix workflow
+- [docs/development/pre-commit-checks.md](docs/development/pre-commit-checks.md) — hook tiers and CI auto-fix workflow

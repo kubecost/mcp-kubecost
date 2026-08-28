@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 import sys
 from collections.abc import Sequence
@@ -12,6 +13,8 @@ from functools import lru_cache
 from urllib.parse import urlparse
 
 from mcp_kubecost.errors import ConfigError
+
+logger = logging.getLogger(__name__)
 
 
 class AuthMode(Enum):
@@ -39,9 +42,7 @@ class Settings:
     request_timeout_seconds: float
     retry_count: int
     default_window: str
-    show_banner: bool
     log_level: str
-    enable_rich_logging: bool
 
     # OIDC authentication (HTTP transport only)
     auth_mode: AuthMode
@@ -68,7 +69,7 @@ class Settings:
 def is_http_mode(argv: Sequence[str] | None = None) -> bool:
     """Return True when this process is (or will be) serving Streamable HTTP.
 
-    FastMCP's CLI applies ``transport`` from ``fastmcp-http.json`` only when it
+    FastMCP's CLI applies ``transport`` from ``config/fastmcp-http.json`` only when it
     calls ``run_async``, so ``fastmcp.settings.transport`` is still ``stdio``
     while ``server.py`` is imported. Detect HTTP from ``FASTMCP_TRANSPORT`` or
     the CLI argv instead.
@@ -102,6 +103,7 @@ def apply_http_rich_logging() -> None:
 
     fastmcp.settings.enable_rich_logging = False
     configure_logging(level=fastmcp.settings.log_level)
+    logger.debug("FastMCP rich logging enabled: %s", fastmcp.settings.enable_rich_logging)
 
 
 def _get_required_env(name: str) -> str:
@@ -234,6 +236,12 @@ def get_settings() -> Settings:
 
     # AUTH_MODE=api_key is the same gate as REQUIRE_CLIENT_API_KEY=true.
     require_client_api_key = _get_bool_env("REQUIRE_CLIENT_API_KEY", False) or auth_mode == AuthMode.API_KEY
+    request_timeout_seconds = _get_float_env("REQUEST_TIMEOUT_SECONDS", 15.0)
+    if request_timeout_seconds <= 0:
+        raise ConfigError("REQUEST_TIMEOUT_SECONDS must be greater than 0")
+    retry_count = _get_int_env("REQUEST_RETRY_COUNT", 2)
+    if retry_count < 0:
+        raise ConfigError("REQUEST_RETRY_COUNT must be 0 or greater")
 
     return Settings(
         kubecost_base_url=kubecost_base_url,
@@ -241,12 +249,10 @@ def get_settings() -> Settings:
         KUBECOST_API_KEY=os.getenv("KUBECOST_API_KEY", "").strip() or None,
         require_client_api_key=require_client_api_key,
         ssl_verify=_get_ssl_verify_env(),
-        request_timeout_seconds=_get_float_env("REQUEST_TIMEOUT_SECONDS", 15.0),
-        retry_count=_get_int_env("REQUEST_RETRY_COUNT", 2),
+        request_timeout_seconds=request_timeout_seconds,
+        retry_count=retry_count,
         default_window=os.getenv("DEFAULT_WINDOW", "15d").strip(),
-        show_banner=False,
         log_level=os.getenv("FASTMCP_LOG_LEVEL", "INFO").upper(),
-        enable_rich_logging=False if is_http_mode() else _get_bool_env("FASTMCP_ENABLE_RICH_LOGGING", True),
         use_cac_views=_get_bool_env("USE_CAC_VIEWS", False),
         auth_mode=auth_mode,
         oidc_issuer_url=oidc_issuer_url,

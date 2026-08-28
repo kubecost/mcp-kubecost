@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from mcp_kubecost.config.settings import is_http_mode
@@ -9,6 +11,10 @@ from mcp_kubecost.otel_entrypoint import _FASTMCP_ARGS, _fastmcp_args, _load_env
 
 
 class TestFastmcpArgs:
+    def test_http_config_lives_under_config(self):
+        assert _FASTMCP_ARGS[2] == "config/fastmcp-http.json"
+        assert Path(_FASTMCP_ARGS[2]).is_file()
+
     def test_unset_leaves_argv_untouched(self, monkeypatch):
         monkeypatch.delenv("MCP_HTTP_PATH", raising=False)
         assert _fastmcp_args() == _FASTMCP_ARGS

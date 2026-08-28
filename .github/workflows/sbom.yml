@@ -18,6 +18,7 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - 'Dockerfile'
+      - 'config/fastmcp-http.json'
 
 concurrency:
   group: sbom-${{ github.ref }}

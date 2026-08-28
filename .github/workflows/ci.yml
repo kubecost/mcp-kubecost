@@ -25,6 +25,8 @@ jobs:
         run: uv sync --extra dev
       - name: Type check
         run: uv run pyrefly check
+      - name: Dead-code scan
+        run: uv run vulture
       - name: Tests
         env:
           KUBECOST_BASE_URL: https://demo.kubecost.xyz

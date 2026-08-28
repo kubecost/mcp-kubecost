@@ -18,7 +18,7 @@ import sys
 
 from dotenv import load_dotenv
 
-_FASTMCP_ARGS = ("fastmcp", "run", "fastmcp-http.json", "--skip-env")
+_FASTMCP_ARGS = ("fastmcp", "run", "config/fastmcp-http.json", "--skip-env")
 
 
 def _load_env_file() -> None:
