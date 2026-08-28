@@ -14,17 +14,22 @@ from __future__ import annotations
 import json
 import logging
 from contextvars import ContextVar
+from pathlib import Path
 from typing import Any
 
+from cryptography.fernet import Fernet
 from fastmcp.server.auth import AccessToken, TokenVerifier
-from fastmcp.server.auth.oauth_proxy.models import ProxyDCRClient, UpstreamTokenSet
+from fastmcp.server.auth.oauth_proxy.models import UpstreamTokenSet
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.auth.redirect_validation import DEFAULT_LOCALHOST_PATTERNS
 from fastmcp.utilities.auth import decode_jwt_header
-from key_value.aio.stores.memory import MemoryStore
-from mcp.shared.auth import OAuthClientInformationFull
-from pydantic import AnyUrl
+from key_value.aio.stores.filetree import (
+    FileTreeStore,
+    FileTreeV1CollectionSanitizationStrategy,
+    FileTreeV1KeySanitizationStrategy,
+)
+from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 
 from mcp_kubecost.config.settings import AuthMode, Settings, get_settings
 from mcp_kubecost.errors import ConfigError
@@ -35,8 +40,7 @@ logger = logging.getLogger(__name__)
 _verify_id_token: ContextVar[bool] = ContextVar("oidc_verify_id_token", default=False)
 
 # MCP-client redirect allowlist (not the IdP callback). Without this, FastMCP
-# leaves patterns as None and validate_redirect_uri accepts any ordinary URI —
-# unsafe when combined with the unknown-client fallback after MemoryStore wipe.
+# leaves patterns as None and validate_redirect_uri accepts any ordinary URI.
 ALLOWED_CLIENT_REDIRECT_URIS: list[str] = [
     *DEFAULT_LOCALHOST_PATTERNS,  # http://localhost:*, http://127.0.0.1:*
     "https://claude.ai/api/mcp/auth_callback",
@@ -106,40 +110,6 @@ class AdaptiveOidcProxy(OIDCProxy):
     def _uses_alternate_verification(self) -> bool:
         return _verify_id_token.get()
 
-    async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
-        """Return client by ID, synthesizing a fallback for unknown DCR client IDs.
-
-        MemoryStore loses all registrations on server restart. When an MCP client
-        retries ``/authorize`` with a stale ``client_id`` it cached from the
-        previous session, the normal lookup returns ``None`` → 400 HTML error
-        page. Synthesize a ``ProxyDCRClient`` for any unknown ``client_id`` so
-        the flow can complete; redirect URIs are still bounded by
-        ``allowed_client_redirect_uris``.
-
-        FastMCP's ``OAuthProxy.get_client`` only synthesizes when
-        ``client_id == upstream_client_id`` (clients that skip DCR). That does
-        not cover stale random DCR IDs after a MemoryStore wipe — keep this
-        override.
-        """
-        client = await super().get_client(client_id)
-        if client is not None:
-            return client
-
-        logger.debug(
-            "Unknown client_id=%s after server restart — synthesizing fallback client",
-            client_id,
-        )
-        return ProxyDCRClient(
-            client_id=client_id,
-            client_secret=None,
-            redirect_uris=[AnyUrl("http://localhost")],
-            grant_types=["authorization_code", "refresh_token"],
-            scope=self._default_scope_str,
-            token_endpoint_auth_method="none",
-            allowed_redirect_uri_patterns=self._allowed_client_redirect_uris,
-            allow_unregistered_redirect_uris=True,
-        )
-
 
 def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
     """Return a configured ``OIDCProxy`` if OIDC is enabled, else ``None``.
@@ -166,6 +136,8 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
     assert settings.oidc_client_id is not None
     assert settings.oidc_client_secret is not None
     assert settings.oidc_base_url is not None
+    assert settings.oidc_jwt_signing_key is not None
+    assert settings.oidc_storage_encryption_key is not None
 
     logger.info(
         "OIDC enabled — issuer=%s, base_url=%s, redirect_path=%s",
@@ -174,16 +146,18 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
         settings.oidc_redirect_path,
     )
 
-    # FastMCP defaults to an encrypted FileTreeStore under
-    # platformdirs.user_data_dir("fastmcp") — typically
-    # ~/.local/share/fastmcp/oauth-proxy/<key>/. That mkdir fails on a
-    # read-only root filesystem. Keep DCR/token state in process memory;
-    # MCP clients re-register after a restart.
-    #
-    # Consent is "external" so Keycloak owns the login/consent UI. FastMCP's
-    # built-in consent page is another HTML response that MCP clients try to
-    # parse as OAuth JSON.
     try:
+        storage_dir = Path(settings.oidc_storage_path)
+        storage_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        file_store = FileTreeStore(
+            data_directory=storage_dir,
+            key_sanitization_strategy=FileTreeV1KeySanitizationStrategy(storage_dir),
+            collection_sanitization_strategy=FileTreeV1CollectionSanitizationStrategy(storage_dir),
+        )
+        encrypted_storage = FernetEncryptionWrapper(
+            file_store,
+            fernet=Fernet(settings.oidc_storage_encryption_key.encode()),
+        )
         return AdaptiveOidcProxy(
             config_url=settings.oidc_issuer_url,
             client_id=settings.oidc_client_id,
@@ -193,8 +167,9 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
             redirect_path=settings.oidc_redirect_path,
             required_scopes=settings.oidc_required_scopes or None,
             allowed_client_redirect_uris=ALLOWED_CLIENT_REDIRECT_URIS,
-            client_storage=MemoryStore(),
-            require_authorization_consent="external",
+            client_storage=encrypted_storage,
+            jwt_signing_key=settings.oidc_jwt_signing_key,
+            require_authorization_consent="remember",
         )
     except ConfigError:
         raise
