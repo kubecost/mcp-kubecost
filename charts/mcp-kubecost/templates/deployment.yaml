@@ -11,12 +11,10 @@ metadata:
     {{- . | nindent 4 }}
   {{- end }}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  # FileTreeStore is single-writer storage, so this Deployment is intentionally fixed at one replica.
+  replicas: 1
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+    type: Recreate
   selector:
     matchLabels:
       {{- include "mcp-kubecost.selectorLabels" . | nindent 6 }}
@@ -62,7 +60,7 @@ spec:
             - configMapRef:
                 name: {{ include "mcp-kubecost.configMapName" . }}
           {{- $hasApiKey := or .Values.config.kubecostApiKey.value .Values.config.kubecostApiKey.existingSecret }}
-          {{- $hasOidc := or .Values.config.oidc.existingSecret (and .Values.config.oidc.clientId .Values.config.oidc.clientSecret) }}
+          {{- $hasOidc := or .Values.config.oidc.existingSecret (and .Values.config.oidc.clientId .Values.config.oidc.clientSecret .Values.config.oidc.jwtSigningKey .Values.config.oidc.storageEncryptionKey) }}
           {{- if or $hasApiKey $hasOidc }}
           env:
             {{- if $hasApiKey }}
@@ -83,6 +81,16 @@ spec:
                 secretKeyRef:
                   name: {{ if .Values.config.oidc.existingSecret }}{{ .Values.config.oidc.existingSecret }}{{ else }}{{ include "mcp-kubecost.oidcSecretName" . }}{{ end }}
                   key: OIDC_CLIENT_SECRET
+            - name: OIDC_JWT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ if .Values.config.oidc.existingSecret }}{{ .Values.config.oidc.existingSecret }}{{ else }}{{ include "mcp-kubecost.oidcSecretName" . }}{{ end }}
+                  key: OIDC_JWT_SIGNING_KEY
+            - name: OIDC_STORAGE_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ if .Values.config.oidc.existingSecret }}{{ .Values.config.oidc.existingSecret }}{{ else }}{{ include "mcp-kubecost.oidcSecretName" . }}{{ end }}
+                  key: OIDC_STORAGE_ENCRYPTION_KEY
             {{- end }}
           {{- end }}
           ports:
@@ -122,15 +130,20 @@ spec:
             timeoutSeconds: {{ .Values.probes.timeoutSeconds }}
             failureThreshold: {{ .Values.probes.failureThreshold }}
           {{- end }}
-          {{- if .Values.config.ssl.caBundle.existingSecret }}
           volumeMounts:
+            - name: oauth-storage
+              mountPath: /var/lib/mcp-kubecost
+          {{- if .Values.config.ssl.caBundle.existingSecret }}
             - name: ca-bundle
               mountPath: {{ .Values.config.ssl.caBundle.mountPath }}
               subPath: {{ .Values.config.ssl.caBundle.key }}
               readOnly: true
           {{- end }}
-      {{- if .Values.config.ssl.caBundle.existingSecret }}
       volumes:
+        - name: oauth-storage
+          persistentVolumeClaim:
+            claimName: {{ include "mcp-kubecost.oauthStorageClaimName" . }}
+      {{- if .Values.config.ssl.caBundle.existingSecret }}
         - name: ca-bundle
           secret:
             secretName: {{ .Values.config.ssl.caBundle.existingSecret }}

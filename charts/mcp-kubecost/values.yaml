@@ -48,9 +48,6 @@ nameOverride: ""
 # fullnameOverride replaces the full generated resource name.
 fullnameOverride: ""
 
-# replicaCount is the number of MCP server pods to run.
-replicaCount: 1
-
 image:
   # image.registry is the container registry host. Overridden by global.imageRegistry.
   registry: icr.io
@@ -84,8 +81,10 @@ podSecurityContext:
   # podSecurityContext.seccompProfile applies the Kubernetes runtime seccomp profile.
   seccompProfile:
     type: RuntimeDefault
-  # podSecurityContext.fsGroup is intentionally unset because the container has no writable volume.
-  fsGroup: null
+  # podSecurityContext.fsGroup makes the OAuth state PVC writable by the non-root process.
+  fsGroup: 65532
+  # Avoid recursively changing ownership after the volume root already has the expected group.
+  fsGroupChangePolicy: OnRootMismatch
 
 containerSecurityContext:
   # containerSecurityContext.allowPrivilegeEscalation prevents gaining extra privileges.
@@ -157,6 +156,16 @@ resources:
     cpu: 1000m
     memory: 1Gi
 
+# The chart always creates this PVC. FastMCP OAuth registrations, grants, and
+# tokens are encrypted before FileTreeStore writes them beneath the mount.
+persistence:
+  # Empty uses the cluster's default StorageClass.
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 1Gi
+  annotations: {}
+
 probes:
   # probes.enabled enables HTTP startup, readiness, and liveness checks.
   enabled: true
@@ -207,6 +216,12 @@ config:
   requestTimeoutSeconds: 15
   # config.requestRetryCount is the number of configured HTTP retries.
   requestRetryCount: 2
+  # Sustained MCP request rate per pod. FastMCP uses a token bucket.
+  rateLimitRequestsPerSecond: 10
+  # Maximum burst size for the MCP request rate limiter.
+  rateLimitBurstCapacity: 20
+  # Maximum tool calls executing concurrently in the single server pod.
+  maxConcurrentToolCalls: 10
   # config.defaultWindow is the default Kubecost query window.
   defaultWindow: 15d
   # config.logLevel is the FastMCP log level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL').
@@ -220,8 +235,13 @@ config:
   http:
     path: ""
 
-  # config.fastmcpHttpAllowedHosts is a JSON array string of permitted HTTP Host headers; empty disables the allowlist.
+  # Enable FastMCP's Host/Origin request guard. "auto" protects local binds and
+  # activates strict checks when either allowlist below is configured.
+  fastmcpHttpHostOriginProtection: auto
+  # JSON array string of permitted HTTP Host headers.
   fastmcpHttpAllowedHosts: ""
+  # JSON array string of permitted browser Origin headers.
+  fastmcpHttpAllowedOrigins: ""
   # config.mcpServerName overrides the MCP server name exposed by FastMCP.
   mcpServerName: mcp-kubecost
   # config.telemetryMode controls the OpenTelemetry wrapper; off disables it.
@@ -269,8 +289,11 @@ config:
     clientId: ""
     # config.oidc.clientSecret is the OIDC client secret. Prefer existingSecret for production.
     clientSecret: ""
-    # config.oidc.existingSecret is the name of a pre-created Secret containing OIDC credentials.
-    # Expected keys: OIDC_CLIENT_ID and OIDC_CLIENT_SECRET.
+    # Stable key FastMCP uses to sign MCP-side OAuth tokens (minimum 32 characters).
+    jwtSigningKey: ""
+    # URL-safe base64 Fernet key used to encrypt OAuth data before FileTreeStore persistence.
+    storageEncryptionKey: ""
+    # Pre-created Secret containing the four OIDC secret values above.
     existingSecret: ""
 
 nodeSelector: {}

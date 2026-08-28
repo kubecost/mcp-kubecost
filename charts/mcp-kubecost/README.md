@@ -29,6 +29,18 @@ are represented under `config` in `values.yaml`, except
 rich logging is forced off. `values.schema.json` validates the supported value
 types and common deployment mistakes.
 
+The Deployment is fixed at one replica and uses `Recreate`. The chart always
+creates a `ReadWriteOnce` PVC and mounts it at `/var/lib/mcp-kubecost`; OIDC
+state is encrypted before the built-in FileTreeStore writes beneath that mount.
+FastMCP HTTP sessions and request limits are process-local, so horizontal
+scaling is intentionally disabled.
+
+The PVC defaults to `1Gi` on the cluster's default StorageClass. Set
+`persistence.storageClass`, `persistence.accessModes`, `persistence.size`, or
+`persistence.annotations` when the cluster requires different provisioning.
+There is intentionally no switch to disable the PVC or select an external
+OAuth store.
+
 ## Gateway API HTTPRoute (preferred)
 
 Gateway API is the preferred way to expose this chart. The cluster must

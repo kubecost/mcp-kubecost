@@ -274,6 +274,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-oidc" (include "mcp-kubecost.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/* Return the mandatory OAuth state PVC name. */}}
+{{- define "mcp-kubecost.oauthStorageClaimName" -}}
+{{- printf "%s-oauth" (include "mcp-kubecost.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 {{/*
 Stable string of all ConfigMap data values used for checksum annotation.
 Must stay in sync with the data block in configmap.yaml.
@@ -283,6 +288,9 @@ KUBECOST_BASE_URL={{ printf "%s:%v" (tpl .Values.config.kubecostApiBaseUrl .) .V
 KUBECOST_API_BASE_PATH={{ .Values.config.kubecostApiBasePath | quote }}
 REQUEST_TIMEOUT_SECONDS={{ .Values.config.requestTimeoutSeconds | quote }}
 REQUEST_RETRY_COUNT={{ .Values.config.requestRetryCount | quote }}
+MCP_RATE_LIMIT_REQUESTS_PER_SECOND={{ .Values.config.rateLimitRequestsPerSecond | quote }}
+MCP_RATE_LIMIT_BURST_CAPACITY={{ .Values.config.rateLimitBurstCapacity | quote }}
+MCP_MAX_CONCURRENT_TOOL_CALLS={{ .Values.config.maxConcurrentToolCalls | quote }}
 DEFAULT_WINDOW={{ .Values.config.defaultWindow | quote }}
 FASTMCP_LOG_LEVEL={{ .Values.config.logLevel | upper | quote }}
 USE_CAC_VIEWS={{ .Values.config.useCacViews | quote }}
@@ -293,11 +301,16 @@ OTEL_SERVICE_NAME={{ .Values.config.otelServiceName | quote }}
 OTEL_METRICS_EXPORTER={{ .Values.config.otelMetricsExporter | quote }}
 OTEL_LOGS_EXPORTER={{ .Values.config.otelLogsExporter | quote }}
 KUBECOST_SSL_VERIFY={{ .Values.config.ssl.verify | quote }}
+FASTMCP_HTTP_HOST_ORIGIN_PROTECTION={{ .Values.config.fastmcpHttpHostOriginProtection | quote }}
+OIDC_STORAGE_PATH="/var/lib/mcp-kubecost/oauth"
 {{- if .Values.config.otelExporterOtlpEndpoint }}
 OTEL_EXPORTER_OTLP_ENDPOINT={{ .Values.config.otelExporterOtlpEndpoint | quote }}
 {{- end }}
 {{- if .Values.config.fastmcpHttpAllowedHosts }}
 FASTMCP_HTTP_ALLOWED_HOSTS={{ .Values.config.fastmcpHttpAllowedHosts | quote }}
+{{- end }}
+{{- if .Values.config.fastmcpHttpAllowedOrigins }}
+FASTMCP_HTTP_ALLOWED_ORIGINS={{ .Values.config.fastmcpHttpAllowedOrigins | quote }}
 {{- end }}
 {{- if .Values.config.ssl.caBundle.existingSecret }}
 SSL_CA_BUNDLE={{ .Values.config.ssl.caBundle.mountPath | quote }}
@@ -337,9 +350,11 @@ Returns an empty string when the secret would not be created, so no annotation i
 Must stay in sync with the second Secret block in secret.yaml.
 */}}
 {{- define "mcp-kubecost.oidc-stringdata" -}}
-{{- if and .Values.config.oidc.clientId .Values.config.oidc.clientSecret (not .Values.config.oidc.existingSecret) -}}
+{{- if and .Values.config.oidc.clientId .Values.config.oidc.clientSecret .Values.config.oidc.jwtSigningKey .Values.config.oidc.storageEncryptionKey (not .Values.config.oidc.existingSecret) -}}
 OIDC_CLIENT_ID={{ .Values.config.oidc.clientId }}
 OIDC_CLIENT_SECRET={{ .Values.config.oidc.clientSecret }}
+OIDC_JWT_SIGNING_KEY={{ .Values.config.oidc.jwtSigningKey }}
+OIDC_STORAGE_ENCRYPTION_KEY={{ .Values.config.oidc.storageEncryptionKey }}
 {{- end }}
 {{- end }}
 
@@ -347,7 +362,7 @@ OIDC_CLIENT_SECRET={{ .Values.config.oidc.clientSecret }}
 Fail when authMode is "oidc" but no OIDC credentials are configured, or when
 issuerUrl / baseUrl are missing or not https:// URLs.
 
-Valid credential state = either (clientId AND clientSecret both non-empty)
+Valid credential state = either (all four inline secret values are non-empty)
 OR existingSecret non-empty. These checks are NOT gated by skipSanityChecks:
 credential presence and URL format are hard logical requirements, not live
 cluster lookups, so bypassing them for CI/CD would silently produce a broken
@@ -375,10 +390,18 @@ CONCERNS:
 */}}
 {{- define "mcp-kubecost.validateOIDC" -}}
 {{- if eq (.Values.config.authMode | default "none") "oidc" -}}
-{{- $hasInline := and .Values.config.oidc.clientId .Values.config.oidc.clientSecret -}}
+{{- $hasInline := and .Values.config.oidc.clientId .Values.config.oidc.clientSecret .Values.config.oidc.jwtSigningKey .Values.config.oidc.storageEncryptionKey -}}
 {{- $hasExisting := .Values.config.oidc.existingSecret -}}
 {{- if not (or $hasInline $hasExisting) -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: config.authMode is \"oidc\" but no OIDC credentials are configured.\n\nTo fix, choose one of:\n  Option A — inline credentials:\n    config.oidc.clientId: \"<your-client-id>\"\n    config.oidc.clientSecret: \"<your-client-secret>\"\n\n  Option B — reference a pre-existing Secret (required keys: OIDC_CLIENT_ID, OIDC_CLIENT_SECRET):\n    config.oidc.existingSecret: \"<secret-name>\"\n" -}}
+{{- fail "\n\nFAILURE [mcp-kubecost]: config.authMode is \"oidc\" but its durable OAuth secrets are incomplete.\n\nTo fix, choose one of:\n  Option A — set clientId, clientSecret, jwtSigningKey, and storageEncryptionKey.\n\n  Option B — reference a pre-existing Secret with keys OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_JWT_SIGNING_KEY, and OIDC_STORAGE_ENCRYPTION_KEY:\n    config.oidc.existingSecret: \"<secret-name>\"\n" -}}
+{{- end -}}
+{{- if $hasInline -}}
+{{- if lt (len .Values.config.oidc.jwtSigningKey) 32 -}}
+{{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.jwtSigningKey must be at least 32 characters.\n" -}}
+{{- end -}}
+{{- if ne (len .Values.config.oidc.storageEncryptionKey) 44 -}}
+{{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.storageEncryptionKey must be a 44-character URL-safe base64 Fernet key.\n" -}}
+{{- end -}}
 {{- end -}}
 {{- $issuer := .Values.config.oidc.issuerUrl | default "" -}}
 {{- $issuerHost := (urlParse $issuer).host | default "" | splitList ":" | first -}}
