@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -22,6 +24,38 @@ _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 _BACKOFF_BASE_SECONDS = 0.25
 _BACKOFF_CAP_SECONDS = 2.0
 _RETRY_AFTER_CAP_SECONDS = 30.0
+
+_http_client: httpx.AsyncClient | None = None
+
+
+def start_http_client() -> httpx.AsyncClient:
+    """Create the process-wide Kubecost HTTP client if needed."""
+    global _http_client
+    if _http_client is None or _http_client.is_closed:
+        settings = get_settings()
+        _http_client = httpx.AsyncClient(
+            timeout=settings.request_timeout_seconds,
+            verify=settings.ssl_verify,
+        )
+    return _http_client
+
+
+async def close_http_client() -> None:
+    """Close and clear the process-wide Kubecost HTTP client."""
+    global _http_client
+    client, _http_client = _http_client, None
+    if client is not None and not client.is_closed:
+        await client.aclose()
+
+
+@asynccontextmanager
+async def kubecost_client_lifespan(_server: object) -> AsyncIterator[dict[str, httpx.AsyncClient]]:
+    """Own the shared HTTP client's startup and shutdown with FastMCP."""
+    client = start_http_client()
+    try:
+        yield {"kubecost_http_client": client}
+    finally:
+        await close_http_client()
 
 
 class KubecostClientError(Exception):
@@ -160,67 +194,64 @@ async def _request(
     attempts = 1 + settings.retry_count if retryable_method else 1
     request_params = _build_params(params)
 
-    async with httpx.AsyncClient(
-        timeout=settings.request_timeout_seconds,
-        verify=settings.ssl_verify,
-    ) as client:
-        for attempt in range(1, attempts + 1):
-            response: httpx.Response | None = None
-            try:
-                response = await client.request(
-                    method,
-                    url,
-                    params=request_params,
-                    headers=headers,
-                    json=json,
-                )
-            except httpx.TransportError:
-                if attempt >= attempts:
-                    raise
-                delay = _retry_delay(None, attempt)
+    client = start_http_client()
+    for attempt in range(1, attempts + 1):
+        response: httpx.Response | None = None
+        try:
+            response = await client.request(
+                method,
+                url,
+                params=request_params,
+                headers=headers,
+                json=json,
+            )
+        except httpx.TransportError:
+            if attempt >= attempts:
+                raise
+            delay = _retry_delay(None, attempt)
+            logger.warning(
+                "Kubecost %s %s transport error on attempt %s/%s; retrying in %.2fs",
+                method,
+                path,
+                attempt,
+                attempts,
+                delay,
+            )
+            await asyncio.sleep(delay)
+            continue
+
+        if response.status_code >= 400:
+            if response.status_code in _RETRYABLE_STATUS_CODES and attempt < attempts:
+                delay = _retry_delay(response, attempt)
                 logger.warning(
-                    "Kubecost %s %s transport error on attempt %s/%s; retrying in %.2fs",
+                    "Kubecost %s %s returned HTTP %s on attempt %s/%s; retrying in %.2fs",
                     method,
                     path,
+                    response.status_code,
                     attempt,
                     attempts,
                     delay,
                 )
                 await asyncio.sleep(delay)
                 continue
+            raise KubecostClientError(
+                status_code=response.status_code,
+                message=response.text,
+                url=url,
+                path=path,
+            )
 
-            if response.status_code >= 400:
-                if response.status_code in _RETRYABLE_STATUS_CODES and attempt < attempts:
-                    delay = _retry_delay(response, attempt)
-                    logger.warning(
-                        "Kubecost %s %s returned HTTP %s on attempt %s/%s; retrying in %.2fs",
-                        method,
-                        path,
-                        response.status_code,
-                        attempt,
-                        attempts,
-                        delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                raise KubecostClientError(
-                    status_code=response.status_code,
-                    message=response.text,
-                    url=url,
-                    path=path,
-                )
-
-            try:
-                return response.json()
-            except Exception as exc:
-                logger.error(
-                    "Failed to parse JSON response from %s (status=%s, body=%r): %s",
-                    str(response.url),
-                    response.status_code,
-                    response.text[:500],
-                    exc,
-                )
-                raise
+        try:
+            return response.json()
+        except Exception as exc:
+            logger.error(
+                "Failed to parse JSON response from %s (status=%s, body=%r): %s",
+                str(response.url),
+                response.status_code,
+                response.text[:500],
+                exc,
+            )
+            raise
 
     raise RuntimeError("unreachable: retry loop exited without return or raise")
 
