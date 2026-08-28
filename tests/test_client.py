@@ -279,3 +279,83 @@ async def test_post_raises_when_no_key_available():
     """_common.py matches on this message prefix, so it must not drift."""
     with pytest.raises(ValueError, match="^No authentication configured"):
         await _post_with({}, _auth_settings())
+
+
+# ---------------------------------------------------------------------------
+# Timeout and retries from settings
+# ---------------------------------------------------------------------------
+
+
+def _allocation_url() -> re.Pattern[str]:
+    return re.compile(r"http://localhost:9090/model/allocation")
+
+
+@pytest.mark.asyncio
+async def test_get_uses_configured_timeout(httpx_mock: HTTPXMock):
+    _stub_allocation(httpx_mock)
+    captured: dict[str, Any] = {}
+    real_client = httpx.AsyncClient
+
+    def factory(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        captured.update(kwargs)
+        return real_client(*args, **kwargs)
+
+    with patch("mcp_kubecost.client.httpx.AsyncClient", side_effect=factory):
+        await _get_with({}, _auth_settings(request_timeout_seconds=7.5))
+
+    assert captured["timeout"] == 7.5
+
+
+@pytest.mark.asyncio
+async def test_get_retries_connect_error_then_succeeds(httpx_mock: HTTPXMock):
+    httpx_mock.add_exception(httpx.ConnectError("boom"))
+    httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+
+    result = await _get_with({}, _auth_settings(retry_count=2))
+
+    assert result == {"data": []}
+    assert len(httpx_mock.get_requests()) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_retries_503_then_succeeds(httpx_mock: HTTPXMock):
+    httpx_mock.add_response(method="GET", url=_allocation_url(), status_code=503, text="unavailable")
+    httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+
+    result = await _get_with({}, _auth_settings(retry_count=2))
+
+    assert result == {"data": []}
+    assert len(httpx_mock.get_requests()) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_does_not_retry_client_errors(httpx_mock: HTTPXMock):
+    httpx_mock.add_response(method="GET", url=_allocation_url(), status_code=400, text="bad request")
+
+    with pytest.raises(KubecostClientError) as exc_info:
+        await _get_with({}, _auth_settings(retry_count=2))
+
+    assert exc_info.value.status_code == 400
+    assert len(httpx_mock.get_requests()) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_exhausts_retries_on_503(httpx_mock: HTTPXMock):
+    for _ in range(3):
+        httpx_mock.add_response(method="GET", url=_allocation_url(), status_code=503, text="unavailable")
+
+    with pytest.raises(KubecostClientError) as exc_info:
+        await _get_with({}, _auth_settings(retry_count=2))
+
+    assert exc_info.value.status_code == 503
+    assert len(httpx_mock.get_requests()) == 3
+
+
+@pytest.mark.asyncio
+async def test_get_retry_count_zero_does_not_retry(httpx_mock: HTTPXMock):
+    httpx_mock.add_exception(httpx.ConnectError("boom"))
+
+    with pytest.raises(httpx.ConnectError):
+        await _get_with({}, _auth_settings(retry_count=0))
+
+    assert len(httpx_mock.get_requests()) == 1
