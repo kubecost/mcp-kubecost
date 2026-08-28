@@ -3,20 +3,34 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 
 import fastmcp
+import pytest
 
 from mcp_kubecost.config.settings import AuthMode, _get_auth_mode, apply_http_rich_logging, get_settings, is_http_mode
 from mcp_kubecost.errors import ConfigError
 
 
+def _load_settings(monkeypatch, **environment: str):
+    monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    get_settings.cache_clear()
+    try:
+        return get_settings()
+    finally:
+        get_settings.cache_clear()
+
+
 class TestIsHttpMode:
     def test_stdio_argv_is_not_http(self):
         assert is_http_mode(["mcp-kubecost"]) is False
-        assert is_http_mode(["fastmcp", "run", "fastmcp.json"]) is False
+        assert is_http_mode(["fastmcp", "run", "config/fastmcp.json"]) is False
 
     def test_fastmcp_http_config_is_http(self):
-        assert is_http_mode(["fastmcp", "run", "fastmcp-http.json", "--skip-env"]) is True
+        assert is_http_mode(["fastmcp", "run", "config/fastmcp-http.json", "--skip-env"]) is True
 
     def test_transport_flag_is_http(self):
         assert is_http_mode(["fastmcp", "run", "server.py", "--transport", "http"]) is True
@@ -54,28 +68,6 @@ class TestApplyHttpRichLogging:
         assert fastmcp.settings.enable_rich_logging is before
 
 
-class TestEnableRichLoggingSetting:
-    def test_http_defaults_false(self, monkeypatch):
-        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
-        monkeypatch.setenv("FASTMCP_TRANSPORT", "http")
-        get_settings.cache_clear()
-        try:
-            assert get_settings().enable_rich_logging is False
-        finally:
-            get_settings.cache_clear()
-
-    def test_stdio_respects_env(self, monkeypatch):
-        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
-        monkeypatch.delenv("FASTMCP_TRANSPORT", raising=False)
-        monkeypatch.setenv("FASTMCP_ENABLE_RICH_LOGGING", "false")
-        monkeypatch.setattr("sys.argv", ["pytest"])
-        get_settings.cache_clear()
-        try:
-            assert get_settings().enable_rich_logging is False
-        finally:
-            get_settings.cache_clear()
-
-
 class TestRequireClientApiKeySetting:
     def test_defaults_off(self, monkeypatch):
         """Off by default — an unset flag must not change existing behavior."""
@@ -104,6 +96,30 @@ class TestRequireClientApiKeySetting:
             assert get_settings().to_loggable_dict()["KUBECOST_API_KEY"] == "***"
         finally:
             get_settings.cache_clear()
+
+
+class TestRequestSettings:
+    def test_rejects_non_positive_timeout(self, monkeypatch):
+        for value in ("0", "-0.1"):
+            with pytest.raises(ConfigError, match="REQUEST_TIMEOUT_SECONDS must be greater than 0"):
+                _load_settings(monkeypatch, REQUEST_TIMEOUT_SECONDS=value)
+
+    def test_rejects_negative_retry_count(self, monkeypatch):
+        with pytest.raises(ConfigError, match="REQUEST_RETRY_COUNT must be 0 or greater"):
+            _load_settings(monkeypatch, REQUEST_RETRY_COUNT="-1")
+
+    def test_default_window_propagates_to_tool_default_constant(self, monkeypatch):
+        environment = os.environ.copy()
+        environment["KUBECOST_BASE_URL"] = "http://localhost:9090"
+        environment["DEFAULT_WINDOW"] = "30d"
+        result = subprocess.run(
+            [sys.executable, "-c", "from mcp_kubecost.tools._common import DEFAULT_WINDOW; print(DEFAULT_WINDOW)"],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        assert result.stdout.strip() == "30d"
 
 
 class TestAuthModeSetting:

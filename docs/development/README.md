@@ -27,7 +27,7 @@ Tracing lives in a separate `otel` extra — add `--extra otel` (or use `just se
 
 ## Configuration
 
-Copy [`.env.example`](../../.env.example) to `.env` and set any variable needed to change defaults. `KUBECOST_BASE_URL` is the only required one. Auth and TLS variables are documented in [`README.md`](../auth/README.md:1).
+Copy [`.env.example`](../../.env.example) to `.env` and set any variable needed to change defaults. `KUBECOST_BASE_URL` is the only required one. Auth and TLS variables are documented in [`README.md`](../auth/README.md).
 
 ## Run
 
@@ -38,13 +38,13 @@ uv run mcp-kubecost
 # or
 uv run python -m mcp_kubecost.server
 # or
-uv run fastmcp run fastmcp.json
+uv run fastmcp run config/fastmcp.json
 ```
 
 **HTTP** (service deployment, port 3030):
 
 ```bash
-uv run fastmcp run fastmcp-http.json   # or: just serve
+uv run fastmcp run config/fastmcp-http.json   # or: just serve
 ```
 
 Install or upgrade the application with the Helm chart:
@@ -76,14 +76,15 @@ just readme-tools
 .venv/bin/ruff format .                # format
 .venv/bin/ruff check . --fix           # lint
 .venv/bin/pyrefly check                # type check
-uvx pre-commit run --config .pre-commit-config-ci.yaml --all-files
+just vulture                           # blocking dead-code scan
+uvx pre-commit run --config .github/pre-commit-config-ci.yaml --all-files
 ```
 
 Run `ruff format`, `ruff check --fix`, and `pyrefly check` after every Python edit. Since this guide now lives under [`docs/development/`](../development/), run the pre-commit command from the repository root.
 
 **Pyrefly** is the project's type checker, configured under `[tool.pyrefly]` in `pyproject.toml` and enforced in CI at the `basic` preset (0 errors). The `[tool.basedpyright]` block is retained only for IDEs without Pyrefly language-server support; it is not an enforced gate, and Pyrefly wins if the two disagree.
 
-CI runs on Python 3.12 ([`ci.yml`](../../.github/workflows/ci.yml)), matching `requires-python`. See [`pre-commit-checks.md`](pre-commit-checks.md:1) for local vs CI hook tiers.
+CI runs on Python 3.12 ([`ci.yml`](../../.github/workflows/ci.yml)), matching `requires-python`. See [`pre-commit-checks.md`](pre-commit-checks.md) for local vs CI hook tiers.
 
 ## Docker / Kubernetes
 
@@ -97,7 +98,7 @@ The Docker image's `CMD` is `/app/.venv/bin/mcp-kubecost-http` ([`otel_entrypoin
 
 ## Telemetry
 
-OpenTelemetry is an optional extra (`uv sync --extra otel`). The Docker image installs it explicitly, so deployed behaviour is unchanged; plain installs skip ~13 packages. Runtime export is still gated by `FASTMCP_TELEMETRY_MODE` — see [`README.md`](../../README.md:87) for the variables.
+OpenTelemetry is an optional extra (`uv sync --extra otel`). The Docker image installs it explicitly, so deployed behaviour is unchanged; plain installs skip ~13 packages. Runtime export is still gated by `FASTMCP_TELEMETRY_MODE` — see [`README.md`](../../README.md#telemetry-experimental) for the variables.
 
 `otel_entrypoint.py` degrades rather than failing: with telemetry enabled but the extra missing, it warns on stderr and starts the server untraced.
 
@@ -113,7 +114,7 @@ Dropping the distro would forfeit automatic httpx spans on every Kubecost API ca
 
 ## Security
 
-Authentication, OIDC, API keys, and pod hardening: [`README.md`](../auth/README.md:1).
+Authentication, OIDC, API keys, and pod hardening: [`README.md`](../auth/README.md).
 
 - Never hardcode credentials; use environment variables only.
 - CI includes a lightweight secret-pattern scan and large-file safety check.

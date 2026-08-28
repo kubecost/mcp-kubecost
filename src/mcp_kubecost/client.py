@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -15,6 +19,9 @@ logger = logging.getLogger(__name__)
 
 # Retry these status codes; 4xx (except 429) fail immediately.
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+_BACKOFF_BASE_SECONDS = 0.25
+_BACKOFF_CAP_SECONDS = 2.0
+_RETRY_AFTER_CAP_SECONDS = 30.0
 
 
 class KubecostClientError(Exception):
@@ -115,9 +122,26 @@ def _build_params(params: dict[str, Any] | None) -> dict[str, Any]:
     return merged or None  # type: ignore[return-value]
 
 
-def _max_attempts() -> int:
-    """First try plus ``retry_count`` additional attempts (minimum 1)."""
-    return max(1, get_settings().retry_count + 1)
+def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
+    """Return a bounded server-directed delay or full-jitter backoff."""
+    if response is not None:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                delay = float(retry_after)
+            except ValueError:
+                try:
+                    retry_at = parsedate_to_datetime(retry_after)
+                    if retry_at.tzinfo is None:
+                        retry_at = retry_at.replace(tzinfo=UTC)
+                    delay = (retry_at - datetime.now(UTC)).total_seconds()
+                except (TypeError, ValueError, OverflowError):
+                    delay = -1.0
+            if delay >= 0:
+                return min(delay, _RETRY_AFTER_CAP_SECONDS)
+
+    maximum = min(_BACKOFF_CAP_SECONDS, _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)))
+    return random.uniform(0.0, maximum)
 
 
 async def _request(
@@ -128,66 +152,75 @@ async def _request(
     json: dict[str, Any] | None = None,
     headers: dict[str, str] | None = None,
 ) -> Any:
-    """Send one HTTP request, retrying transport errors and retryable status codes."""
+    """Send one HTTP request, safely retrying idempotent GET requests."""
     settings = get_settings()
     url = f"{_get_base_url()}{path}"
     headers = _build_headers() if headers is None else headers
-    attempts = _max_attempts()
+    retryable_method = method.upper() == "GET"
+    attempts = 1 + settings.retry_count if retryable_method else 1
+    request_params = _build_params(params)
 
-    for attempt in range(1, attempts + 1):
-        try:
-            async with httpx.AsyncClient(
-                timeout=settings.request_timeout_seconds,
-                verify=settings.ssl_verify,
-            ) as client:
+    async with httpx.AsyncClient(
+        timeout=settings.request_timeout_seconds,
+        verify=settings.ssl_verify,
+    ) as client:
+        for attempt in range(1, attempts + 1):
+            response: httpx.Response | None = None
+            try:
                 response = await client.request(
                     method,
                     url,
-                    params=_build_params(params),
+                    params=request_params,
                     headers=headers,
                     json=json,
                 )
-        except httpx.RequestError:
-            if attempt >= attempts:
-                raise
-            logger.warning(
-                "Kubecost %s %s transport error on attempt %s/%s; retrying",
-                method,
-                path,
-                attempt,
-                attempts,
-            )
-            continue
-
-        if response.status_code >= 400:
-            if response.status_code in _RETRYABLE_STATUS_CODES and attempt < attempts:
+            except httpx.TransportError:
+                if attempt >= attempts:
+                    raise
+                delay = _retry_delay(None, attempt)
                 logger.warning(
-                    "Kubecost %s %s returned HTTP %s on attempt %s/%s; retrying",
+                    "Kubecost %s %s transport error on attempt %s/%s; retrying in %.2fs",
                     method,
                     path,
-                    response.status_code,
                     attempt,
                     attempts,
+                    delay,
                 )
+                await asyncio.sleep(delay)
                 continue
-            raise KubecostClientError(
-                status_code=response.status_code,
-                message=response.text,
-                url=url,
-                path=path,
-            )
 
-        try:
-            return response.json()
-        except Exception as exc:
-            logger.error(
-                "Failed to parse JSON response from %s (status=%s, body=%r): %s",
-                str(response.url),
-                response.status_code,
-                response.text[:500],
-                exc,
-            )
-            raise
+            if response.status_code >= 400:
+                if response.status_code in _RETRYABLE_STATUS_CODES and attempt < attempts:
+                    delay = _retry_delay(response, attempt)
+                    logger.warning(
+                        "Kubecost %s %s returned HTTP %s on attempt %s/%s; retrying in %.2fs",
+                        method,
+                        path,
+                        response.status_code,
+                        attempt,
+                        attempts,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise KubecostClientError(
+                    status_code=response.status_code,
+                    message=response.text,
+                    url=url,
+                    path=path,
+                )
+
+            try:
+                return response.json()
+            except Exception as exc:
+                logger.error(
+                    "Failed to parse JSON response from %s (status=%s, body=%r): %s",
+                    str(response.url),
+                    response.status_code,
+                    response.text[:500],
+                    exc,
+                )
+                raise
 
     raise RuntimeError("unreachable: retry loop exited without return or raise")
 

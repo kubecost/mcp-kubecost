@@ -35,40 +35,5 @@ class ToolError(BaseModel):
     context: dict = {}
 
 
-class FinOpsError(Exception):
-    """Base class for known business/domain errors."""
-
-    error_code = "finops_error"
-    retryable = False
-
-    def to_payload(self) -> dict[str, object]:
-        return {
-            "error_code": self.error_code,
-            "retryable": self.retryable,
-            "message": str(self),
-        }
-
-
-class ConfigError(FinOpsError):
+class ConfigError(Exception):
     """Configuration or environment error."""
-
-    error_code = "config_error"
-
-
-class ValidationError(FinOpsError):
-    """Input validation error for query parameters."""
-
-    error_code = "validation_error"
-
-
-class ApiTransportError(FinOpsError):
-    """Network and transport-layer API failures."""
-
-    error_code = "api_transport_error"
-    retryable = True
-
-
-class ApiResponseError(FinOpsError):
-    """Unexpected/malformed API responses or status errors."""
-
-    error_code = "api_response_error"

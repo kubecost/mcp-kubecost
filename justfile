@@ -59,13 +59,13 @@ dev:
 
 # Start FastMCP as HTTP server on port 3030 (for debugging with logs)
 serve:
-    fastmcp run ./fastmcp-http.json
+    fastmcp run ./config/fastmcp-http.json
 
 # ── FastMCP CLI ────────────────────────────────────────────────────────────────
 
 # Inspect the MCP server (list tools, prompts, resources)
 inspect:
-    fastmcp inspect
+    fastmcp inspect config/fastmcp.json
 
 # List all tools and prompts
 list:
@@ -92,13 +92,18 @@ cost-comparison AGGREGATE="namespace":
 
 # Install MCP config for other agents
 install-bob:
-    fastmcp install mcp-json ./fastmcp.json --project $PWD --env-file .env
+    fastmcp install mcp-json ./config/fastmcp.json --project $PWD --env-file .env
 
 # Install MCP config for Claude Desktop
 install-claude:
-    fastmcp install claude-desktop ./fastmcp.json --project $PWD --env-file .env
+    fastmcp install claude-desktop ./config/fastmcp.json --project $PWD --env-file .env
 
 # ── Linting ────────────────────────────────────────────────────────────────────
+
+# Dead-code scan. Uses [tool.vulture] in pyproject.toml (FastMCP decorator
+# ignore + Pydantic field whitelist). Pass no extra paths — they replace config.
+vulture:
+    uv run vulture
 
 # Spell-check all prose and source files tracked by cspell
 spell-check:
@@ -109,7 +114,6 @@ spell-check:
         exit 0
     fi
     cspell lint --no-progress --config .github/cspell.json \
-        DEVELOPMENT.md \
         README.md \
         docs/ \
         "src/mcp_kubecost/tools/**" \

@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field, ValidationError as PydanticValidationErro
 
 from mcp_kubecost.auth import MissingClientApiKeyError
 from mcp_kubecost.client import KubecostClientError, get, post
+from mcp_kubecost.config.settings import get_settings
 from mcp_kubecost.errors import ErrorCode, ToolError
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ __all__ = [
 ]
 
 # Default query window used by all tools unless the caller overrides it.
-DEFAULT_WINDOW: str = "15d"
+DEFAULT_WINDOW: str = get_settings().default_window
 
 # Quantile algorithms (quantileOfAverages, quantileOfMaxes) require enough
 # data points for a meaningful distribution. Enforce at least this many days.
