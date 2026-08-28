@@ -43,6 +43,9 @@ class Settings:
     retry_count: int
     default_window: str
     log_level: str
+    rate_limit_requests_per_second: float
+    rate_limit_burst_capacity: int
+    max_concurrent_tool_calls: int
 
     # OIDC authentication (HTTP transport only)
     auth_mode: AuthMode
@@ -53,14 +56,22 @@ class Settings:
     oidc_base_url: str | None
     oidc_redirect_path: str
     oidc_required_scopes: list[str]
+    oidc_storage_path: str
+    oidc_jwt_signing_key: str | None
+    oidc_storage_encryption_key: str | None
 
     def to_loggable_dict(self) -> dict:
         """Return a copy of settings safe for logging (sensitive fields redacted)."""
         d = dataclasses.asdict(self)
         if d.get("KUBECOST_API_KEY") is not None:
             d["KUBECOST_API_KEY"] = "***"
-        if d.get("oidc_client_secret") is not None:
-            d["oidc_client_secret"] = "***"
+        for name in (
+            "oidc_client_secret",
+            "oidc_jwt_signing_key",
+            "oidc_storage_encryption_key",
+        ):
+            if d.get(name) is not None:
+                d[name] = "***"
         # Serialize auth_mode as its string value for readability
         d["auth_mode"] = self.auth_mode.value
         return d
@@ -179,6 +190,7 @@ def _get_oidc_scopes() -> list[str]:
 
 
 _DEFAULT_OIDC_REDIRECT_PATH = "/auth-mcp"
+_DEFAULT_OIDC_STORAGE_PATH = "/var/lib/mcp-kubecost/oauth"
 
 
 def _get_oidc_redirect_path() -> str:
@@ -207,6 +219,15 @@ def _get_oidc_redirect_path() -> str:
     return path
 
 
+def _get_oidc_storage_path() -> str:
+    """Return the absolute directory used for encrypted OAuth state."""
+    raw = os.getenv("OIDC_STORAGE_PATH", _DEFAULT_OIDC_STORAGE_PATH).strip()
+    path = os.path.abspath(raw)
+    if not raw or not os.path.isabs(raw):
+        raise ConfigError(f"Invalid OIDC_STORAGE_PATH: {raw!r} (expected an absolute path)")
+    return path
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Load and cache settings from environment."""
@@ -220,6 +241,8 @@ def get_settings() -> Settings:
     oidc_client_secret: str | None = os.getenv("OIDC_CLIENT_SECRET", "").strip() or None
     oidc_audience: str | None = os.getenv("OIDC_AUDIENCE", "").strip() or None
     oidc_base_url: str | None = os.getenv("OIDC_BASE_URL", "").strip() or None
+    oidc_jwt_signing_key: str | None = os.getenv("OIDC_JWT_SIGNING_KEY", "").strip() or None
+    oidc_storage_encryption_key: str | None = os.getenv("OIDC_STORAGE_ENCRYPTION_KEY", "").strip() or None
 
     if auth_mode == AuthMode.OIDC:
         missing = []
@@ -231,8 +254,16 @@ def get_settings() -> Settings:
             missing.append("OIDC_CLIENT_SECRET")
         if not oidc_base_url:
             missing.append("OIDC_BASE_URL")
+        if not oidc_jwt_signing_key:
+            missing.append("OIDC_JWT_SIGNING_KEY")
+        if not oidc_storage_encryption_key:
+            missing.append("OIDC_STORAGE_ENCRYPTION_KEY")
         if missing:
             raise ConfigError(f"AUTH_MODE={auth_mode.value} requires: {', '.join(missing)}")
+
+        assert oidc_jwt_signing_key is not None
+        if len(oidc_jwt_signing_key) < 32:
+            raise ConfigError("OIDC_JWT_SIGNING_KEY must be at least 32 characters")
 
     # AUTH_MODE=api_key is the same gate as REQUIRE_CLIENT_API_KEY=true.
     require_client_api_key = _get_bool_env("REQUIRE_CLIENT_API_KEY", False) or auth_mode == AuthMode.API_KEY
@@ -242,6 +273,15 @@ def get_settings() -> Settings:
     retry_count = _get_int_env("REQUEST_RETRY_COUNT", 2)
     if retry_count < 0:
         raise ConfigError("REQUEST_RETRY_COUNT must be 0 or greater")
+    rate_limit_requests_per_second = _get_float_env("MCP_RATE_LIMIT_REQUESTS_PER_SECOND", 10.0)
+    if rate_limit_requests_per_second <= 0:
+        raise ConfigError("MCP_RATE_LIMIT_REQUESTS_PER_SECOND must be greater than 0")
+    rate_limit_burst_capacity = _get_int_env("MCP_RATE_LIMIT_BURST_CAPACITY", 20)
+    if rate_limit_burst_capacity <= 0:
+        raise ConfigError("MCP_RATE_LIMIT_BURST_CAPACITY must be greater than 0")
+    max_concurrent_tool_calls = _get_int_env("MCP_MAX_CONCURRENT_TOOL_CALLS", 10)
+    if max_concurrent_tool_calls <= 0:
+        raise ConfigError("MCP_MAX_CONCURRENT_TOOL_CALLS must be greater than 0")
 
     return Settings(
         kubecost_base_url=kubecost_base_url,
@@ -253,6 +293,9 @@ def get_settings() -> Settings:
         retry_count=retry_count,
         default_window=os.getenv("DEFAULT_WINDOW", "15d").strip(),
         log_level=os.getenv("FASTMCP_LOG_LEVEL", "INFO").upper(),
+        rate_limit_requests_per_second=rate_limit_requests_per_second,
+        rate_limit_burst_capacity=rate_limit_burst_capacity,
+        max_concurrent_tool_calls=max_concurrent_tool_calls,
         use_cac_views=_get_bool_env("USE_CAC_VIEWS", False),
         auth_mode=auth_mode,
         oidc_issuer_url=oidc_issuer_url,
@@ -262,4 +305,7 @@ def get_settings() -> Settings:
         oidc_base_url=oidc_base_url,
         oidc_redirect_path=_get_oidc_redirect_path(),
         oidc_required_scopes=_get_oidc_scopes(),
+        oidc_storage_path=_get_oidc_storage_path(),
+        oidc_jwt_signing_key=oidc_jwt_signing_key,
+        oidc_storage_encryption_key=oidc_storage_encryption_key,
     )
