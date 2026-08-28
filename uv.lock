@@ -923,8 +923,10 @@ name = "mcp-kubecost"
 version = "0.10.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "fastmcp" },
     { name = "httpx" },
+    { name = "py-key-value-aio", extra = ["filetree"] },
     { name = "python-dotenv" },
 ]
 
@@ -946,11 +948,13 @@ otel = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastmcp", specifier = ">=3.4.7" },
+    { name = "cryptography", specifier = ">=46.0.3" },
+    { name = "fastmcp", specifier = ">=3.4.7,<4.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "opentelemetry-distro", extras = ["otlp"], marker = "extra == 'otel'", specifier = ">=0.65b0" },
     { name = "opentelemetry-instrumentation-httpx", marker = "extra == 'otel'", specifier = ">=0.65b0" },
     { name = "opentelemetry-instrumentation-starlette", marker = "extra == 'otel'", specifier = ">=0.65b0" },
+    { name = "py-key-value-aio", extras = ["filetree"], specifier = ">=0.4.5" },
     { name = "pyrefly", marker = "extra == 'dev'" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pytest-asyncio", marker = "extra == 'dev'" },

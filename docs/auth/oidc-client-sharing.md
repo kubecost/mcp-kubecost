@@ -52,7 +52,10 @@ The only friction a second client adds is administrative:
 1. Create one more client in the identity provider.
 2. Store one more secret.
 
-This server delegates consent to the identity provider (`require_authorization_consent="external"`), so if your provider forces a per-client consent screen, users see it once for the new client. Turn consent off on the client if that matters — it is a per-client setting, which is itself an argument for having a second client.
+This server remembers FastMCP consent per MCP client. If your provider also
+forces a per-client consent screen, users see that provider screen once for the
+new client. Turn provider-side consent off on the client if that matters — it is
+a per-client setting, which is itself an argument for having a second client.
 
 ## What a shared client costs you
 
@@ -72,7 +75,7 @@ It also creates invisible coupling: a wildcard added to the Kubecost entries lat
 
 The token audience is derived from the client, so with one client nothing in a token distinguishes "minted for the Kubecost UI" from "minted for the MCP". This server makes that concrete: when the provider issues opaque access tokens, it verifies the `id_token`, whose audience is the OAuth client ID.
 
-The direction that matters is MCP toward Kubecost. The MCP pod holds live upstream access and refresh tokens in memory for each connected user. If those tokens carry the same audience the Kubecost UI accepts, they are also usable directly against Kubecost as that user. Separate clients let Kubecost reject them.
+The direction that matters is MCP toward Kubecost. The MCP server holds live upstream access and refresh tokens in its encrypted, PVC-backed FileTreeStore for connected users. If those tokens carry the same audience the Kubecost UI accepts, they are also usable directly against Kubecost as that user. Separate clients let Kubecost reject them.
 
 ### Everything the identity provider scopes per client
 
@@ -158,10 +161,11 @@ There are legitimate reasons: an identity provider you do not own, where a new c
 
 ## Migrating from a shared client to a dedicated one
 
-There is no user-visible downtime beyond one re-authentication, and MCP client registrations are held in memory anyway, so a restart already forces them to re-register.
+There is no user-visible downtime beyond one re-authentication. MCP client
+registrations remain on the OAuth state PVC across the Deployment recreation.
 
 1. Create the new client as described above, with only the MCP callback registered.
-2. Update the MCP Secret (or `config.oidc.clientId` / `clientSecret`) with the new credentials and `helm upgrade`. The rolling restart picks them up.
+2. Update the MCP Secret (or `config.oidc.clientId` / `clientSecret`) with the new credentials and `helm upgrade`. The `Recreate` deployment picks them up.
 3. Reconnect one MCP client and confirm login and a tool call succeed.
 4. Remove the MCP callback from the Kubecost client's redirect URI list.
 5. Rotate the old shared secret, since it was distributed more widely than it should have been.

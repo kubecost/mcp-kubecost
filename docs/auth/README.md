@@ -27,7 +27,8 @@ This server has two independent, optional auth layers. One protects the **MCP HT
 | `oidc`    | Valid OIDC token via FastMCP `OIDCProxy`                              | Optional env/header fallback |
 | `api_key` | Incoming `X-API-KEY` required (same as `REQUIRE_CLIENT_API_KEY=true`) | Header forwarded to Kubecost |
 
-`oidc` requires `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and `OIDC_BASE_URL`.
+`oidc` requires `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`,
+`OIDC_BASE_URL`, `OIDC_JWT_SIGNING_KEY`, and `OIDC_STORAGE_ENCRYPTION_KEY`.
 
 > [!TIP]
 > To require **both** OIDC identity and a per-request `X-API-KEY`, set `authMode: oidc` and `requireClientApiKey: true`.
@@ -54,7 +55,14 @@ When `AUTH_MODE=oidc`, the server builds a FastMCP [`OIDCProxy`](https://gofastm
 
 When this server has a **dedicated hostname** (not a Kubecost sub-path), use `/auth/callback` instead — see [Shared Kubecost frontend hostname](#shared-kubecost-frontend-hostname) for why `/auth-mcp` is otherwise required.
 
-The MCP client’s own redirect (`http://localhost:<port>/callback` or Claude’s `https://claude.ai/api/mcp/auth_callback`) is registered with FastMCP via DCR. Do not put those URLs on the identity provider. This server allowlists those MCP-client redirects (`http://localhost:*`, `http://127.0.0.1:*`, and Claude’s callback) so an unknown `client_id` after a pod restart cannot open-redirect to an arbitrary host. The IdP Valid redirect URI remains only `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}`.
+The MCP client’s own redirect (`http://localhost:<port>/callback` or Claude’s `https://claude.ai/api/mcp/auth_callback`) is registered with FastMCP via DCR. Do not put those URLs on the identity provider. This server allowlists those MCP-client redirects (`http://localhost:*`, `http://127.0.0.1:*`, and Claude’s callback). DCR registrations survive pod recreation in the PVC-backed FileTreeStore; unknown client IDs are rejected. The IdP Valid redirect URI remains only `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}`.
+
+FastMCP displays consent once per MCP client and remembers the decision in a
+signed browser cookie. OAuth registrations, authorization codes, and tokens are
+stored by the built-in FileTreeStore through a Fernet encryption wrapper. The
+Helm chart always persists that directory on a PVC. Keep the signing and
+encryption keys stable across upgrades; rotating the encryption key without a
+migration invalidates previously stored state.
 
 `OIDC_ISSUER_URL` is the provider’s discovery document, for example: `https://{domain}/.well-known/openid-configuration`.
 
@@ -180,15 +188,29 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 | `OIDC_REDIRECT_PATH`         | `config.oidc.redirectPath`                              | IdP callback path. Default `/auth-mcp`. Use `/auth/callback` when MCP has a dedicated hostname                                                                                                                                                                                                      |
 | `OIDC_AUDIENCE`              | `config.oidc.audience`                                  | Optional token audience (JWT access tokens only; omit for opaque IdPs)                                                                                                                                                                                                                              |
 | `OIDC_REQUIRED_SCOPES`       | `config.oidc.requiredScopes`                            | Default `openid,profile`                                                                                                                                                                                                                                                                            |
+| `OIDC_STORAGE_PATH`          | fixed by the chart                                      | Built-in FileTreeStore directory. Default `/var/lib/mcp-kubecost/oauth`; Helm mounts its mandatory PVC at the parent directory                                                                                                                                                                     |
+| `OIDC_JWT_SIGNING_KEY`       | `config.oidc.jwtSigningKey` or Secret                    | Stable random key, at least 32 characters, used to sign MCP-side OAuth tokens                                                                                                                                                                                                                       |
+| `OIDC_STORAGE_ENCRYPTION_KEY` | `config.oidc.storageEncryptionKey` or Secret             | URL-safe base64 Fernet key used to encrypt OAuth state before FileTreeStore persistence                                                                                                                                                                                                             |
 | `KUBECOST_API_KEY`           | `config.kubecostApiKey` (`.value` or `.existingSecret`) | Fallback key sent to Kubecost. Prefer `.existingSecret` naming a pre-created Secret (`kubectl create secret generic <name> --from-literal=KUBECOST_API_KEY=<key>`, or provision via CI/CD); `.value` inline makes the chart mint the Secret. `.key` sets the Secret key, default `KUBECOST_API_KEY` |
 | `REQUIRE_CLIENT_API_KEY`     | `config.requireClientApiKey`                            | Require inbound `X-API-KEY` on HTTP                                                                                                                                                                                                                                                                 |
 | `KUBECOST_SSL_VERIFY`        | `config.ssl.verify`                                     | TLS verify for Kubecost                                                                                                                                                                                                                                                                             |
 | `SSL_CA_BUNDLE`              | `config.ssl.caBundle`                                   | Custom CA path (implies verify)                                                                                                                                                                                                                                                                     |
 | `FASTMCP_HTTP_ALLOWED_HOSTS` | `config.fastmcpHttpAllowedHosts`                        | JSON array of allowed `Host` headers; empty disables                                                                                                                                                                                                                                                |
+| `FASTMCP_HTTP_ALLOWED_ORIGINS` | `config.fastmcpHttpAllowedOrigins`                      | JSON array of browser origins trusted by the Host/Origin guard                                                                                                                                                                                                                                      |
+| `FASTMCP_HTTP_HOST_ORIGIN_PROTECTION` | `config.fastmcpHttpHostOriginProtection`        | `auto` by default; set `true` with explicit allowlists for strict validation                                                                                                                                                                                                                        |
+| `MCP_RATE_LIMIT_REQUESTS_PER_SECOND` | `config.rateLimitRequestsPerSecond`              | Sustained MCP request rate per pod; default `10`                                                                                                                                                                                                                                                    |
+| `MCP_RATE_LIMIT_BURST_CAPACITY` | `config.rateLimitBurstCapacity`                      | Token-bucket burst capacity; default `20`                                                                                                                                                                                                                                                           |
+| `MCP_MAX_CONCURRENT_TOOL_CALLS` | `config.maxConcurrentToolCalls`                      | Simultaneous tool executions; default `10`                                                                                                                                                                                                                                                         |
 
 `MCP_HTTP_PATH` is the one entry in that table not read through `get_settings()`. It shapes the `fastmcp run --path` argv, so [`otel_entrypoint.py`](../../src/mcp_kubecost/otel_entrypoint.py) reads it before the server process exists. The entrypoint calls `load_dotenv()` itself, so `.env` works; but running `uv run fastmcp run config/fastmcp-http.json` bypasses the entrypoint entirely and ignores the variable — pass `--path` on the command line for that case.
 
-OIDC client credentials in Helm: set `config.oidc.existingSecret` (keys `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`) or `clientId` / `clientSecret` (the chart will mint a Secret).
+OIDC secrets in Helm: set `config.oidc.existingSecret` with keys
+`OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_JWT_SIGNING_KEY`, and
+`OIDC_STORAGE_ENCRYPTION_KEY`; or set all four
+inline values and the chart will mint a Secret. The Deployment is intentionally
+fixed at one replica with `Recreate` strategy. The chart always creates a
+`ReadWriteOnce` PVC and fixes `OIDC_STORAGE_PATH` to
+`/var/lib/mcp-kubecost/oauth`; tune provisioning with `persistence.*`.
 
 ### Helm
 
@@ -214,7 +236,7 @@ The chart defaults are meant for a locked-down runtime:
 - non-root UID/GID `65532`, `runAsNonRoot`, `RuntimeDefault` seccomp
 - `readOnlyRootFilesystem`, all capabilities dropped, no privilege escalation
 - `automountServiceAccountToken: false`
-- OIDC state in memory so the root filesystem can stay read-only
+- encrypted OIDC state on a dedicated PVC while the root filesystem stays read-only
 
 For a custom CA, put the cert in a Secret and set `config.ssl.caBundle.existingSecret` / `key`. The chart mounts it read-only and sets `SSL_CA_BUNDLE`.
 
@@ -237,8 +259,10 @@ Kubecost frontend SSO intercepted the OAuth path. Give `config.oidc.baseUrl` a p
 **Keycloak `invalid_redirect_uri`**
 Add `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}` to the client’s Valid redirect URIs — the value in the Keycloak error URL’s `redirect_uri=` query param. Default is `{OIDC_BASE_URL}/auth-mcp` with no extra `/callback`. Dedicated hostname: `{OIDC_BASE_URL}/auth/callback`. Do not add the MCP client’s localhost or Claude callback there.
 
-**Pod crash on start with read-only root / `mkdir` under `.local/share/fastmcp`**
-OIDC file storage tried to write to disk. Current builds use `MemoryStore`; rebuild/redeploy if the image predates that change.
+**Pod cannot create or write `/var/lib/mcp-kubecost/oauth`**
+Confirm the chart-created PVC is Bound and the pod security context was not
+overridden without an equivalent writable `fsGroup`. On OpenShift, enable the
+parent chart's OpenShift platform settings so the SCC assigns the UID/GID.
 
 **Probes failing with 401**
 `probes.path` must be `/health`, not `/mcp`.
