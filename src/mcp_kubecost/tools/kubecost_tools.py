@@ -1956,8 +1956,6 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             truncated=truncated,
         )
 
-    _default_current_window, _default_baseline_window = _default_wow_windows()
-
     @mcp.tool(
         version=_VERSION,
         annotations=ToolAnnotations(
@@ -1970,7 +1968,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
     )
     async def get_kubecost_cost_comparison(
         current_window: Annotated[
-            str,
+            str | None,
             Field(
                 description=(
                     "The more recent period to inspect. Must be an RFC3339 range 'start,end' that ends "
@@ -1979,9 +1977,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 ),
                 examples=["2026-07-14T00:00:00Z,2026-07-21T00:00:00Z"],
             ),
-        ] = _default_current_window,
+        ] = None,
         baseline_window: Annotated[
-            str,
+            str | None,
             Field(
                 description=(
                     "The prior period to compare against. Must be an RFC3339 range ending before today "
@@ -1991,7 +1989,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 ),
                 examples=["2026-07-07T00:00:00Z,2026-07-14T00:00:00Z"],
             ),
-        ] = _default_baseline_window,
+        ] = None,
         aggregate: Annotated[
             str,
             Field(
@@ -2044,6 +2042,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         grouped under __unallocated__ and explained in the response notes.
 
         """
+        default_current_window, default_baseline_window = _default_wow_windows()
+        current_window = current_window or default_current_window
+        baseline_window = baseline_window or default_baseline_window
         current_days, baseline_days = _validate_comparison_windows(current_window, baseline_window)
         resolved_current_window = _resolve_window_defensively(current_window)
         resolved_baseline_window = _resolve_window_defensively(baseline_window)

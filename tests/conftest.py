@@ -6,11 +6,21 @@ import os
 
 import pytest
 
+from mcp_kubecost.client import close_http_client
+
 # ---------------------------------------------------------------------------
 # Environment defaults — must be set before any module-level settings load
 # ---------------------------------------------------------------------------
 
 os.environ.setdefault("KUBECOST_BASE_URL", "https://demo.kubecost.xyz")
+
+
+@pytest.fixture(autouse=True)
+async def reset_shared_http_client():
+    """Keep the process-wide client isolated across tests and event loops."""
+    await close_http_client()
+    yield
+    await close_http_client()
 
 
 # ---------------------------------------------------------------------------

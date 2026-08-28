@@ -122,6 +122,26 @@ class TestRequestSettings:
         assert result.stdout.strip() == "30d"
 
 
+class TestRequestLimitSettings:
+    def test_defaults(self, monkeypatch):
+        settings = _load_settings(monkeypatch)
+        assert settings.rate_limit_requests_per_second == 10.0
+        assert settings.rate_limit_burst_capacity == 20
+        assert settings.max_concurrent_tool_calls == 10
+
+    @pytest.mark.parametrize(
+        ("name", "value"),
+        [
+            ("MCP_RATE_LIMIT_REQUESTS_PER_SECOND", "0"),
+            ("MCP_RATE_LIMIT_BURST_CAPACITY", "0"),
+            ("MCP_MAX_CONCURRENT_TOOL_CALLS", "-1"),
+        ],
+    )
+    def test_rejects_non_positive_values(self, monkeypatch, name, value):
+        with pytest.raises(ConfigError, match=f"{name} must be greater than 0"):
+            _load_settings(monkeypatch, **{name: value})
+
+
 class TestAuthModeSetting:
     def test_both_is_rejected(self, monkeypatch):
         """AUTH_MODE=both was removed; it must raise ConfigError with migration hint."""
@@ -139,6 +159,43 @@ class TestAuthModeSetting:
                 raise AssertionError("expected ConfigError for AUTH_MODE=both")
         finally:
             get_settings.cache_clear()
+
+    def test_oidc_requires_durable_storage_secrets(self, monkeypatch):
+        required = {
+            "AUTH_MODE": "oidc",
+            "OIDC_ISSUER_URL": "https://idp.example/.well-known/openid-configuration",
+            "OIDC_CLIENT_ID": "client",
+            "OIDC_CLIENT_SECRET": "secret",
+            "OIDC_BASE_URL": "https://mcp.example",
+        }
+        with pytest.raises(ConfigError) as exc_info:
+            _load_settings(monkeypatch, **required)
+        message = str(exc_info.value)
+        assert "OIDC_JWT_SIGNING_KEY" in message
+        assert "OIDC_STORAGE_ENCRYPTION_KEY" in message
+
+    def test_oidc_storage_secrets_are_redacted(self, monkeypatch):
+        settings = _load_settings(
+            monkeypatch,
+            AUTH_MODE="oidc",
+            OIDC_ISSUER_URL="https://idp.example/.well-known/openid-configuration",
+            OIDC_CLIENT_ID="client",
+            OIDC_CLIENT_SECRET="secret",
+            OIDC_BASE_URL="https://mcp.example",
+            OIDC_JWT_SIGNING_KEY="j" * 32,
+            OIDC_STORAGE_ENCRYPTION_KEY="fernet-secret",
+        )
+        logged = settings.to_loggable_dict()
+        assert logged["oidc_jwt_signing_key"] == "***"
+        assert logged["oidc_storage_encryption_key"] == "***"
+
+    def test_oidc_storage_path_is_absolute(self, monkeypatch):
+        with pytest.raises(ConfigError, match="OIDC_STORAGE_PATH"):
+            _load_settings(monkeypatch, OIDC_STORAGE_PATH="relative/oauth")
+
+    def test_oidc_storage_path_defaults_to_standard_state_directory(self, monkeypatch):
+        monkeypatch.delenv("OIDC_STORAGE_PATH", raising=False)
+        assert _load_settings(monkeypatch).oidc_storage_path == "/var/lib/mcp-kubecost/oauth"
 
     def test_valid_modes_accepted(self, monkeypatch):
         for mode, expected in (

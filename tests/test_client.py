@@ -12,7 +12,7 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-from mcp_kubecost.client import KubecostClientError, _build_params, get, post
+from mcp_kubecost.client import KubecostClientError, _build_params, get, kubecost_client_lifespan, post
 from mcp_kubecost.config.settings import AuthMode, Settings
 from mcp_kubecost.errors import ErrorCode
 
@@ -82,6 +82,9 @@ _BASE_SETTINGS: dict[str, Any] = dict(
     retry_count=2,
     default_window="15d",
     log_level="INFO",
+    rate_limit_requests_per_second=10.0,
+    rate_limit_burst_capacity=20,
+    max_concurrent_tool_calls=10,
     auth_mode=AuthMode.NONE,
     oidc_issuer_url=None,
     oidc_client_id=None,
@@ -90,6 +93,9 @@ _BASE_SETTINGS: dict[str, Any] = dict(
     oidc_base_url=None,
     oidc_redirect_path="/auth-mcp",
     oidc_required_scopes=["openid", "profile"],
+    oidc_storage_path="/tmp/mcp-kubecost-test-oauth",
+    oidc_jwt_signing_key=None,
+    oidc_storage_encryption_key=None,
 )
 
 
@@ -386,6 +392,34 @@ async def test_get_reuses_one_client_across_retries(httpx_mock: HTTPXMock):
         await _get_with({}, _auth_settings(retry_count=2))
 
     assert clients_created == 1
+
+
+@pytest.mark.asyncio
+async def test_lifespan_reuses_client_across_calls_and_closes_it(httpx_mock: HTTPXMock):
+    httpx_mock.add_response(method="GET", url=_allocation_url(), json={"call": 1})
+    httpx_mock.add_response(method="GET", url=_allocation_url(), json={"call": 2})
+    real_client = httpx.AsyncClient
+    created: list[httpx.AsyncClient] = []
+
+    def factory(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        client = real_client(*args, **kwargs)
+        created.append(client)
+        return client
+
+    settings = _auth_settings()
+    with (
+        patch("mcp_kubecost.client.httpx.AsyncClient", side_effect=factory),
+        patch("mcp_kubecost.client.get_settings", return_value=settings),
+        patch("mcp_kubecost.auth.get_settings", return_value=settings),
+        patch("mcp_kubecost.auth.get_http_headers", return_value={}),
+    ):
+        async with kubecost_client_lifespan(None):
+            assert await get("/model/allocation") == {"call": 1}
+            assert await get("/model/allocation") == {"call": 2}
+            assert len(created) == 1
+            assert created[0].is_closed is False
+
+    assert created[0].is_closed is True
 
 
 @pytest.mark.asyncio

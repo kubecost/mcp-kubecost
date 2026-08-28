@@ -9,10 +9,16 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastmcp.server.auth.oauth_proxy.models import ProxyDCRClient, UpstreamTokenSet
+from cryptography.fernet import Fernet
+from fastmcp.server.auth.oauth_proxy.models import UpstreamTokenSet
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from fastmcp.server.auth.redirect_validation import validate_redirect_uri
-from key_value.aio.stores.memory import MemoryStore
+from key_value.aio.stores.filetree import (
+    FileTreeStore,
+    FileTreeV1CollectionSanitizationStrategy,
+    FileTreeV1KeySanitizationStrategy,
+)
+from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 
 from mcp_kubecost.config.oidc import (
     ALLOWED_CLIENT_REDIRECT_URIS,
@@ -35,6 +41,9 @@ _SETTINGS: dict[str, Any] = dict(
     retry_count=2,
     default_window="15d",
     log_level="INFO",
+    rate_limit_requests_per_second=10.0,
+    rate_limit_burst_capacity=20,
+    max_concurrent_tool_calls=10,
     auth_mode=AuthMode.NONE,
     oidc_issuer_url=None,
     oidc_client_id=None,
@@ -43,6 +52,9 @@ _SETTINGS: dict[str, Any] = dict(
     oidc_base_url=None,
     oidc_redirect_path="/auth-mcp",
     oidc_required_scopes=["openid", "profile"],
+    oidc_storage_path="/tmp/mcp-kubecost-test-oauth",
+    oidc_jwt_signing_key=None,
+    oidc_storage_encryption_key=None,
 )
 
 _OIDC = dict(
@@ -51,6 +63,9 @@ _OIDC = dict(
     oidc_client_id="client",
     oidc_client_secret="secret",
     oidc_base_url="https://mcp.example",
+    oidc_storage_path="/tmp/mcp-kubecost-test-oauth",
+    oidc_jwt_signing_key="j" * 32,
+    oidc_storage_encryption_key=Fernet.generate_key().decode(),
 )
 
 
@@ -102,40 +117,87 @@ class TestCreateOidcProvider:
     def test_none_when_auth_disabled(self):
         assert create_oidc_provider(_settings()) is None
 
-    def test_uses_in_memory_client_storage(self):
+    def test_uses_encrypted_file_storage_and_remembered_consent(self, tmp_path):
         with patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy") as proxy:
-            create_oidc_provider(_settings(**_OIDC))
+            create_oidc_provider(_settings(**{**_OIDC, "oidc_storage_path": str(tmp_path)}))
         kwargs = proxy.call_args.kwargs
-        assert isinstance(kwargs["client_storage"], MemoryStore)
-        assert kwargs["require_authorization_consent"] == "external"
+        assert isinstance(kwargs["client_storage"], FernetEncryptionWrapper)
+        assert isinstance(kwargs["client_storage"].key_value, FileTreeStore)
+        assert kwargs["jwt_signing_key"] == _OIDC["oidc_jwt_signing_key"]
+        assert kwargs["require_authorization_consent"] == "remember"
         assert kwargs["redirect_path"] == "/auth-mcp"
         assert kwargs["allowed_client_redirect_uris"] == ALLOWED_CLIENT_REDIRECT_URIS
         assert "verify_id_token" not in kwargs
         # _install_adaptive_verifier is now called from AdaptiveOidcProxy.__init__,
         # not from create_oidc_provider, so no explicit call assertion needed here.
 
-    def test_forwards_dedicated_host_redirect_path(self):
+    def test_forwards_dedicated_host_redirect_path(self, tmp_path):
         with patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy") as proxy:
-            create_oidc_provider(_settings(**_OIDC, oidc_redirect_path="/auth/callback"))
+            create_oidc_provider(
+                _settings(
+                    **{
+                        **_OIDC,
+                        "oidc_redirect_path": "/auth/callback",
+                        "oidc_storage_path": str(tmp_path),
+                    }
+                )
+            )
         assert proxy.call_args.kwargs["redirect_path"] == "/auth/callback"
+
+    async def test_encrypted_file_storage_survives_reopen(self, tmp_path):
+        settings = _settings(**{**_OIDC, "oidc_storage_path": str(tmp_path)})
+        with patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy") as proxy:
+            create_oidc_provider(settings)
+
+        storage = proxy.call_args.kwargs["client_storage"]
+        value = {"access_token": "super-secret-token", "scope": "openid"}
+        await storage.put("client-1", value, collection="oauth-clients")
+
+        stored_bytes = b"".join(path.read_bytes() for path in tmp_path.rglob("*") if path.is_file())
+        assert b"super-secret-token" not in stored_bytes
+
+        reopened_file_store = FileTreeStore(
+            data_directory=tmp_path,
+            key_sanitization_strategy=FileTreeV1KeySanitizationStrategy(tmp_path),
+            collection_sanitization_strategy=FileTreeV1CollectionSanitizationStrategy(tmp_path),
+        )
+        encryption_key = settings.oidc_storage_encryption_key
+        assert encryption_key is not None
+        reopened_storage = FernetEncryptionWrapper(
+            reopened_file_store,
+            fernet=Fernet(encryption_key.encode()),
+        )
+        assert await reopened_storage.get("client-1", collection="oauth-clients") == value
 
     def test_api_key_mode_does_not_build_proxy(self):
         with patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy") as proxy:
             assert create_oidc_provider(_settings(auth_mode=AuthMode.API_KEY)) is None
         proxy.assert_not_called()
 
-    def test_init_failure_is_config_error_not_traceback(self):
+    def test_init_failure_is_config_error_not_traceback(self, tmp_path):
         with patch(
             "mcp_kubecost.config.oidc.AdaptiveOidcProxy",
             side_effect=ValueError("expected value at line 1 column 1"),
         ):
             try:
-                create_oidc_provider(_settings(**_OIDC))
+                create_oidc_provider(_settings(**{**_OIDC, "oidc_storage_path": str(tmp_path)}))
             except ConfigError as exc:
                 assert "OIDC provider initialization failed" in str(exc)
                 assert "HTML" in str(exc)
             else:
                 raise AssertionError("expected ConfigError")
+
+    def test_invalid_storage_encryption_key_is_config_error(self, tmp_path):
+        with pytest.raises(ConfigError, match="OIDC provider initialization failed"):
+            create_oidc_provider(
+                _settings(
+                    **{
+                        **_OIDC,
+                        "oidc_storage_path": str(tmp_path),
+                        "oidc_storage_encryption_key": "not-a-fernet-key",
+                    }
+                )
+            )
 
 
 class TestOidcProxyKwargConformance:
@@ -150,6 +212,7 @@ class TestOidcProxyKwargConformance:
         for kwarg in (
             "redirect_path",
             "client_storage",
+            "jwt_signing_key",
             "require_authorization_consent",
             "audience",
             "allowed_client_redirect_uris",
@@ -159,6 +222,9 @@ class TestOidcProxyKwargConformance:
     def test_verification_hooks_still_exist(self):
         assert hasattr(OIDCProxy, "_get_verification_token")
         assert hasattr(OIDCProxy, "_uses_alternate_verification")
+
+    def test_unknown_clients_use_fastmcp_default_rejection(self):
+        assert AdaptiveOidcProxy.get_client is OIDCProxy.get_client
 
 
 class TestLooksLikeJwt:
@@ -246,39 +312,6 @@ class TestAdaptiveTokenVerifier:
         assert await verifier.verify_token("tok") == "id-ok"
         id_token.verify_token.assert_awaited_once_with("tok")
         access.verify_token.assert_not_awaited()
-
-
-class TestGetClientFallback:
-    """get_client synthesizes a ProxyDCRClient for unknown DCR client IDs.
-
-    After a server restart the MemoryStore is empty. MCP clients that cached a
-    client_id from a previous session would otherwise receive a 400 HTML error
-    when hitting /authorize. FastMCP's OAuthProxy only synthesizes when
-    client_id equals the upstream IdP client_id; AdaptiveOidcProxy covers
-    stale random DCR IDs and still wires allowed_client_redirect_uris through.
-    """
-
-    @pytest.mark.asyncio
-    async def test_known_client_returned_as_is(self):
-        proxy = _uninitialized_proxy()
-        known = MagicMock(spec=ProxyDCRClient)
-        proxy_parent_get_client = AsyncMock(return_value=known)
-        with patch.object(type(proxy).__mro__[1], "get_client", proxy_parent_get_client):
-            result = await proxy.get_client("known-id")
-        assert result is known
-
-    @pytest.mark.asyncio
-    async def test_unknown_client_synthesized(self):
-        proxy = _uninitialized_proxy()
-        proxy._allowed_client_redirect_uris = ALLOWED_CLIENT_REDIRECT_URIS
-        proxy._default_scope_str = "openid profile"
-        # Simulate parent returning None (client not found in store)
-        with patch.object(type(proxy).__mro__[1], "get_client", AsyncMock(return_value=None)):
-            result = await proxy.get_client("stale-id-from-restart")
-        assert isinstance(result, ProxyDCRClient)
-        assert result.client_id == "stale-id-from-restart"
-        assert result.allow_unregistered_redirect_uris is True
-        assert result.allowed_redirect_uri_patterns == ALLOWED_CLIENT_REDIRECT_URIS
 
 
 class TestAllowedClientRedirectUris:

@@ -1153,6 +1153,25 @@ def _comparison_allocation_response(ns_name: str, total_cost: float) -> dict:
 
 class TestGetKubecostCostComparison:
     @pytest.mark.asyncio
+    async def test_default_windows_are_calculated_when_tool_is_called(
+        self, httpx_mock: HTTPXMock, mcp_app, monkeypatch
+    ):
+        current = "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z"
+        baseline = "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z"
+        monkeypatch.setattr(
+            "mcp_kubecost.tools.kubecost_tools._default_wow_windows",
+            lambda: (current, baseline),
+        )
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+
+        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        result = await tool.run({})
+
+        assert _sc(result)["current_window"] == current
+        assert _sc(result)["baseline_window"] == baseline
+
+    @pytest.mark.asyncio
     async def test_success_with_clear_top_mover(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(
             method="GET",
