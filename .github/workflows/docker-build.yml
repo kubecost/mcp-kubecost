@@ -3,6 +3,12 @@ name: Docker build
 on:
   pull_request:
     types: [opened, synchronize]
+    paths:
+      - 'src/**'
+      - 'Dockerfile'
+      - 'config/fastmcp-http.json'
+      - 'pyproject.toml'
+      - 'uv.lock'
   push:
     branches: [main]
     paths:
@@ -31,7 +37,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to ICR
-        if: github.event_name == 'push' && github.repository == 'kubecost/mcp-kubecost'
+        if: github.repository == 'kubecost/mcp-kubecost'
         uses: docker/login-action@v4
         with:
           registry: icr.io
@@ -45,6 +51,7 @@ jobs:
           images: icr.io/kubecost/mcp-kubecost
           tags: |
             type=ref,event=branch
+            type=ref,event=pr,prefix=pr-
             type=sha,prefix=sha-
 
       - name: Build and push to ICR
@@ -52,7 +59,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          push: ${{ github.event_name == 'push' && github.repository == 'kubecost/mcp-kubecost' }}
+          push: ${{ github.repository == 'kubecost/mcp-kubecost' }}
           platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -78,7 +85,7 @@ jobs:
             const image = 'icr.io/kubecost/mcp-kubecost';
             const shaTag = '${{ steps.meta.outputs.tags }}'.split('\n').find(t => t.includes('sha-')) || '';
             const body = [
-              '### 🐳 Docker build succeeded',
+              '### 🐳 Docker image pushed',
               '',
               `**Image:** \`${shaTag || image + '@' + digest}\``,
               digest ? `**Digest:** \`${image}@${digest}\`` : '',
