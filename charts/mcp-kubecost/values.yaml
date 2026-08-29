@@ -266,13 +266,14 @@ config:
       mountPath: /etc/mcp-kubecost/ca/ca.crt
 
   oidc:
-    # config.oidc.issuerUrl is the provider's .well-known/openid-configuration URL.
-    # Example: https://{domain}/.well-known/openid-configuration
+    # config.oidc.issuerUrl is the identity provider's OIDC discovery-document URL.
+    # Example: https://sso.example.com/.well-known/openid-configuration
     issuerUrl: ""
     # config.oidc.audience is the token audience expected by the provider (optional).
     audience: ""
-    # config.oidc.baseUrl is the public URL of this MCP server (used for OAuth redirect callback).
-    # Must be an https:// URL. Only read when authMode is "oidc".
+    # config.oidc.baseUrl is this MCP server's public URL, not the identity provider's URL.
+    # FastMCP uses it to advertise OAuth metadata and construct the redirect URI that
+    # must be registered with the identity provider. Must be an https:// URL.
     # Dedicated MCP hostname:        https://mcp.example.com
     # Sub-path on a Kubecost host:   https://kubecost.example.com/mcp
     # A path prefix moves FastMCP's whole advertised OAuth surface under it, and

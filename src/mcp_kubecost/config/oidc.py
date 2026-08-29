@@ -45,6 +45,11 @@ _verify_id_token: ContextVar[bool] = ContextVar("oidc_verify_id_token", default=
 ALLOWED_CLIENT_REDIRECT_URIS: list[str] = [
     *DEFAULT_LOCALHOST_PATTERNS,  # http://localhost:*, http://127.0.0.1:*
     "https://claude.ai/api/mcp/auth_callback",
+    # ChatGPT uses a per-connector callback unless the authorization server
+    # advertises and returns RFC 9207 issuer identification. Allow both current
+    # callback forms on the exact chatgpt.com origin.
+    "https://chatgpt.com/connector/oauth/*",
+    "https://chatgpt.com/connector_platform_oauth_redirect",
 ]
 
 

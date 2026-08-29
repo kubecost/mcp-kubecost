@@ -339,3 +339,24 @@ class TestAllowedClientRedirectUris:
     def test_allows_localhost_and_claude(self):
         assert validate_redirect_uri("http://localhost:54321/callback", ALLOWED_CLIENT_REDIRECT_URIS) is True
         assert validate_redirect_uri("https://claude.ai/api/mcp/auth_callback", ALLOWED_CLIENT_REDIRECT_URIS) is True
+
+    @pytest.mark.parametrize(
+        "redirect_uri",
+        [
+            "https://chatgpt.com/connector/oauth/example-callback-id",
+            "https://chatgpt.com/connector_platform_oauth_redirect",
+        ],
+    )
+    def test_allows_current_chatgpt_callbacks(self, redirect_uri: str):
+        assert validate_redirect_uri(redirect_uri, ALLOWED_CLIENT_REDIRECT_URIS) is True
+
+    @pytest.mark.parametrize(
+        "redirect_uri",
+        [
+            "https://chatgpt.com.evil.example/connector/oauth/example-callback-id",
+            "http://chatgpt.com/connector/oauth/example-callback-id",
+            "https://chatgpt.com/connector/not-oauth/example-callback-id",
+        ],
+    )
+    def test_rejects_chatgpt_callback_lookalikes(self, redirect_uri: str):
+        assert validate_redirect_uri(redirect_uri, ALLOWED_CLIENT_REDIRECT_URIS) is False

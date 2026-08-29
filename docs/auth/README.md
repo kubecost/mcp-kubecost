@@ -55,7 +55,7 @@ When `AUTH_MODE=oidc`, the server builds a FastMCP [`OIDCProxy`](https://gofastm
 
 When this server has a **dedicated hostname** (not a Kubecost sub-path), use `/auth/callback` instead — see [Shared Kubecost frontend hostname](#shared-kubecost-frontend-hostname) for why `/auth-mcp` is otherwise required.
 
-The MCP client’s own redirect (`http://localhost:<port>/callback` or Claude’s `https://claude.ai/api/mcp/auth_callback`) is registered with FastMCP via DCR. Do not put those URLs on the identity provider. This server allowlists those MCP-client redirects (`http://localhost:*`, `http://127.0.0.1:*`, and Claude’s callback). DCR registrations survive pod recreation in the PVC-backed FileTreeStore; unknown client IDs are rejected. The IdP Valid redirect URI remains only `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}`.
+The MCP client’s own redirect (`http://localhost:<port>/callback`, Claude’s `https://claude.ai/api/mcp/auth_callback`, or ChatGPT’s `https://chatgpt.com/connector/oauth/{callback_id}` / `https://chatgpt.com/connector_platform_oauth_redirect`) is registered with FastMCP through DCR or resolved from its Client ID Metadata Document. Do not put those URLs on the identity provider. This server allowlists those MCP-client redirects on their exact origins. Persisted DCR registrations survive pod recreation in the PVC-backed FileTreeStore; CIMD clients are resolved from their metadata documents, and other unknown client IDs are rejected. The IdP Valid redirect URI remains only `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}`. See OpenAI's [authentication guide](https://developers.openai.com/plugins/build/auth#redirect-url) for the current ChatGPT callback forms.
 
 FastMCP displays consent once per MCP client and remembers the decision in a
 signed browser cookie. OAuth registrations, authorization codes, and tokens are
@@ -257,7 +257,7 @@ Local HTTP: `uv run fastmcp run config/fastmcp-http.json` (port 3030).
 Kubecost frontend SSO intercepted the OAuth path. Give `config.oidc.baseUrl` a path prefix (`https://kubecost.example.com/mcp`) so OAuth paths move under `/mcp/` (and update the frontend nginx to proxy them), or give the MCP server its own dedicated hostname.
 
 **Keycloak `invalid_redirect_uri`**
-Add `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}` to the client’s Valid redirect URIs — the value in the Keycloak error URL’s `redirect_uri=` query param. Default is `{OIDC_BASE_URL}/auth-mcp` with no extra `/callback`. Dedicated hostname: `{OIDC_BASE_URL}/auth/callback`. Do not add the MCP client’s localhost or Claude callback there.
+Add `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}` to the client’s Valid redirect URIs — the value in the Keycloak error URL’s `redirect_uri=` query param. Default is `{OIDC_BASE_URL}/auth-mcp` with no extra `/callback`. Dedicated hostname: `{OIDC_BASE_URL}/auth/callback`. Do not add MCP-client callbacks such as localhost, Claude, or ChatGPT there.
 
 **Pod cannot create or write `/var/lib/mcp-kubecost/oauth`**
 Confirm the chart-created PVC is Bound and the pod security context was not

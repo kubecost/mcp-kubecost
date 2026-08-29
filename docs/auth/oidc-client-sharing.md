@@ -145,7 +145,7 @@ helm upgrade --install mcp-kubecost \
 Three things not to do:
 
 - Do not add the MCP callback to the Kubecost client, or Kubecost's callback to the MCP client. That recreates the shared allowlist without sharing credentials.
-- Do not register MCP client callbacks (`http://localhost:<port>/callback`, `https://claude.ai/api/mcp/auth_callback`) on the identity provider. Those belong to this server's dynamic client registration.
+- Do not register MCP client callbacks (`http://localhost:<port>/callback`, Claude's callback, or either ChatGPT connector callback) on the identity provider. Those belong to the MCP client registration layer.
 - Do not reuse the Kubecost API key as the OIDC secret, or vice versa. They are separate layers — see [`README.md`](README.md).
 
 ## If you have to share one client
