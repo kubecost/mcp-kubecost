@@ -21,6 +21,18 @@ from dotenv import load_dotenv
 _FASTMCP_ARGS = ("fastmcp", "run", "config/fastmcp-http.json", "--skip-env")
 
 
+def _configure_http_logging() -> None:
+    """Configure plain, banner-free FastMCP output before the CLI imports FastMCP.
+
+    ``server.py`` also enforces these settings, which covers direct
+    ``fastmcp run`` usage. The container entrypoint must set them earlier so
+    CLI startup messages and import failures cannot initialize Rich handlers
+    or render the terminal-oriented server banner in pod logs.
+    """
+    os.environ["FASTMCP_ENABLE_RICH_LOGGING"] = "false"
+    os.environ["FASTMCP_SHOW_SERVER_BANNER"] = "false"
+
+
 def _load_env_file() -> None:
     """Read ``.env`` into ``os.environ`` before the argv is built.
 
@@ -85,6 +97,7 @@ def _fastmcp_args() -> tuple[str, ...]:
 
 def main() -> None:
     _load_env_file()
+    _configure_http_logging()
 
     try:
         args = _fastmcp_args()

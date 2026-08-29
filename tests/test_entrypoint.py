@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 from mcp_kubecost.config.settings import is_http_mode
-from mcp_kubecost.otel_entrypoint import _FASTMCP_ARGS, _fastmcp_args, _load_env_file, main
+from mcp_kubecost.otel_entrypoint import (
+    _FASTMCP_ARGS,
+    _fastmcp_args,
+    _load_env_file,
+    main,
+)
 
 
 class TestFastmcpArgs:
@@ -72,6 +78,22 @@ class TestHttpPathNormalization:
 
 
 class TestMain:
+    def test_configures_plain_logging_before_exec(self, monkeypatch):
+        monkeypatch.setenv("FASTMCP_ENABLE_RICH_LOGGING", "true")
+        monkeypatch.setenv("FASTMCP_SHOW_SERVER_BANNER", "true")
+        monkeypatch.setenv("FASTMCP_TELEMETRY_MODE", "off")
+        monkeypatch.delenv("MCP_HTTP_PATH", raising=False)
+
+        def inspect_environment_then_stop(*_args):
+            assert os.environ["FASTMCP_ENABLE_RICH_LOGGING"] == "false"
+            assert os.environ["FASTMCP_SHOW_SERVER_BANNER"] == "false"
+            raise RuntimeError("stop before replacing the test process")
+
+        monkeypatch.setattr("os.execvp", inspect_environment_then_stop)
+
+        with pytest.raises(RuntimeError, match="stop before replacing"):
+            main()
+
     def test_invalid_path_exits_non_zero_before_exec(self, monkeypatch, capsys):
         def fail_exec(*args, **kwargs):  # pragma: no cover - must not be reached
             raise AssertionError("execvp must not run with an invalid MCP_HTTP_PATH")
