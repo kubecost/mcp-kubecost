@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -131,7 +132,8 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
     if settings.auth_mode != AuthMode.OIDC:
         return None
 
-    # These are guaranteed non-None by Settings validation when OIDC is active.
+    # These are guaranteed non-None by Settings — either an explicit value was supplied
+    # or a secure key was auto-generated at startup.
     assert settings.oidc_issuer_url is not None
     assert settings.oidc_client_id is not None
     assert settings.oidc_client_secret is not None
@@ -148,6 +150,8 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
 
     try:
         storage_dir = Path(settings.oidc_storage_path)
+        if settings.oidc_ephemeral_keys:
+            shutil.rmtree(storage_dir, ignore_errors=True)
         storage_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         file_store = FileTreeStore(
             data_directory=storage_dir,

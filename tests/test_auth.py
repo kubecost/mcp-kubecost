@@ -39,6 +39,7 @@ _SETTINGS: dict[str, Any] = dict(
     oidc_storage_path="/tmp/mcp-kubecost-test-oauth",
     oidc_jwt_signing_key=None,
     oidc_storage_encryption_key=None,
+    oidc_ephemeral_keys=False,
 )
 
 

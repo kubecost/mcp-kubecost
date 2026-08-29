@@ -55,6 +55,7 @@ _SETTINGS: dict[str, Any] = dict(
     oidc_storage_path="/tmp/mcp-kubecost-test-oauth",
     oidc_jwt_signing_key=None,
     oidc_storage_encryption_key=None,
+    oidc_ephemeral_keys=False,
 )
 
 _OIDC = dict(
@@ -198,6 +199,23 @@ class TestCreateOidcProvider:
                     }
                 )
             )
+
+    def test_ephemeral_keys_wipe_storage_on_startup(self, tmp_path):
+        # Write a sentinel file simulating state from a previous run
+        (tmp_path / "stale.json").write_text("old state")
+
+        with patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy"):
+            create_oidc_provider(
+                _settings(
+                    **{
+                        **_OIDC,
+                        "oidc_storage_path": str(tmp_path),
+                        "oidc_ephemeral_keys": True,
+                    }
+                )
+            )
+
+        assert not (tmp_path / "stale.json").exists()
 
 
 class TestOidcProxyKwargConformance:

@@ -348,57 +348,45 @@ Must stay in sync with the first Secret block in secret.yaml.
 Stable string of the OIDC Secret stringData used for checksum annotation.
 Returns an empty string when the secret would not be created, so no annotation is emitted.
 Must stay in sync with the second Secret block in secret.yaml.
+jwtSigningKey and storageEncryptionKey are included only when non-empty, matching
+the conditional stringData entries in secret.yaml.
 */}}
 {{- define "mcp-kubecost.oidc-stringdata" -}}
-{{- if and .Values.config.oidc.clientId .Values.config.oidc.clientSecret .Values.config.oidc.jwtSigningKey .Values.config.oidc.storageEncryptionKey (not .Values.config.oidc.existingSecret) -}}
+{{- if and .Values.config.oidc.clientId .Values.config.oidc.clientSecret (not .Values.config.oidc.existingSecret) -}}
 OIDC_CLIENT_ID={{ .Values.config.oidc.clientId }}
 OIDC_CLIENT_SECRET={{ .Values.config.oidc.clientSecret }}
+{{- if .Values.config.oidc.jwtSigningKey }}
 OIDC_JWT_SIGNING_KEY={{ .Values.config.oidc.jwtSigningKey }}
+{{- end }}
+{{- if .Values.config.oidc.storageEncryptionKey }}
 OIDC_STORAGE_ENCRYPTION_KEY={{ .Values.config.oidc.storageEncryptionKey }}
+{{- end }}
 {{- end }}
 {{- end }}
 
 {{/*
 Fail when authMode is "oidc" but no OIDC credentials are configured, or when
-issuerUrl / baseUrl are missing or not https:// URLs.
+issuerUrl / baseUrl are missing or not https:// URLs. Not gated by
+skipSanityChecks — these are static value checks, not live Secret lookups.
 
-Valid credential state = either (all four inline secret values are non-empty)
-OR existingSecret non-empty. These checks are NOT gated by skipSanityChecks:
-credential presence and URL format are hard logical requirements, not live
-cluster lookups, so bypassing them for CI/CD would silently produce a broken
-deployment.
-
-CONCERNS:
-- No mutual-exclusivity guard: if the user sets both existingSecret AND inline
-  clientId/clientSecret, this check passes. At runtime the deployment favours
-  existingSecret, but secret.yaml also renders an inline Secret — unused plaintext
-  credentials are committed to cluster state (secret sprawl). This is intentional:
-  enforcing mutual exclusivity is not implemented here.
-- Presence != validity: a clientSecret of a single space passes this check.
-  The real gate is the OIDC token exchange at runtime.
-- skipSanityChecks is intentionally absent: that flag documents a bypass for live
-  Secret lookups (kube API unavailable). Static value checks have no lookup cost;
-  bypassing them would silently break OIDC auth.
-- The two URL scheme rules are deliberately asymmetric, each matching what the
-  runtime actually enforces:
-  * issuerUrl — https, or http on localhost/127.0.0.1. This is the MCP SDK's own
-    rule (mcp/server/auth/routes.py validate_issuer_url), so a plaintext issuer
-    on any other host would be rejected at startup anyway. An in-cluster
-    plaintext IdP is therefore not supported, by the SDK rather than by us.
-  * baseUrl — https only, no localhost carve-out. FastMCP derives its _is_https
-    flag from this value, which drives secure-cookie and redirect behaviour.
+issuerUrl accepts http:// on localhost / 127.0.0.1 to mirror the MCP SDK's own
+validate_issuer_url rule; all other hosts require https://.
+baseUrl requires https:// with no localhost carve-out; FastMCP derives its
+_is_https flag from this value, which drives secure-cookie and redirect behaviour.
 */}}
 {{- define "mcp-kubecost.validateOIDC" -}}
 {{- if eq (.Values.config.authMode | default "none") "oidc" -}}
-{{- $hasInline := and .Values.config.oidc.clientId .Values.config.oidc.clientSecret .Values.config.oidc.jwtSigningKey .Values.config.oidc.storageEncryptionKey -}}
+{{- $hasInline := and .Values.config.oidc.clientId .Values.config.oidc.clientSecret -}}
 {{- $hasExisting := .Values.config.oidc.existingSecret -}}
 {{- if not (or $hasInline $hasExisting) -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: config.authMode is \"oidc\" but its durable OAuth secrets are incomplete.\n\nTo fix, choose one of:\n  Option A — set clientId, clientSecret, jwtSigningKey, and storageEncryptionKey.\n\n  Option B — reference a pre-existing Secret with keys OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, OIDC_JWT_SIGNING_KEY, and OIDC_STORAGE_ENCRYPTION_KEY:\n    config.oidc.existingSecret: \"<secret-name>\"\n" -}}
+{{- fail "\n\nFAILURE [mcp-kubecost]: config.authMode is \"oidc\" but its durable OAuth secrets are incomplete.\n\nTo fix, choose one of:\n  Option A — set clientId and clientSecret (jwtSigningKey and storageEncryptionKey are optional; ephemeral keys are auto-generated when omitted).\n\n  Option B — reference a pre-existing Secret with keys OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, and optionally OIDC_JWT_SIGNING_KEY and OIDC_STORAGE_ENCRYPTION_KEY:\n    config.oidc.existingSecret: \"<secret-name>\"\n" -}}
 {{- end -}}
-{{- if $hasInline -}}
+{{- if and $hasInline .Values.config.oidc.jwtSigningKey -}}
 {{- if lt (len .Values.config.oidc.jwtSigningKey) 32 -}}
 {{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.jwtSigningKey must be at least 32 characters.\n" -}}
 {{- end -}}
+{{- end -}}
+{{- if and $hasInline .Values.config.oidc.storageEncryptionKey -}}
 {{- if ne (len .Values.config.oidc.storageEncryptionKey) 44 -}}
 {{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.storageEncryptionKey must be a 44-character URL-safe base64 Fernet key.\n" -}}
 {{- end -}}

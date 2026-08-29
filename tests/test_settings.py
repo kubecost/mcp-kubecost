@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
 
 import fastmcp
 import pytest
+from cryptography.fernet import Fernet
 
 from mcp_kubecost.config.settings import AuthMode, _get_auth_mode, apply_http_rich_logging, get_settings, is_http_mode
 from mcp_kubecost.errors import ConfigError
@@ -160,19 +162,51 @@ class TestAuthModeSetting:
         finally:
             get_settings.cache_clear()
 
-    def test_oidc_requires_durable_storage_secrets(self, monkeypatch):
-        required = {
-            "AUTH_MODE": "oidc",
-            "OIDC_ISSUER_URL": "https://idp.example/.well-known/openid-configuration",
-            "OIDC_CLIENT_ID": "client",
-            "OIDC_CLIENT_SECRET": "secret",
-            "OIDC_BASE_URL": "https://mcp.example",
-        }
-        with pytest.raises(ConfigError) as exc_info:
-            _load_settings(monkeypatch, **required)
-        message = str(exc_info.value)
-        assert "OIDC_JWT_SIGNING_KEY" in message
-        assert "OIDC_STORAGE_ENCRYPTION_KEY" in message
+    _OIDC_BASE = {
+        "AUTH_MODE": "oidc",
+        "OIDC_ISSUER_URL": "https://idp.example/.well-known/openid-configuration",
+        "OIDC_CLIENT_ID": "client",
+        "OIDC_CLIENT_SECRET": "secret",
+        "OIDC_BASE_URL": "https://mcp.example",
+    }
+
+    def test_oidc_starts_without_durable_storage_secrets(self, monkeypatch):
+        settings = _load_settings(monkeypatch, **self._OIDC_BASE)
+        assert settings.oidc_jwt_signing_key is not None
+        assert settings.oidc_storage_encryption_key is not None
+        assert settings.oidc_ephemeral_keys is True
+
+    def test_oidc_auto_generated_keys_have_correct_format(self, monkeypatch):
+        settings = _load_settings(monkeypatch, **self._OIDC_BASE)
+        # JWT signing key: hex string, minimum 32 chars
+        assert settings.oidc_jwt_signing_key is not None
+        assert len(settings.oidc_jwt_signing_key) >= 32
+        # Storage encryption key: valid 44-char Fernet key
+        assert settings.oidc_storage_encryption_key is not None
+        assert len(settings.oidc_storage_encryption_key) == 44
+        Fernet(settings.oidc_storage_encryption_key.encode())  # must not raise
+
+    def test_oidc_auto_generated_keys_emit_warnings(self, monkeypatch, caplog):
+        with caplog.at_level(logging.WARNING, logger="mcp_kubecost.config.settings"):
+            _load_settings(monkeypatch, **self._OIDC_BASE)
+        messages = [r.message for r in caplog.records]
+        assert any("OIDC_JWT_SIGNING_KEY" in m for m in messages)
+        assert any("OIDC_STORAGE_ENCRYPTION_KEY" in m for m in messages)
+
+    def test_oidc_auto_generated_keys_differ_on_reload(self, monkeypatch):
+        s1 = _load_settings(monkeypatch, **self._OIDC_BASE)
+        s2 = _load_settings(monkeypatch, **self._OIDC_BASE)
+        assert s1.oidc_jwt_signing_key != s2.oidc_jwt_signing_key
+        assert s1.oidc_storage_encryption_key != s2.oidc_storage_encryption_key
+
+    def test_oidc_explicit_keys_are_not_ephemeral(self, monkeypatch):
+        settings = _load_settings(
+            monkeypatch,
+            **self._OIDC_BASE,
+            OIDC_JWT_SIGNING_KEY="j" * 32,
+            OIDC_STORAGE_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        )
+        assert settings.oidc_ephemeral_keys is False
 
     def test_oidc_storage_secrets_are_redacted(self, monkeypatch):
         settings = _load_settings(

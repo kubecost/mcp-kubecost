@@ -289,9 +289,11 @@ config:
     clientId: ""
     # config.oidc.clientSecret is the OIDC client secret. Prefer existingSecret for production.
     clientSecret: ""
-    # Stable key FastMCP uses to sign MCP-side OAuth tokens (minimum 32 characters).
+    # Optional — auto-generated as an ephemeral key at startup when unset. Set explicitly in
+    # production to ensure token consistency across restarts (minimum 32 characters).
     jwtSigningKey: ""
-    # URL-safe base64 Fernet key used to encrypt OAuth data before FileTreeStore persistence.
+    # Optional — auto-generated as an ephemeral Fernet key at startup when unset. Set explicitly
+    # in production to preserve OAuth sessions across restarts.
     storageEncryptionKey: ""
     # Pre-created Secret containing the four OIDC secret values above.
     existingSecret: ""

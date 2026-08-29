@@ -5,12 +5,15 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
+import secrets
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
 from urllib.parse import urlparse
+
+from cryptography.fernet import Fernet
 
 from mcp_kubecost.errors import ConfigError
 
@@ -59,6 +62,7 @@ class Settings:
     oidc_storage_path: str
     oidc_jwt_signing_key: str | None
     oidc_storage_encryption_key: str | None
+    oidc_ephemeral_keys: bool
 
     def to_loggable_dict(self) -> dict:
         """Return a copy of settings safe for logging (sensitive fields redacted)."""
@@ -254,16 +258,23 @@ def get_settings() -> Settings:
             missing.append("OIDC_CLIENT_SECRET")
         if not oidc_base_url:
             missing.append("OIDC_BASE_URL")
-        if not oidc_jwt_signing_key:
-            missing.append("OIDC_JWT_SIGNING_KEY")
-        if not oidc_storage_encryption_key:
-            missing.append("OIDC_STORAGE_ENCRYPTION_KEY")
         if missing:
             raise ConfigError(f"AUTH_MODE={auth_mode.value} requires: {', '.join(missing)}")
 
-        assert oidc_jwt_signing_key is not None
-        if len(oidc_jwt_signing_key) < 32:
+        if oidc_jwt_signing_key is not None and len(oidc_jwt_signing_key) < 32:
             raise ConfigError("OIDC_JWT_SIGNING_KEY must be at least 32 characters")
+
+        ephemeral = False
+        if oidc_jwt_signing_key is None:
+            oidc_jwt_signing_key = secrets.token_hex(32)
+            ephemeral = True
+            logger.warning("OIDC_JWT_SIGNING_KEY is not set — using an ephemeral key")
+        if oidc_storage_encryption_key is None:
+            oidc_storage_encryption_key = Fernet.generate_key().decode()
+            ephemeral = True
+            logger.warning("OIDC_STORAGE_ENCRYPTION_KEY is not set — using an ephemeral key")
+    else:
+        ephemeral = False
 
     # AUTH_MODE=api_key is the same gate as REQUIRE_CLIENT_API_KEY=true.
     require_client_api_key = _get_bool_env("REQUIRE_CLIENT_API_KEY", False) or auth_mode == AuthMode.API_KEY
@@ -308,4 +319,5 @@ def get_settings() -> Settings:
         oidc_storage_path=_get_oidc_storage_path(),
         oidc_jwt_signing_key=oidc_jwt_signing_key,
         oidc_storage_encryption_key=oidc_storage_encryption_key,
+        oidc_ephemeral_keys=ephemeral,
     )
