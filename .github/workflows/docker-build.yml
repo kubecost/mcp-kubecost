@@ -87,11 +87,19 @@ jobs:
             const digest = process.env.DIGEST;
             const image = 'icr.io/kubecost/mcp-kubecost';
             const shaTag = process.env.TAGS.split('\n').find(t => t.includes('sha-')) || '';
+            const shortTag = shaTag.split(':')[1] || '';
             const body = [
               '### 🐳 Docker image pushed',
               '',
               `**Image:** \`${shaTag || image + '@' + digest}\``,
               digest ? `**Digest:** \`${image}@${digest}\`` : '',
+              '',
+              '**Deploy to test:**',
+              '```',
+              'helm upgrade mcp-kubecost /charts/mcp-kubecost \\',
+              '  --reuse-values \\',
+              `  --set image.tag=${shortTag}`,
+              '```',
             ].filter(Boolean).join('\n');
             await github.rest.issues.createComment({
               owner: context.repo.owner,
