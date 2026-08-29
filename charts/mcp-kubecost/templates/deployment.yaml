@@ -60,7 +60,7 @@ spec:
             - configMapRef:
                 name: {{ include "mcp-kubecost.configMapName" . }}
           {{- $hasApiKey := or .Values.config.kubecostApiKey.value .Values.config.kubecostApiKey.existingSecret }}
-          {{- $hasOidc := or .Values.config.oidc.existingSecret (and .Values.config.oidc.clientId .Values.config.oidc.clientSecret .Values.config.oidc.jwtSigningKey .Values.config.oidc.storageEncryptionKey) }}
+          {{- $hasOidc := or .Values.config.oidc.existingSecret (and .Values.config.oidc.clientId .Values.config.oidc.clientSecret) }}
           {{- if or $hasApiKey $hasOidc }}
           env:
             {{- if $hasApiKey }}
@@ -71,26 +71,31 @@ spec:
                   key: {{ .Values.config.kubecostApiKey.key }}
             {{- end }}
             {{- if $hasOidc }}
+            {{- $oidcSecretName := ternary .Values.config.oidc.existingSecret (include "mcp-kubecost.oidcSecretName" .) (ne .Values.config.oidc.existingSecret "") }}
             - name: OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ if .Values.config.oidc.existingSecret }}{{ .Values.config.oidc.existingSecret }}{{ else }}{{ include "mcp-kubecost.oidcSecretName" . }}{{ end }}
+                  name: {{ $oidcSecretName }}
                   key: OIDC_CLIENT_ID
             - name: OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ if .Values.config.oidc.existingSecret }}{{ .Values.config.oidc.existingSecret }}{{ else }}{{ include "mcp-kubecost.oidcSecretName" . }}{{ end }}
+                  name: {{ $oidcSecretName }}
                   key: OIDC_CLIENT_SECRET
+            {{- if or .Values.config.oidc.jwtSigningKey (and .Values.config.oidc.existingSecret) }}
             - name: OIDC_JWT_SIGNING_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ if .Values.config.oidc.existingSecret }}{{ .Values.config.oidc.existingSecret }}{{ else }}{{ include "mcp-kubecost.oidcSecretName" . }}{{ end }}
+                  name: {{ $oidcSecretName }}
                   key: OIDC_JWT_SIGNING_KEY
+            {{- end }}
+            {{- if or .Values.config.oidc.storageEncryptionKey (and .Values.config.oidc.existingSecret) }}
             - name: OIDC_STORAGE_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ if .Values.config.oidc.existingSecret }}{{ .Values.config.oidc.existingSecret }}{{ else }}{{ include "mcp-kubecost.oidcSecretName" . }}{{ end }}
+                  name: {{ $oidcSecretName }}
                   key: OIDC_STORAGE_ENCRYPTION_KEY
+            {{- end }}
             {{- end }}
           {{- end }}
           ports:

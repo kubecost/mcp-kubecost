@@ -96,7 +96,7 @@ jobs:
               '',
               '**Deploy to test:**',
               '```',
-              'helm upgrade mcp-kubecost /charts/mcp-kubecost \\',
+              'helm upgrade mcp-kubecost ./charts/mcp-kubecost \\',
               '  --reuse-values \\',
               `  --set image.tag=${shortTag}`,
               '```',
