@@ -78,12 +78,15 @@ jobs:
 
       - name: Comment image digest on PR
         if: github.event_name == 'pull_request' && github.repository == 'kubecost/mcp-kubecost'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
         uses: actions/github-script@v9
         with:
           script: |
-            const digest = '${{ steps.build.outputs.digest }}';
+            const digest = process.env.DIGEST;
             const image = 'icr.io/kubecost/mcp-kubecost';
-            const shaTag = '${{ steps.meta.outputs.tags }}'.split('\n').find(t => t.includes('sha-')) || '';
+            const shaTag = process.env.TAGS.split('\n').find(t => t.includes('sha-')) || '';
             const body = [
               '### 🐳 Docker image pushed',
               '',
