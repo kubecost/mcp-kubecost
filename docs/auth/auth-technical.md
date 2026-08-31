@@ -32,8 +32,9 @@ For an enterprise Restricted posture, set `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` to
 FastMCP displays consent once per MCP client and remembers the decision in a
 signed browser cookie. OAuth registrations, authorization codes, and tokens are
 stored by the built-in FileTreeStore through a Fernet encryption wrapper. The
-Helm chart always persists that directory on a PVC. Keep the signing and
-encryption keys stable across upgrades; rotating the encryption key without a
+Helm chart persists that directory on a PVC when `config.authMode` is `oidc`
+(`persistence.enabled` defaults to auto). Keep the signing and encryption
+keys stable across upgrades; rotating the encryption key without a
 migration invalidates previously stored state.
 
 DCR registrations are **idempotent**: this server derives the `client_id` from
@@ -176,9 +177,12 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 OIDC secrets in Helm: set `config.oidc.existingSecret` with keys
 `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_JWT_SIGNING_KEY`, and
 `OIDC_STORAGE_ENCRYPTION_KEY`; or set all four
-inline values and the chart will mint a Secret. The Deployment is intentionally
-fixed at one replica with `Recreate` strategy. The chart always creates a
-`ReadWriteOnce` PVC and fixes `OIDC_STORAGE_PATH` to
+inline values and the chart will mint a Secret. The Deployment defaults to one
+replica with `Recreate` (`deployment.replicas`, `deployment.strategy`). Multiple
+replicas are rejected while OIDC persistence is on — FileTreeStore is
+single-writer. For HA, put an MCP gateway or OAuth proxy in front, keep
+`authMode` off `oidc`, and set `persistence.enabled: false`. When a PVC is
+created it is `ReadWriteOnce` and `OIDC_STORAGE_PATH` is fixed to
 `/var/lib/mcp-kubecost/oauth`; tune provisioning with `persistence.*`.
 
 ### Helm

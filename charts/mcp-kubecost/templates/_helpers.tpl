@@ -58,11 +58,14 @@ imagePullSecrets:
 {{- end }}
 
 {{/*
-Controller annotations from `global.annotations`. Mirrors the parent chart, where
-global.annotations is applied to every Deployment/StatefulSet/DaemonSet.
+Controller annotations: `global.annotations` merged with
+`deployment.annotations`. Chart-local keys win on conflict. Mirrors the parent
+chart, where global.annotations is applied to every Deployment/StatefulSet/DaemonSet.
 */}}
 {{- define "mcp-kubecost.annotations" -}}
-{{- with ((.Values.global).annotations) }}
+{{- $global := ((.Values.global).annotations) | default dict -}}
+{{- $local := ((.Values.deployment).annotations) | default dict -}}
+{{- with merge (deepCopy $local) $global }}
 {{- toYaml . }}
 {{- end }}
 {{- end }}
@@ -97,14 +100,18 @@ runAsUser/runAsGroup and assigns its own IDs instead.
 {{/*
 Fail on contradictory values, and when referenced existing Secrets are missing
 unless CI/CD skip is on or the cluster is unreachable (helm template / dry-run
-with no kube API). The routing + authMode=none check is not gated by
-skipSanityChecks: that flag only skips live Secret lookups.
+with no kube API). The routing + authMode=none check and the replicas HA check
+are not gated by skipSanityChecks: that flag only skips live Secret lookups.
 */}}
 {{- define "mcp-kubecost.sanityChecks" -}}
 {{- $mode := .Values.config.authMode | default "none" }}
 {{- $routeEnabled := or .Values.httpRoute.enabled .Values.ingress.enabled }}
 {{- if and $routeEnabled (eq $mode "none") }}
 {{- fail "ERROR: \n\n authMode must be configured before enabling httproute or ingress.\n Please set authMode to a valid option.\n If anonymous access is required (for example if the ingress is behind a VPN), set  (e.g., \"authMode=open\").\n authMode = \"none\" with an exposed route is not permitted." }}
+{{- end }}
+{{- $replicas := ((.Values.deployment).replicas) | default 1 | int }}
+{{- if and (gt $replicas 1) (or (include "mcp-kubecost.persistenceEnabled" .) (eq $mode "oidc")) }}
+{{- fail "\n\nFAILURE [mcp-kubecost]: deployment.replicas is greater than 1, but this chart cannot share OAuth storage across pods.\n\nFileTreeStore is single-writer and the OAuth PVC is ReadWriteOnce. Multiple replicas would Multi-Attach the volume or split client registrations across pods.\n\nTo run more than one replica, put an MCP gateway or OAuth proxy in front of this chart, set config.authMode to none/open/api_key, and set persistence.enabled: false. Until shared OAuth storage exists, keep deployment.replicas: 1 when using OIDC.\n" }}
 {{- end }}
 {{- if ne (include "mcp-kubecost.skipSanityChecks" .) "true" }}
 {{- $ns := lookup "v1" "Namespace" "" .Release.Namespace }}
@@ -278,6 +285,21 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "mcp-kubecost.oauthStorageClaimName" -}}
 {{- printf "%s-oauth" (include "mcp-kubecost.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
+
+{{/*
+Resolve the tri-state persistence.enabled value.
+Returns a non-empty string ("true") when a PVC should be created; empty string otherwise.
+
+  true  (explicit) → always create PVC
+  false (explicit) → never create PVC
+  null  (default)  → create PVC only when config.authMode is "oidc"
+*/}}
+{{- define "mcp-kubecost.persistenceEnabled" -}}
+{{- if eq .Values.persistence.enabled true -}}true
+{{- else if eq .Values.persistence.enabled false -}}
+{{- else if eq (.Values.config.authMode | default "none") "oidc" -}}true
+{{- end -}}
+{{- end -}}
 
 {{/*
 Stable string of all ConfigMap data values used for checksum annotation.

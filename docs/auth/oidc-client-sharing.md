@@ -165,7 +165,7 @@ There is no user-visible downtime beyond one re-authentication. MCP client
 registrations remain on the OAuth state PVC across the Deployment recreation.
 
 1. Create the new client as described above, with only the MCP callback registered.
-2. Update the MCP Secret (or `config.oidc.clientId` / `clientSecret`) with the new credentials and `helm upgrade`. The `Recreate` deployment picks them up.
+2. Update the MCP Secret (or `config.oidc.clientId` / `clientSecret`) with the new credentials and `helm upgrade`. The default `Recreate` strategy (`deployment.strategy`) picks them up.
 3. Reconnect one MCP client and confirm login and a tool call succeed.
 4. Remove the MCP callback from the Kubecost client's redirect URI list.
 5. Rotate the old shared secret, since it was distributed more widely than it should have been.

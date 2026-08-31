@@ -6,22 +6,32 @@ metadata:
   name: {{ include "mcp-kubecost.fullname" . }}
   labels:
     {{- include "mcp-kubecost.labels" . | nindent 4 }}
+    {{- with ((.Values.deployment).labels) }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- with include "mcp-kubecost.annotations" . }}
   annotations:
     {{- . | nindent 4 }}
   {{- end }}
 spec:
-  # FileTreeStore is single-writer storage, so this Deployment is intentionally fixed at one replica.
-  replicas: 1
+  replicas: {{ ((.Values.deployment).replicas) | default 1 }}
+  {{- with ((.Values.deployment).strategy) }}
   strategy:
-    type: Recreate
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "mcp-kubecost.selectorLabels" . | nindent 6 }}
+      {{- with ((.Values.deployment).selector) }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
   template:
     metadata:
       labels:
         {{- include "mcp-kubecost.selectorLabels" . | nindent 8 }}
+        {{- with ((.Values.deployment).selector) }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         {{- with ((.Values.global).additionalLabels) }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -146,8 +156,12 @@ spec:
           {{- end }}
       volumes:
         - name: oauth-storage
+          {{- if include "mcp-kubecost.persistenceEnabled" . }}
           persistentVolumeClaim:
             claimName: {{ include "mcp-kubecost.oauthStorageClaimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
       {{- if .Values.config.ssl.caBundle.existingSecret }}
         - name: ca-bundle
           secret:

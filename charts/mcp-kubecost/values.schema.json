@@ -193,6 +193,7 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "enabled": { "type": ["boolean", "null"] },
         "storageClass": { "type": "string" },
         "accessModes": {
           "type": "array",
@@ -203,6 +204,17 @@
         "annotations": { "type": "object" }
       },
       "required": ["storageClass", "accessModes", "size", "annotations"]
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 0 },
+        "strategy": { "type": "object" },
+        "annotations": { "type": "object" },
+        "labels": { "type": "object" },
+        "selector": { "type": "object" }
+      }
     },
     "probes": {
       "type": "object",
