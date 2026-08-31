@@ -27,7 +27,7 @@ Tracing lives in a separate `otel` extra — add `--extra otel` (or use `just se
 
 ## Configuration
 
-Copy [`.env.example`](../../.env.example) to `.env` and set any variable needed to change defaults. `KUBECOST_BASE_URL` is the only required one. Auth and TLS variables are documented in [`README.md`](../auth/README.md).
+Copy [`.env.example`](../../.env.example) to `.env` and set any variable needed to change defaults. `KUBECOST_BASE_URL` is the only required one. Auth and TLS variables are documented in [`README.md`](../auth/README.md); full environment variable reference and technical detail: [`auth-technical.md`](../auth/auth-technical.md).
 
 ## Run
 
@@ -106,7 +106,7 @@ OpenTelemetry is an optional extra (`uv sync --extra otel`). The Docker image in
 
 `opentelemetry-distro` and the instrumentation packages are versioned `0.65b0` and classified beta. That is a versioning policy, not a maturity signal, and there is no non-beta alternative:
 
-- OpenTelemetry Python runs two permanent tracks. Its `RELEASING.md`: *"The version number for unstable components in the `main` branch is always `0.Yb0`."* Every instrumentation package sits on that track.
+- OpenTelemetry Python runs two permanent tracks. Its `RELEASING.md`: _"The version number for unstable components in the `main` branch is always `0.Yb0`."_ Every instrumentation package sits on that track.
 - Stable `opentelemetry-sdk` 1.44.0 itself hard-pins `opentelemetry-semantic-conventions==0.65b0`, so no OTel Python setup avoids a 0.x package.
 - FastMCP already depends on `opentelemetry-api` (stable 1.x) and emits its own MCP spans through it.
 
@@ -114,7 +114,7 @@ Dropping the distro would forfeit automatic httpx spans on every Kubecost API ca
 
 ## Security
 
-Authentication, OIDC, API keys, and pod hardening: [`README.md`](../auth/README.md).
+Authentication, OIDC, API keys, and pod hardening: [`README.md`](../auth/README.md). Full environment variable reference, nginx configuration, and troubleshooting: [`auth-technical.md`](../auth/auth-technical.md).
 
 - Never hardcode credentials; use environment variables only.
 - CI includes a lightweight secret-pattern scan and large-file safety check.

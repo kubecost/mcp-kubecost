@@ -113,13 +113,13 @@ flowchart LR
 
 Create a second confidential client for the MCP with these settings:
 
-| Setting                 | Value                                                                                |
-| ----------------------- | ------------------------------------------------------------------------------------ |
-| Client authentication   | On — this is a confidential client with a secret                                     |
-| Authorization code flow | Enabled (standard flow)                                                              |
-| Valid redirect URIs     | `{config.oidc.baseUrl}{config.oidc.redirectPath}`                                    |
-| Scopes                  | Must include `openid` and `profile` (the `OIDC_REQUIRED_SCOPES` default)             |
-| Consent                 | Off, unless you specifically want a consent screen for agent access                  |
+| Setting                 | Value                                                                    |
+| ----------------------- | ------------------------------------------------------------------------ |
+| Client authentication   | On — this is a confidential client with a secret                         |
+| Authorization code flow | Enabled (standard flow)                                                  |
+| Valid redirect URIs     | `{config.oidc.baseUrl}{config.oidc.redirectPath}`                        |
+| Scopes                  | Must include `openid` and `profile` (the `OIDC_REQUIRED_SCOPES` default) |
+| Consent                 | Off, unless you specifically want a consent screen for agent access      |
 
 Then point the chart at a Secret holding only the MCP client's credentials:
 
@@ -170,10 +170,10 @@ registrations remain on the OAuth state PVC across the Deployment recreation.
 4. Remove the MCP callback from the Kubecost client's redirect URI list.
 5. Rotate the old shared secret, since it was distributed more widely than it should have been.
 
-If step 3 fails with `invalid_redirect_uri`, compare the provider error's `redirect_uri` parameter against the client's registered list — see [Troubleshooting](README.md#troubleshooting).
+If step 3 fails with `invalid_redirect_uri`, compare the provider error's `redirect_uri` parameter against the client's registered list — see [Troubleshooting](auth-technical.md#troubleshooting).
 
 ## Related
 
-- [`README.md`](README.md) — the two auth layers, `AUTH_MODE`, Kubecost API keys, pod hardening
-- [Identity provider setup](README.md#identity-provider-setup) — the callback URI this server expects
-- [Shared Kubecost frontend hostname](README.md#shared-kubecost-frontend-hostname) — a different kind of sharing: one _hostname_ for both apps
+- [`README.md`](README.md) — the two auth layers, `AUTH_MODE`, Kubecost API keys
+- [Identity provider setup](auth-technical.md#identity-provider-setup) — the callback URI this server expects
+- [Shared Kubecost frontend hostname](auth-technical.md#shared-kubecost-frontend-hostname) — a different kind of sharing: one _hostname_ for both apps

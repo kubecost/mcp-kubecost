@@ -181,6 +181,8 @@ probes:
   # probes.failureThreshold is the number of failures before the container is considered unhealthy.
   failureThreshold: 3
 
+# Full authentication reference: docs/auth/auth-technical.md
+# Authentication overview and mode selection: docs/auth/README.md
 config:
   # config.authMode controls how the MCP HTTP endpoint is protected.
   # Supported values: none, open, oidc, api_key.
