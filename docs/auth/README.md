@@ -66,6 +66,19 @@ Helm chart always persists that directory on a PVC. Keep the signing and
 encryption keys stable across upgrades; rotating the encryption key without a
 migration invalidates previously stored state.
 
+DCR registrations are **idempotent**: this server derives the `client_id` from
+the registration metadata (redirect URIs, client name, grant and response types,
+scope, auth method), keyed on `OIDC_STORAGE_ENCRYPTION_KEY`, so a client that
+registers the same metadata twice gets one identity back. The MCP SDK otherwise
+mints a fresh `uuid4()` per `/register`, and a client opening two connections at
+once ends up with two identities sharing a single loopback callback port — the
+authorization code minted for one is then redeemed by the other, which FastMCP
+rejects as a client ID mismatch. The browser shows "Authentication complete"
+because the client's loopback page renders on receipt of the code, while the
+back-channel `POST /token` returns 401 and the session never establishes.
+Because the derived id is keyed on the storage encryption key, an ephemeral key
+also re-randomizes these ids — one more reason to set it explicitly.
+
 `OIDC_ISSUER_URL` is the provider’s discovery document, for example: `https://{domain}/.well-known/openid-configuration`.
 
 Optional: `OIDC_AUDIENCE` when the provider issues JWT access tokens for a specific API audience. Do not set it for providers that issue opaque access tokens — those are verified via the `id_token`, whose audience is the OAuth client id. `OIDC_REQUIRED_SCOPES` defaults to `openid,profile`.

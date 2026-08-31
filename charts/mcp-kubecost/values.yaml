@@ -297,9 +297,12 @@ config:
     clientSecret: ""
     # Optional — auto-generated as an ephemeral key at startup when unset. Set explicitly in
     # production to ensure token consistency across restarts (minimum 32 characters).
+    # Generate with: openssl rand -hex 32
     jwtSigningKey: ""
-    # Optional — auto-generated as an ephemeral Fernet key at startup when unset. Set explicitly
-    # in production to preserve OAuth sessions across restarts.
+    # Optional — auto-generated as an ephemeral Fernet key at startup when unset. Leaving this
+    # unset wipes the OAuth storage directory on every restart, so clients must re-register and
+    # re-authorize after each redeploy. Set explicitly in production to preserve OAuth sessions.
+    # Generate with: python3 -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'
     storageEncryptionKey: ""
     # Pre-created Secret containing the four OIDC secret values above.
     existingSecret: ""

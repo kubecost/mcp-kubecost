@@ -5,20 +5,29 @@ from __future__ import annotations
 import base64
 import inspect
 import json
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID, uuid4
 
 import pytest
 from cryptography.fernet import Fernet
-from fastmcp.server.auth.oauth_proxy.models import UpstreamTokenSet
+from fastmcp.server.auth.oauth_proxy.models import ProxyDCRClient, UpstreamTokenSet
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from fastmcp.server.auth.redirect_validation import validate_redirect_uri
+from key_value.aio.adapters.pydantic import PydanticAdapter
 from key_value.aio.stores.filetree import (
     FileTreeStore,
     FileTreeV1CollectionSanitizationStrategy,
     FileTreeV1KeySanitizationStrategy,
 )
+from key_value.aio.stores.memory import MemoryStore
 from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
+from mcp.server.auth.handlers.register import RegistrationHandler
+from mcp.server.auth.provider import RegistrationError
+from mcp.server.auth.settings import ClientRegistrationOptions
+from mcp.shared.auth import OAuthClientInformationFull
+from pydantic import AnyUrl
 
 from mcp_kubecost.config.oidc import (
     AdaptiveOidcProxy,
@@ -114,6 +123,30 @@ def _uninitialized_proxy() -> AdaptiveOidcProxy:
     return proxy
 
 
+def _dcr_proxy(
+    *,
+    dcr_client_id_key: str = "storage-key",
+    allowed_redirect_uris: list[str] | None = None,
+) -> AdaptiveOidcProxy:
+    """Return a proxy wired for register_client only, bypassing __init__.
+
+    A real __init__ fetches the IdP discovery document over the network. Only
+    the attributes OAuthProxy.register_client touches are supplied here.
+    """
+    proxy = AdaptiveOidcProxy.__new__(AdaptiveOidcProxy)
+    proxy._dcr_client_id_key = dcr_client_id_key.encode()
+    proxy._allowed_client_redirect_uris = allowed_redirect_uris
+    proxy._default_scope_str = "openid profile"
+    proxy._cimd_manager = None  # get_client skips CIMD refresh
+    proxy._client_store = PydanticAdapter[ProxyDCRClient](
+        key_value=MemoryStore(),
+        pydantic_model=ProxyDCRClient,
+        default_collection="mcp-oauth-proxy-clients",
+        raise_on_validation_error=True,
+    )
+    return proxy
+
+
 class TestCreateOidcProvider:
     def test_none_when_auth_disabled(self):
         assert create_oidc_provider(_settings()) is None
@@ -128,6 +161,7 @@ class TestCreateOidcProvider:
         assert kwargs["require_authorization_consent"] == "remember"
         assert kwargs["redirect_path"] == "/auth-mcp"
         assert kwargs["allowed_client_redirect_uris"] is None
+        assert kwargs["dcr_client_id_key"] == _OIDC["oidc_storage_encryption_key"]
         assert "verify_id_token" not in kwargs
         # _install_adaptive_verifier is now called from AdaptiveOidcProxy.__init__,
         # not from create_oidc_provider, so no explicit call assertion needed here.
@@ -243,6 +277,137 @@ class TestCreateOidcProvider:
             )
 
         assert not (tmp_path / "stale.json").exists()
+
+
+class TestIdempotentClientRegistration:
+    """A client that registers twice with the same metadata must get one identity.
+
+    The SDK mints a fresh uuid4 per /register. When an MCP client opens two
+    connections at once, both register against the same loopback callback port,
+    and the authorization code minted for one is redeemed by the other — a
+    client ID mismatch that 401s the token exchange after the browser has
+    already reported success.
+    """
+
+    @staticmethod
+    def _metadata(redirect_uri: str = "http://127.0.0.1:33418/callback") -> OAuthClientInformationFull:
+        """Registration metadata as the SDK handler hands it to register_client."""
+        return OAuthClientInformationFull(
+            client_id=str(uuid4()),  # the uuid4 the SDK mints per /register call
+            client_secret=None,
+            redirect_uris=[AnyUrl(redirect_uri)],
+            grant_types=["authorization_code", "refresh_token"],
+            response_types=["code"],
+            scope="openid profile",
+            token_endpoint_auth_method="none",
+        )
+
+    async def test_same_metadata_yields_one_client_id(self):
+        proxy = _dcr_proxy()
+        first, second = self._metadata(), self._metadata()
+
+        await proxy.register_client(first)
+        await proxy.register_client(second)
+
+        # Mutated in place: RegistrationHandler returns this object as the 201 body,
+        # so the client only sees the derived id because of this assignment.
+        assert first.client_id is not None
+        assert first.client_id == second.client_id
+        assert await proxy.get_client(first.client_id) is not None
+
+    async def test_differing_redirect_uris_yield_distinct_client_ids(self):
+        proxy = _dcr_proxy()
+        first = self._metadata("http://127.0.0.1:33418/callback")
+        second = self._metadata("http://127.0.0.1:44444/callback")
+
+        await proxy.register_client(first)
+        await proxy.register_client(second)
+
+        assert first.client_id != second.client_id
+
+    async def test_distinct_storage_keys_yield_distinct_client_ids(self):
+        """Ids are keyed per deployment, so they are not guessable from metadata alone."""
+        first, second = self._metadata(), self._metadata()
+
+        await _dcr_proxy(dcr_client_id_key="deployment-a").register_client(first)
+        await _dcr_proxy(dcr_client_id_key="deployment-b").register_client(second)
+
+        assert first.client_id != second.client_id
+
+    async def test_redirect_validation_still_runs(self):
+        """Deriving the id must not bypass super()'s redirect-URI validation."""
+        proxy = _dcr_proxy(allowed_redirect_uris=["https://client.example/callback"])
+
+        with pytest.raises(RegistrationError):
+            await proxy.register_client(self._metadata("http://127.0.0.1:33418/callback"))
+
+    async def test_derived_id_is_uuid_shaped(self):
+        """Keeps the wire format identical to the SDK's uuid4()."""
+        proxy = _dcr_proxy()
+        info = self._metadata()
+
+        await proxy.register_client(info)
+
+        assert info.client_id is not None
+        assert str(UUID(info.client_id)) == info.client_id
+
+    async def test_registration_responses_carry_the_derived_id(self):
+        """The whole fix rests on RegistrationHandler returning the object it passed us.
+
+        Driving the real SDK handler proves the derived id reaches the client in
+        the 201 body, not just the in-process model. A future SDK that copies
+        client_info before responding would break the fix silently, so assert it
+        here rather than trusting the in-place mutation.
+        """
+        proxy = _dcr_proxy()
+        handler = RegistrationHandler(provider=proxy, options=ClientRegistrationOptions(enabled=True))
+        body = {
+            "redirect_uris": ["http://127.0.0.1:33418/callback"],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "scope": "openid profile",
+            "token_endpoint_auth_method": "none",
+        }
+
+        # The two concurrent /register calls seen in mcp.log.
+        issued = []
+        for _ in range(2):
+            request = MagicMock()
+            request.json = AsyncMock(return_value=body)
+            response = await handler.handle(request)
+            assert response.status_code == 201
+            issued.append(json.loads(bytes(response.body))["client_id"])
+
+        assert issued[0] == issued[1]
+
+
+class TestRejectedAuthorizationCodeIsLogged:
+    async def test_warns_when_super_rejects_the_code(self, caplog):
+        proxy = AdaptiveOidcProxy.__new__(AdaptiveOidcProxy)
+        client = OAuthClientInformationFull(
+            client_id="client-a",
+            redirect_uris=[AnyUrl("http://127.0.0.1:33418/callback")],
+        )
+
+        with patch.object(OIDCProxy, "load_authorization_code", AsyncMock(return_value=None)):
+            with caplog.at_level(logging.WARNING, logger="mcp_kubecost.config.oidc"):
+                assert await proxy.load_authorization_code(client, "code-issued-to-someone-else") is None
+
+        assert "Rejected authorization code for client client-a" in caplog.text
+
+    async def test_silent_when_the_code_is_accepted(self, caplog):
+        proxy = AdaptiveOidcProxy.__new__(AdaptiveOidcProxy)
+        client = OAuthClientInformationFull(
+            client_id="client-a",
+            redirect_uris=[AnyUrl("http://127.0.0.1:33418/callback")],
+        )
+        code = MagicMock()
+
+        with patch.object(OIDCProxy, "load_authorization_code", AsyncMock(return_value=code)):
+            with caplog.at_level(logging.WARNING, logger="mcp_kubecost.config.oidc"):
+                assert await proxy.load_authorization_code(client, "good-code") is code
+
+        assert "Rejected authorization code" not in caplog.text
 
 
 class TestOidcProxyKwargConformance:

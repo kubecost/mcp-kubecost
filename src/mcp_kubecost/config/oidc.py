@@ -11,9 +11,12 @@ tokens are verified as-is; opaque tokens fall back to the
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import shutil
+import uuid
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -30,6 +33,8 @@ from key_value.aio.stores.filetree import (
     FileTreeV1KeySanitizationStrategy,
 )
 from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
+from mcp.server.auth.provider import AuthorizationCode
+from mcp.shared.auth import OAuthClientInformationFull
 
 from mcp_kubecost.config.settings import AuthMode, Settings, get_settings
 from mcp_kubecost.errors import ConfigError
@@ -66,12 +71,77 @@ class AdaptiveTokenVerifier(TokenVerifier):
 
 
 class AdaptiveOidcProxy(OIDCProxy):
-    """OIDC proxy that verifies JWT access tokens, else the OIDC id_token."""
+    """OIDC proxy that verifies JWT access tokens, else the OIDC id_token.
 
-    def __init__(self, **kwargs: Any) -> None:
+    Also makes Dynamic Client Registration idempotent — see ``register_client``.
+    """
+
+    def __init__(self, *, dcr_client_id_key: str, **kwargs: Any) -> None:
         super().__init__(**kwargs)
+        self._dcr_client_id_key: bytes = dcr_client_id_key.encode()
         self._logged_opaque: bool = False
         self._install_adaptive_verifier()
+
+    def _derive_client_id(self, client_info: OAuthClientInformationFull) -> str:
+        """Return a stable client_id for a registration: same metadata, same id.
+
+        The MCP SDK mints a fresh ``uuid4()`` per ``/register`` call with no
+        dedupe. A client that opens two connections at once therefore ends up
+        with two identities sharing one loopback callback port, and the
+        authorization code minted for one is redeemed by the other — which
+        FastMCP rejects as a client ID mismatch, leaving the browser showing
+        success while the session never establishes.
+
+        Keyed on the storage encryption key so ids are not guessable across
+        deployments. When that key is ephemeral the storage is wiped at startup
+        anyway, so ids have no need to survive the restart.
+        """
+        material = json.dumps(
+            {
+                "redirect_uris": sorted(str(uri) for uri in client_info.redirect_uris or []),
+                "client_name": client_info.client_name or "",
+                "grant_types": sorted(client_info.grant_types or []),
+                "response_types": sorted(client_info.response_types or []),
+                "scope": client_info.scope or "",
+                "token_endpoint_auth_method": client_info.token_endpoint_auth_method or "",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hmac.new(self._dcr_client_id_key, material.encode(), hashlib.sha256).hexdigest()
+        # UUID shape keeps the wire format identical to the SDK's uuid4().
+        return str(uuid.UUID(digest[:32]))
+
+    async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        """Register a client under an id derived from its metadata.
+
+        Mutated in place because ``RegistrationHandler`` returns this same
+        object as the 201 body, so the client sees the derived id too.
+        Delegates to ``super()`` rather than short-circuiting on an existing
+        entry, keeping redirect-URI validation on every registration.
+        """
+        client_info.client_id = self._derive_client_id(client_info)
+        await super().register_client(client_info)
+
+    async def load_authorization_code(
+        self,
+        client: OAuthClientInformationFull,
+        authorization_code: str,
+    ) -> AuthorizationCode | None:
+        """Reject codes as FastMCP does, but say so at a level operators see.
+
+        FastMCP logs the specific reason at DEBUG, so in production this failure
+        otherwise reaches the operator as a bare 401 with no explanation.
+        """
+        result = await super().load_authorization_code(client, authorization_code)
+        if result is None:
+            logger.warning(
+                "Rejected authorization code for client %s — the code was not found, has "
+                "expired, or was issued to a different client_id. Enable DEBUG logging on "
+                "fastmcp.server.auth for the specific reason.",
+                client.client_id,
+            )
+        return result
 
     def _install_adaptive_verifier(self) -> None:
         """Wrap FastMCP's access-token JWTVerifier with an id_token fallback."""
@@ -171,6 +241,7 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
             client_storage=encrypted_storage,
             jwt_signing_key=settings.oidc_jwt_signing_key,
             require_authorization_consent="remember",
+            dcr_client_id_key=settings.oidc_storage_encryption_key,
         )
     except ConfigError:
         raise
