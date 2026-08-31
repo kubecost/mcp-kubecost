@@ -309,3 +309,44 @@ class TestOidcRedirectPathSetting:
                 raise AssertionError("expected ConfigError")
         finally:
             get_settings.cache_clear()
+
+
+class TestOidcAllowedClientRedirectUrisSetting:
+    def test_unset_and_blank_values_default_to_open_posture(self, monkeypatch):
+        monkeypatch.delenv("OIDC_ALLOWED_CLIENT_REDIRECT_URIS", raising=False)
+        assert _load_settings(monkeypatch).oidc_allowed_client_redirect_uris is None
+        assert (
+            _load_settings(monkeypatch, OIDC_ALLOWED_CLIENT_REDIRECT_URIS="   ").oidc_allowed_client_redirect_uris
+            is None
+        )
+
+    def test_parses_and_normalizes_json_patterns(self, monkeypatch):
+        settings = _load_settings(
+            monkeypatch,
+            OIDC_ALLOWED_CLIENT_REDIRECT_URIS='[" http://localhost:* ", "https://client.example/callback"]',
+        )
+        assert settings.oidc_allowed_client_redirect_uris == [
+            "http://localhost:*",
+            "https://client.example/callback",
+        ]
+        assert settings.to_loggable_dict()["oidc_allowed_client_redirect_uris"] == [
+            "http://localhost:*",
+            "https://client.example/callback",
+        ]
+
+    def test_preserves_explicit_empty_list(self, monkeypatch):
+        settings = _load_settings(monkeypatch, OIDC_ALLOWED_CLIENT_REDIRECT_URIS="[]")
+        assert settings.oidc_allowed_client_redirect_uris == []
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "not-json",
+            '"https://client.example/callback"',
+            '["https://client.example/callback", 1]',
+            '[""]',
+        ],
+    )
+    def test_rejects_invalid_values(self, monkeypatch, value):
+        with pytest.raises(ConfigError, match="OIDC_ALLOWED_CLIENT_REDIRECT_URIS"):
+            _load_settings(monkeypatch, OIDC_ALLOWED_CLIENT_REDIRECT_URIS=value)

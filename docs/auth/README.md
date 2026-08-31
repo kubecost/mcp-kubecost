@@ -55,7 +55,9 @@ When `AUTH_MODE=oidc`, the server builds a FastMCP [`OIDCProxy`](https://gofastm
 
 When this server has a **dedicated hostname** (not a Kubecost sub-path), use `/auth/callback` instead — see [Shared Kubecost frontend hostname](#shared-kubecost-frontend-hostname) for why `/auth-mcp` is otherwise required.
 
-The MCP client’s own redirect (`http://localhost:<port>/callback`, Claude’s `https://claude.ai/api/mcp/auth_callback`, or ChatGPT’s `https://chatgpt.com/connector/oauth/{callback_id}` / `https://chatgpt.com/connector_platform_oauth_redirect`) is registered with FastMCP through DCR or resolved from its Client ID Metadata Document. Do not put those URLs on the identity provider. This server allowlists those MCP-client redirects on their exact origins. Persisted DCR registrations survive pod recreation in the PVC-backed FileTreeStore; CIMD clients are resolved from their metadata documents, and other unknown client IDs are rejected. The IdP Valid redirect URI remains only `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}`. See OpenAI's [authentication guide](https://developers.openai.com/plugins/build/auth#redirect-url) for the current ChatGPT callback forms.
+The MCP client’s own redirect (`http://localhost:<port>/callback`, Claude’s `https://claude.ai/api/mcp/auth_callback`, or ChatGPT’s `https://chatgpt.com/connector/oauth/{callback_id}` / `https://chatgpt.com/connector_platform_oauth_redirect`) is registered with FastMCP through DCR or resolved from its Client ID Metadata Document. Do not put those URLs on the identity provider. By default, this server uses FastMCP’s Open, DCR/CIMD-compatible redirect validation: ordinary safe callbacks are accepted while unsafe browser schemes are rejected. Persisted DCR registrations survive pod recreation in the PVC-backed FileTreeStore; CIMD clients are resolved from their metadata documents.
+
+For an enterprise Restricted posture, set `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` to a JSON array of approved FastMCP redirect patterns (Helm: `config.oidc.allowedClientRedirectUris`). Only listed callbacks can then register. Start Open, inspect `Client registered with redirect_uri` server logs to identify the callbacks your clients actually use, configure those patterns, and test every supported client. An unset or blank setting remains Open; `[]` intentionally denies all client redirects. The IdP Valid redirect URI remains only `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}`. See OpenAI's [authentication guide](https://developers.openai.com/plugins/build/auth#redirect-url) for the current ChatGPT callback forms.
 
 FastMCP displays consent once per MCP client and remembers the decision in a
 signed browser cookie. OAuth registrations, authorization codes, and tokens are
@@ -186,8 +188,9 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 | `OIDC_BASE_URL`              | `config.oidc.baseUrl`                                   | Public URL of this MCP server. A path prefix (`https://host/mcp`) moves every OAuth endpoint under it                                                                                                                                                                                               |
 | `MCP_HTTP_PATH`              | `config.http.path`                                      | Route the MCP endpoint is served on. Derived: `/` when `OIDC_BASE_URL` has a path prefix, else `/mcp`. Read by the container entrypoint, not `get_settings()` — see note below                                                                                                                      |
 | `OIDC_REDIRECT_PATH`         | `config.oidc.redirectPath`                              | IdP callback path. Default `/auth-mcp`. Use `/auth/callback` when MCP has a dedicated hostname                                                                                                                                                                                                      |
-| `OIDC_AUDIENCE`              | `config.oidc.audience`                                  | Optional token audience (JWT access tokens only; omit for opaque IdPs)                                                                                                                                                                                                                              |
+| `OIDC_AUDIENCE`              | `config.oidc.audience`                                   | Optional token audience (JWT access tokens only; omit for opaque IdPs)                                                                                                                                                                                                                              |
 | `OIDC_REQUIRED_SCOPES`       | `config.oidc.requiredScopes`                            | Default `openid,profile`                                                                                                                                                                                                                                                                            |
+| `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` | `config.oidc.allowedClientRedirectUris` | Optional JSON array of allowed downstream MCP-client callback patterns. Unset/blank is Open; `[]` denies all callbacks. This is not the IdP callback allowlist. |
 | `OIDC_STORAGE_PATH`          | fixed by the chart                                      | Built-in FileTreeStore directory. Default `/var/lib/mcp-kubecost/oauth`; Helm mounts its mandatory PVC at the parent directory                                                                                                                                                                     |
 | `OIDC_JWT_SIGNING_KEY`       | `config.oidc.jwtSigningKey` or Secret                    | **Optional.** Stable random key, at least 32 characters, used to sign MCP-side OAuth tokens. If omitted, a secure ephemeral key is generated at startup — set this explicitly in production to ensure token consistency across restarts.                                                             |
 | `OIDC_STORAGE_ENCRYPTION_KEY` | `config.oidc.storageEncryptionKey` or Secret             | **Optional.** URL-safe base64 Fernet key used to encrypt OAuth state before FileTreeStore persistence. If omitted, a secure ephemeral key is generated at startup and existing storage is wiped — set this explicitly in production to preserve OAuth sessions across restarts.                      |
@@ -228,6 +231,25 @@ helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
 ```
 
 That example is the dedicated-hostname layout (`authMode: oidc` with a root `baseUrl`). Set `config.oidc.redirectPath=/auth/callback` and register that URI on the IdP. To also require each caller to send `X-API-KEY`, set `config.requireClientApiKey: true`.
+
+### Optional enterprise client lockdown
+
+Leave `config.oidc.allowedClientRedirectUris` empty for the default Open
+posture. To restrict downstream MCP clients after reviewing
+`Client registered with redirect_uri` logs, set it to a JSON-array string:
+
+```yaml
+config:
+  oidc:
+    allowedClientRedirectUris: >-
+      ["http://localhost:*", "http://127.0.0.1:*", "https://claude.ai/api/mcp/auth_callback", "https://chatgpt.com/connector/oauth/*", "https://chatgpt.com/connector_platform_oauth_redirect"]
+```
+
+This setting constrains MCP-client callbacks only. Do not add those values to
+the identity provider; its valid redirect URI remains
+`{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}`. The exact list is deployment-specific:
+add and test each client your organization supports. Set `[]` only to deny all
+client redirects deliberately.
 
 ## Pod hardening and TLS
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import os
 import secrets
@@ -59,6 +60,7 @@ class Settings:
     oidc_base_url: str | None
     oidc_redirect_path: str
     oidc_required_scopes: list[str]
+    oidc_allowed_client_redirect_uris: list[str] | None
     oidc_storage_path: str
     oidc_jwt_signing_key: str | None
     oidc_storage_encryption_key: str | None
@@ -193,6 +195,20 @@ def _get_oidc_scopes() -> list[str]:
     return [s.strip() for s in raw.split(",") if s.strip()]
 
 
+def _get_oidc_allowed_client_redirect_uris() -> list[str] | None:
+    """Parse an optional JSON allowlist for downstream MCP-client redirects."""
+    raw = os.getenv("OIDC_ALLOWED_CLIENT_REDIRECT_URIS", "").strip()
+    if not raw:
+        return None
+    try:
+        values = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConfigError("OIDC_ALLOWED_CLIENT_REDIRECT_URIS must be a JSON array of non-empty strings") from exc
+    if not isinstance(values, list) or not all(isinstance(value, str) and value.strip() for value in values):
+        raise ConfigError("OIDC_ALLOWED_CLIENT_REDIRECT_URIS must be a JSON array of non-empty strings")
+    return [value.strip() for value in values]
+
+
 _DEFAULT_OIDC_REDIRECT_PATH = "/auth-mcp"
 _DEFAULT_OIDC_STORAGE_PATH = "/var/lib/mcp-kubecost/oauth"
 
@@ -316,6 +332,7 @@ def get_settings() -> Settings:
         oidc_base_url=oidc_base_url,
         oidc_redirect_path=_get_oidc_redirect_path(),
         oidc_required_scopes=_get_oidc_scopes(),
+        oidc_allowed_client_redirect_uris=_get_oidc_allowed_client_redirect_uris(),
         oidc_storage_path=_get_oidc_storage_path(),
         oidc_jwt_signing_key=oidc_jwt_signing_key,
         oidc_storage_encryption_key=oidc_storage_encryption_key,

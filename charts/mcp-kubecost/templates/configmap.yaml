@@ -55,4 +55,7 @@ data:
   {{- if .Values.config.oidc.requiredScopes }}
   OIDC_REQUIRED_SCOPES: {{ .Values.config.oidc.requiredScopes | quote }}
   {{- end }}
+  {{- if .Values.config.oidc.allowedClientRedirectUris }}
+  OIDC_ALLOWED_CLIENT_REDIRECT_URIS: {{ .Values.config.oidc.allowedClientRedirectUris | quote }}
+  {{- end }}
   {{- end }}

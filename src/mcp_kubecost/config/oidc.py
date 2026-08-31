@@ -23,7 +23,6 @@ from fastmcp.server.auth import AccessToken, TokenVerifier
 from fastmcp.server.auth.oauth_proxy.models import UpstreamTokenSet
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from fastmcp.server.auth.providers.jwt import JWTVerifier
-from fastmcp.server.auth.redirect_validation import DEFAULT_LOCALHOST_PATTERNS
 from fastmcp.utilities.auth import decode_jwt_header
 from key_value.aio.stores.filetree import (
     FileTreeStore,
@@ -39,18 +38,6 @@ logger = logging.getLogger(__name__)
 
 # Per-request: True when the current verification token is the OIDC id_token.
 _verify_id_token: ContextVar[bool] = ContextVar("oidc_verify_id_token", default=False)
-
-# MCP-client redirect allowlist (not the IdP callback). Without this, FastMCP
-# leaves patterns as None and validate_redirect_uri accepts any ordinary URI.
-ALLOWED_CLIENT_REDIRECT_URIS: list[str] = [
-    *DEFAULT_LOCALHOST_PATTERNS,  # http://localhost:*, http://127.0.0.1:*
-    "https://claude.ai/api/mcp/auth_callback",
-    # ChatGPT uses a per-connector callback unless the authorization server
-    # advertises and returns RFC 9207 issuer identification. Allow both current
-    # callback forms on the exact chatgpt.com origin.
-    "https://chatgpt.com/connector/oauth/*",
-    "https://chatgpt.com/connector_platform_oauth_redirect",
-]
 
 
 def looks_like_jwt(token: str) -> bool:
@@ -175,7 +162,7 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
             base_url=settings.oidc_base_url,
             redirect_path=settings.oidc_redirect_path,
             required_scopes=settings.oidc_required_scopes or None,
-            allowed_client_redirect_uris=ALLOWED_CLIENT_REDIRECT_URIS,
+            allowed_client_redirect_uris=settings.oidc_allowed_client_redirect_uris,
             client_storage=encrypted_storage,
             jwt_signing_key=settings.oidc_jwt_signing_key,
             require_authorization_consent="remember",

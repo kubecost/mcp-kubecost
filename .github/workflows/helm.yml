@@ -133,9 +133,11 @@ jobs:
             --set config.oidc.clientId=x \
             --set config.oidc.clientSecret=y \
             --set config.oidc.baseUrl=https://mcp.example.com \
+            --set-string 'config.oidc.allowedClientRedirectUris=["http://localhost:*"\,"https://client.example/callback"]' \
             > .helm-render/mcp-kubecost-oidc-apikey.yaml
           grep -q 'AUTH_MODE: "oidc"' .helm-render/mcp-kubecost-oidc-apikey.yaml
           grep -q 'REQUIRE_CLIENT_API_KEY: "true"' .helm-render/mcp-kubecost-oidc-apikey.yaml
+          grep -F -q 'OIDC_ALLOWED_CLIENT_REDIRECT_URIS: "[\"http://localhost:*\",\"https://client.example/callback\"]"' .helm-render/mcp-kubecost-oidc-apikey.yaml
           grep -q 'name: KUBECOST_API_KEY' .helm-render/mcp-kubecost-oidc-apikey.yaml
 
       # A path-prefixed config.oidc.baseUrl means a reverse proxy strips that
@@ -153,6 +155,10 @@ jobs:
             > .helm-render/mcp-kubecost-oidc-subpath.yaml
           grep -q 'MCP_HTTP_PATH: "/"' .helm-render/mcp-kubecost-oidc-subpath.yaml
           grep -q 'OIDC_BASE_URL: "https://kubecost.example.com/mcp"' .helm-render/mcp-kubecost-oidc-subpath.yaml
+          if grep -q 'OIDC_ALLOWED_CLIENT_REDIRECT_URIS:' .helm-render/mcp-kubecost-oidc-subpath.yaml; then
+            echo "expected Open OIDC render to omit OIDC_ALLOWED_CLIENT_REDIRECT_URIS" >&2
+            exit 1
+          fi
 
       # The derivation reads config.oidc.baseUrl, which is only honoured at
       # runtime under authMode=oidc. A deployment that moved off OIDC but kept

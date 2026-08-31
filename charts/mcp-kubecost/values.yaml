@@ -286,6 +286,11 @@ config:
     redirectPath: "/auth-mcp"
     # config.oidc.requiredScopes is a comma-separated list of OAuth scopes to request.
     requiredScopes: "openid,profile"
+    # Optional JSON array of allowed downstream MCP-client redirect URI patterns.
+    # Leave empty for the Open default, which supports standards-compatible DCR/CIMD
+    # clients. This does not configure the upstream IdP callback.
+    # Example Restricted posture: '["http://localhost:*", "https://client.example/callback"]'
+    allowedClientRedirectUris: ""
     # config.oidc.clientId is the OIDC client ID. Prefer existingSecret for production.
     clientId: ""
     # config.oidc.clientSecret is the OIDC client secret. Prefer existingSecret for production.

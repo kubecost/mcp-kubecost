@@ -21,7 +21,6 @@ from key_value.aio.stores.filetree import (
 from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 
 from mcp_kubecost.config.oidc import (
-    ALLOWED_CLIENT_REDIRECT_URIS,
     AdaptiveOidcProxy,
     AdaptiveTokenVerifier,
     create_oidc_provider,
@@ -52,6 +51,7 @@ _SETTINGS: dict[str, Any] = dict(
     oidc_base_url=None,
     oidc_redirect_path="/auth-mcp",
     oidc_required_scopes=["openid", "profile"],
+    oidc_allowed_client_redirect_uris=None,
     oidc_storage_path="/tmp/mcp-kubecost-test-oauth",
     oidc_jwt_signing_key=None,
     oidc_storage_encryption_key=None,
@@ -127,7 +127,7 @@ class TestCreateOidcProvider:
         assert kwargs["jwt_signing_key"] == _OIDC["oidc_jwt_signing_key"]
         assert kwargs["require_authorization_consent"] == "remember"
         assert kwargs["redirect_path"] == "/auth-mcp"
-        assert kwargs["allowed_client_redirect_uris"] == ALLOWED_CLIENT_REDIRECT_URIS
+        assert kwargs["allowed_client_redirect_uris"] is None
         assert "verify_id_token" not in kwargs
         # _install_adaptive_verifier is now called from AdaptiveOidcProxy.__init__,
         # not from create_oidc_provider, so no explicit call assertion needed here.
@@ -144,6 +144,33 @@ class TestCreateOidcProvider:
                 )
             )
         assert proxy.call_args.kwargs["redirect_path"] == "/auth/callback"
+
+    def test_forwards_restricted_client_redirects(self, tmp_path):
+        redirects = ["http://localhost:*", "https://client.example/callback"]
+        with patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy") as proxy:
+            create_oidc_provider(
+                _settings(
+                    **{
+                        **_OIDC,
+                        "oidc_allowed_client_redirect_uris": redirects,
+                        "oidc_storage_path": str(tmp_path),
+                    }
+                )
+            )
+        assert proxy.call_args.kwargs["allowed_client_redirect_uris"] == redirects
+
+    def test_forwards_explicit_empty_client_redirect_list(self, tmp_path):
+        with patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy") as proxy:
+            create_oidc_provider(
+                _settings(
+                    **{
+                        **_OIDC,
+                        "oidc_allowed_client_redirect_uris": [],
+                        "oidc_storage_path": str(tmp_path),
+                    }
+                )
+            )
+        assert proxy.call_args.kwargs["allowed_client_redirect_uris"] == []
 
     async def test_encrypted_file_storage_survives_reopen(self, tmp_path):
         settings = _settings(**{**_OIDC, "oidc_storage_path": str(tmp_path)})
@@ -333,30 +360,15 @@ class TestAdaptiveTokenVerifier:
 
 
 class TestAllowedClientRedirectUris:
-    def test_rejects_arbitrary_host(self):
-        assert validate_redirect_uri("https://evil.example/x", ALLOWED_CLIENT_REDIRECT_URIS) is False
+    def test_open_posture_allows_ordinary_redirects_and_rejects_unsafe_schemes(self):
+        assert validate_redirect_uri("https://unanticipated.example/callback", None) is True
+        assert validate_redirect_uri("javascript:alert(1)", None) is False
 
-    def test_allows_localhost_and_claude(self):
-        assert validate_redirect_uri("http://localhost:54321/callback", ALLOWED_CLIENT_REDIRECT_URIS) is True
-        assert validate_redirect_uri("https://claude.ai/api/mcp/auth_callback", ALLOWED_CLIENT_REDIRECT_URIS) is True
+    def test_restricted_posture_allows_configured_patterns_only(self):
+        allowed = ["http://localhost:*", "https://client.example/callback"]
+        assert validate_redirect_uri("http://localhost:54321/callback", allowed) is True
+        assert validate_redirect_uri("https://client.example/callback", allowed) is True
+        assert validate_redirect_uri("https://unanticipated.example/callback", allowed) is False
 
-    @pytest.mark.parametrize(
-        "redirect_uri",
-        [
-            "https://chatgpt.com/connector/oauth/example-callback-id",
-            "https://chatgpt.com/connector_platform_oauth_redirect",
-        ],
-    )
-    def test_allows_current_chatgpt_callbacks(self, redirect_uri: str):
-        assert validate_redirect_uri(redirect_uri, ALLOWED_CLIENT_REDIRECT_URIS) is True
-
-    @pytest.mark.parametrize(
-        "redirect_uri",
-        [
-            "https://chatgpt.com.evil.example/connector/oauth/example-callback-id",
-            "http://chatgpt.com/connector/oauth/example-callback-id",
-            "https://chatgpt.com/connector/not-oauth/example-callback-id",
-        ],
-    )
-    def test_rejects_chatgpt_callback_lookalikes(self, redirect_uri: str):
-        assert validate_redirect_uri(redirect_uri, ALLOWED_CLIENT_REDIRECT_URIS) is False
+    def test_empty_restricted_list_rejects_client_redirects(self):
+        assert validate_redirect_uri("https://client.example/callback", []) is False

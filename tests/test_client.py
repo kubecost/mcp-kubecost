@@ -93,6 +93,7 @@ _BASE_SETTINGS: dict[str, Any] = dict(
     oidc_base_url=None,
     oidc_redirect_path="/auth-mcp",
     oidc_required_scopes=["openid", "profile"],
+    oidc_allowed_client_redirect_uris=None,
     oidc_storage_path="/tmp/mcp-kubecost-test-oauth",
     oidc_jwt_signing_key=None,
     oidc_storage_encryption_key=None,
