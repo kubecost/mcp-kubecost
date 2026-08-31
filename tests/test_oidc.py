@@ -433,8 +433,10 @@ class TestOidcProxyKwargConformance:
         assert hasattr(OIDCProxy, "_get_verification_token")
         assert hasattr(OIDCProxy, "_uses_alternate_verification")
 
-    def test_unknown_clients_use_fastmcp_default_rejection(self):
-        assert AdaptiveOidcProxy.get_client is OIDCProxy.get_client
+    def test_get_client_is_overridden_for_decryption_guard(self):
+        # AdaptiveOidcProxy now owns get_client to catch DecryptionError and
+        # return None (clean 401) instead of propagating an unhandled exception.
+        assert AdaptiveOidcProxy.get_client is not OIDCProxy.get_client
 
 
 class TestLooksLikeJwt:

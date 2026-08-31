@@ -305,6 +305,15 @@ def get_settings() -> Settings:
 
         if oidc_jwt_signing_key is not None and len(oidc_jwt_signing_key) < 32:
             raise ConfigError("OIDC_JWT_SIGNING_KEY must be at least 32 characters")
+        if oidc_storage_encryption_key is not None:
+            try:
+                Fernet(oidc_storage_encryption_key.encode())
+            except Exception as exc:
+                raise ConfigError(
+                    "OIDC_STORAGE_ENCRYPTION_KEY is not a valid Fernet key "
+                    f"(expected a 32-byte URL-safe base64 string, e.g. from `python -c "
+                    f'"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`): {exc}'
+                ) from exc
 
         # oidc_ephemeral_keys is not "did we generate any key" — it is "is the OAuth
         # state on disk now unreadable". build_oidc_provider() rmtree()s the storage

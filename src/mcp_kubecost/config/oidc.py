@@ -27,13 +27,14 @@ from fastmcp.server.auth.oauth_proxy.models import UpstreamTokenSet
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.utilities.auth import decode_jwt_header
+from key_value.aio.errors.wrappers import DecryptionError
 from key_value.aio.stores.filetree import (
     FileTreeStore,
     FileTreeV1CollectionSanitizationStrategy,
     FileTreeV1KeySanitizationStrategy,
 )
 from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
-from mcp.server.auth.provider import AuthorizationCode
+from mcp.server.auth.provider import AccessToken as SdkAccessToken, AuthorizationCode, RefreshToken
 from mcp.shared.auth import OAuthClientInformationFull
 
 from mcp_kubecost.config.settings import AuthMode, Settings, get_settings
@@ -76,9 +77,10 @@ class AdaptiveOidcProxy(OIDCProxy):
     Also makes Dynamic Client Registration idempotent — see ``register_client``.
     """
 
-    def __init__(self, *, dcr_client_id_key: str, **kwargs: Any) -> None:
+    def __init__(self, *, dcr_client_id_key: str, storage_dir: Path, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._dcr_client_id_key: bytes = dcr_client_id_key.encode()
+        self._storage_dir = storage_dir
         self._logged_opaque: bool = False
         self._install_adaptive_verifier()
 
@@ -123,6 +125,28 @@ class AdaptiveOidcProxy(OIDCProxy):
         client_info.client_id = self._derive_client_id(client_info)
         await super().register_client(client_info)
 
+    async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
+        """Wrap the parent with a DecryptionError guard.
+
+        A key rotation (new OIDC_STORAGE_ENCRYPTION_KEY without wiping the storage
+        directory) leaves ciphertext on disk that cannot be decrypted with the current
+        key. Without this guard the error propagates as an unhandled exception inside
+        FastMCP's request handlers. Returning None lets FastMCP respond with a clean
+        401 instead of a 500 traceback.
+        """
+        try:
+            return await super().get_client(client_id)
+        except DecryptionError:
+            logger.error(
+                "Failed to decrypt stored OAuth client %r — the storage was likely written "
+                "with a different OIDC_STORAGE_ENCRYPTION_KEY. "
+                "Set OIDC_STORAGE_ENCRYPTION_KEY to the original key, or clear the "
+                "OIDC storage directory (%s) and restart so clients re-register.",
+                client_id,
+                self._storage_dir,
+            )
+            return None
+
     async def load_authorization_code(
         self,
         client: OAuthClientInformationFull,
@@ -132,8 +156,19 @@ class AdaptiveOidcProxy(OIDCProxy):
 
         FastMCP logs the specific reason at DEBUG, so in production this failure
         otherwise reaches the operator as a bare 401 with no explanation.
+        Also catches DecryptionError when the storage key has rotated.
         """
-        result = await super().load_authorization_code(client, authorization_code)
+        try:
+            result = await super().load_authorization_code(client, authorization_code)
+        except DecryptionError:
+            logger.error(
+                "Failed to decrypt authorization code for client %s — the storage was likely "
+                "written with a different OIDC_STORAGE_ENCRYPTION_KEY. "
+                "Set OIDC_STORAGE_ENCRYPTION_KEY to the original key, or clear the "
+                "OIDC storage directory and restart so clients re-register.",
+                client.client_id,
+            )
+            return None
         if result is None:
             logger.warning(
                 "Rejected authorization code for client %s — the code was not found, has "
@@ -142,6 +177,31 @@ class AdaptiveOidcProxy(OIDCProxy):
                 client.client_id,
             )
         return result
+
+    async def load_access_token(self, token: str) -> SdkAccessToken | None:
+        """Wrap the parent with a DecryptionError guard."""
+        try:
+            return await super().load_access_token(token)
+        except DecryptionError:
+            logger.error(
+                "Failed to decrypt stored access token — the storage was likely written "
+                "with a different OIDC_STORAGE_ENCRYPTION_KEY. "
+                "Clients will need to re-authenticate."
+            )
+            return None
+
+    async def load_refresh_token(self, client: OAuthClientInformationFull, refresh_token: str) -> RefreshToken | None:
+        """Wrap the parent with a DecryptionError guard."""
+        try:
+            return await super().load_refresh_token(client, refresh_token)
+        except DecryptionError:
+            logger.error(
+                "Failed to decrypt stored refresh token for client %s — the storage was likely "
+                "written with a different OIDC_STORAGE_ENCRYPTION_KEY. "
+                "Clients will need to re-authenticate.",
+                client.client_id,
+            )
+            return None
 
     def _install_adaptive_verifier(self) -> None:
         """Wrap FastMCP's access-token JWTVerifier with an id_token fallback."""
@@ -242,6 +302,7 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
             jwt_signing_key=settings.oidc_jwt_signing_key,
             require_authorization_consent="remember",
             dcr_client_id_key=settings.oidc_storage_encryption_key,
+            storage_dir=storage_dir,
         )
     except ConfigError:
         raise

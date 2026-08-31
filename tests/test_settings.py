@@ -244,7 +244,7 @@ class TestAuthModeSetting:
             OIDC_CLIENT_SECRET="secret",
             OIDC_BASE_URL="https://mcp.example",
             OIDC_JWT_SIGNING_KEY="j" * 32,
-            OIDC_STORAGE_ENCRYPTION_KEY="fernet-secret",
+            OIDC_STORAGE_ENCRYPTION_KEY=Fernet.generate_key().decode(),
         )
         logged = settings.to_loggable_dict()
         assert logged["oidc_jwt_signing_key"] == "***"
