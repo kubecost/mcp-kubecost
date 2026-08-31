@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import MagicMock
 
+import pytest
 from fastmcp.server.middleware.middleware import MiddlewareContext
 from fastmcp.tools.base import ToolResult
 from mcp.types import CallToolRequestParams
@@ -39,3 +40,11 @@ async def test_tool_concurrency_limit_queues_excess_calls():
     release_first.set()
     await asyncio.gather(first, second)
     assert second_started.is_set()
+
+
+def test_tool_concurrency_limit_rejects_non_positive_max():
+    with pytest.raises(ValueError, match="max_concurrent must be greater than 0"):
+        ToolConcurrencyLimitMiddleware(max_concurrent=0)
+
+    with pytest.raises(ValueError, match="max_concurrent must be greater than 0"):
+        ToolConcurrencyLimitMiddleware(max_concurrent=-1)

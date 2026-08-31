@@ -142,6 +142,11 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
 
     try:
         storage_dir = Path(settings.oidc_storage_path)
+        # oidc_ephemeral_keys means the storage encryption key was auto-generated this
+        # startup, so anything already on disk was encrypted with a key we no longer
+        # have and every read would fail. Discard it rather than serve errors. An
+        # auto-generated *signing* key does not land here — see get_settings().
+        # _get_oidc_storage_path() guarantees this is a nested path, never '/' or '/var'.
         if settings.oidc_ephemeral_keys:
             shutil.rmtree(storage_dir, ignore_errors=True)
         storage_dir.mkdir(mode=0o700, parents=True, exist_ok=True)

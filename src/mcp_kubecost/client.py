@@ -29,7 +29,29 @@ _http_client: httpx.AsyncClient | None = None
 
 
 def start_http_client() -> httpx.AsyncClient:
-    """Create the process-wide Kubecost HTTP client if needed."""
+    """Create the process-wide Kubecost HTTP client if needed.
+
+    Deliberately synchronous and lock-free. There is no ``await`` between the
+    ``is_closed`` check and the assignment below — ``get_settings()`` is a cached
+    sync call and ``httpx.AsyncClient()`` construction is sync — so within one
+    event loop no other coroutine can run in that window and no duplicate client
+    can leak. The check-then-create is already atomic under cooperative
+    scheduling.
+
+    Do not "fix" this with an ``asyncio.Lock``. A module-level lock binds itself
+    to the first event loop that *contends* on it and then raises
+    ``RuntimeError: ... is bound to a different event loop`` on any later loop —
+    silently fine as long as nothing contends on it, which makes it a latent
+    failure rather than an obvious one. ``tests/conftest.py`` resets this client
+    per test, so the suite already runs across many event loops and would
+    eventually trip exactly that. A lock would also have to be acquired by
+    ``close_http_client()`` to mean anything.
+
+    If cross-*thread* safety is ever genuinely required (more than one event loop
+    in a process), ``asyncio.Lock`` is the wrong primitive — it is not
+    thread-safe. Reach for ``threading.Lock`` and revisit ``close_http_client()``
+    at the same time.
+    """
     global _http_client
     if _http_client is None or _http_client.is_closed:
         settings = get_settings()

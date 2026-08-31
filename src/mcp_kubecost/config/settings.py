@@ -69,6 +69,8 @@ class Settings:
     def to_loggable_dict(self) -> dict:
         """Return a copy of settings safe for logging (sensitive fields redacted)."""
         d = dataclasses.asdict(self)
+        # Key must match the dataclass field name exactly (dataclasses.asdict uses field names).
+        # The field is intentionally uppercase (KUBECOST_API_KEY) — do not rename without updating here.
         if d.get("KUBECOST_API_KEY") is not None:
             d["KUBECOST_API_KEY"] = "***"
         for name in (
@@ -240,12 +242,36 @@ def _get_oidc_redirect_path() -> str:
 
 
 def _get_oidc_storage_path() -> str:
-    """Return the absolute directory used for encrypted OAuth state."""
+    """Return the normalized absolute directory used for encrypted OAuth state.
+
+    Validation mirrors ``_get_oidc_redirect_path()``: reject ``..`` outright rather
+    than silently resolving it, then normalize so the stored value is stable
+    (no trailing slash, no ``.`` segments).
+
+    The nesting requirement is not cosmetic. ``build_oidc_provider()`` calls
+    ``shutil.rmtree()`` on this directory when the storage encryption key is
+    ephemeral, so a stray ``/`` or ``/var`` here would turn startup into a
+    destructive operation against the container filesystem.
+
+    Canonicalizing from segments rather than via ``os.path.normpath()`` is
+    deliberate: POSIX gives a leading ``//`` implementation-defined meaning and
+    ``normpath`` preserves it, so ``//var//lib//oauth`` would survive as
+    ``//var/lib/oauth``. ``..`` is rejected above rather than resolved, so there is
+    nothing left for ``normpath`` to do here.
+    """
     raw = os.getenv("OIDC_STORAGE_PATH", _DEFAULT_OIDC_STORAGE_PATH).strip()
-    path = os.path.abspath(raw)
     if not raw or not os.path.isabs(raw):
         raise ConfigError(f"Invalid OIDC_STORAGE_PATH: {raw!r} (expected an absolute path)")
-    return path
+    if ".." in raw:
+        raise ConfigError(f"Invalid OIDC_STORAGE_PATH: {raw!r} (must not contain '..')")
+    segments = [segment for segment in raw.split("/") if segment and segment != "."]
+    if len(segments) < 2:
+        raise ConfigError(
+            f"Invalid OIDC_STORAGE_PATH: {raw!r} "
+            f"(expected a nested directory such as {_DEFAULT_OIDC_STORAGE_PATH}, "
+            "not a filesystem root or top-level directory)"
+        )
+    return "/" + "/".join(segments)
 
 
 @lru_cache(maxsize=1)
@@ -280,13 +306,22 @@ def get_settings() -> Settings:
         if oidc_jwt_signing_key is not None and len(oidc_jwt_signing_key) < 32:
             raise ConfigError("OIDC_JWT_SIGNING_KEY must be at least 32 characters")
 
+        # oidc_ephemeral_keys is not "did we generate any key" — it is "is the OAuth
+        # state on disk now unreadable". build_oidc_provider() rmtree()s the storage
+        # directory when it is True (see config/oidc.py), so only a key whose absence
+        # invalidates persisted state may set it.
         ephemeral = False
         if oidc_jwt_signing_key is None:
             oidc_jwt_signing_key = secrets.token_hex(32)
-            ephemeral = True
+            # Deliberately does NOT set ephemeral. A fresh signing key only invalidates
+            # tokens already issued to clients; the encrypted client registrations on
+            # disk were never signed with it and stay readable. Keep them and let
+            # clients re-authorize — wiping them here would be an over-broad reaction.
             logger.warning("OIDC_JWT_SIGNING_KEY is not set — using an ephemeral key")
         if oidc_storage_encryption_key is None:
             oidc_storage_encryption_key = Fernet.generate_key().decode()
+            # A new random Fernet key cannot decrypt state written under the previous
+            # one, so every read would fail. The directory has to be discarded.
             ephemeral = True
             logger.warning("OIDC_STORAGE_ENCRYPTION_KEY is not set — using an ephemeral key")
     else:

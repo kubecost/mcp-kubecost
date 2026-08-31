@@ -208,6 +208,33 @@ class TestAuthModeSetting:
         )
         assert settings.oidc_ephemeral_keys is False
 
+    def test_generated_jwt_key_alone_is_not_ephemeral(self, monkeypatch):
+        """A generated signing key must not wipe durable storage.
+
+        oidc_ephemeral_keys drives shutil.rmtree() of the storage directory in
+        build_oidc_provider(). State on disk is encrypted with the Fernet key, not
+        signed with the JWT key, so a persisted Fernet key means that state is still
+        readable and must survive. Clients simply re-authorize against the new
+        signing key.
+        """
+        settings = _load_settings(
+            monkeypatch,
+            **self._OIDC_BASE,
+            OIDC_STORAGE_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        )
+        assert settings.oidc_jwt_signing_key is not None  # generated
+        assert settings.oidc_ephemeral_keys is False
+
+    def test_generated_storage_key_alone_is_ephemeral(self, monkeypatch):
+        """A generated Fernet key leaves existing state impossible to decrypt, so it must wipe."""
+        settings = _load_settings(
+            monkeypatch,
+            **self._OIDC_BASE,
+            OIDC_JWT_SIGNING_KEY="j" * 32,
+        )
+        assert settings.oidc_jwt_signing_key == "j" * 32
+        assert settings.oidc_ephemeral_keys is True
+
     def test_oidc_storage_secrets_are_redacted(self, monkeypatch):
         settings = _load_settings(
             monkeypatch,
@@ -226,6 +253,27 @@ class TestAuthModeSetting:
     def test_oidc_storage_path_is_absolute(self, monkeypatch):
         with pytest.raises(ConfigError, match="OIDC_STORAGE_PATH"):
             _load_settings(monkeypatch, OIDC_STORAGE_PATH="relative/oauth")
+
+    def test_oidc_storage_path_rejects_parent_traversal(self, monkeypatch):
+        with pytest.raises(ConfigError, match="must not contain"):
+            _load_settings(monkeypatch, OIDC_STORAGE_PATH="/var/lib/mcp-kubecost/../../etc/oauth")
+
+    @pytest.mark.parametrize("raw", ["/", "/var", "/var/", "//var//"])
+    def test_oidc_storage_path_rejects_shallow_paths(self, monkeypatch, raw):
+        """build_oidc_provider() rmtree()s this directory, so '/' or '/var' must not pass."""
+        with pytest.raises(ConfigError, match="nested directory"):
+            _load_settings(monkeypatch, OIDC_STORAGE_PATH=raw)
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("/var/lib/mcp-kubecost/oauth/", "/var/lib/mcp-kubecost/oauth"),
+            ("/var/lib/mcp-kubecost/./oauth", "/var/lib/mcp-kubecost/oauth"),
+            ("//var//lib//oauth", "/var/lib/oauth"),
+        ],
+    )
+    def test_oidc_storage_path_is_normalized(self, monkeypatch, raw, expected):
+        assert _load_settings(monkeypatch, OIDC_STORAGE_PATH=raw).oidc_storage_path == expected
 
     def test_oidc_storage_path_defaults_to_standard_state_directory(self, monkeypatch):
         monkeypatch.delenv("OIDC_STORAGE_PATH", raising=False)

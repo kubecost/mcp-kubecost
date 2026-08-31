@@ -82,14 +82,14 @@ spec:
                 secretKeyRef:
                   name: {{ $oidcSecretName }}
                   key: OIDC_CLIENT_SECRET
-            {{- if or .Values.config.oidc.jwtSigningKey (and .Values.config.oidc.existingSecret) }}
+            {{- if or .Values.config.oidc.jwtSigningKey .Values.config.oidc.existingSecret }}
             - name: OIDC_JWT_SIGNING_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ $oidcSecretName }}
                   key: OIDC_JWT_SIGNING_KEY
             {{- end }}
-            {{- if or .Values.config.oidc.storageEncryptionKey (and .Values.config.oidc.existingSecret) }}
+            {{- if or .Values.config.oidc.storageEncryptionKey .Values.config.oidc.existingSecret }}
             - name: OIDC_STORAGE_ENCRYPTION_KEY
               valueFrom:
                 secretKeyRef:
