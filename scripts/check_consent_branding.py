@@ -212,15 +212,15 @@ def run_checks(base: str) -> tuple[list[tuple[str, bool, str]], str]:
         check("Kubecost font stack applied", FONT_STACK in html)
         check("Kubecost ink color applied", INK in html)
         check("Kubecost accent color applied", ACCENT in html)
-        check("logo is an inline data: URI", "data:image/svg+xml" in html)
+        check("logo is an inline data: URI", "data:image/png;base64," in html)
         # Without a declared icon a browser requests /favicon.ico and logs a 404.
         check("page declares an inline favicon", 'rel="icon"' in html)
 
         favicon = client.get(f"{base}/favicon.ico")
         check("GET /favicon.ico serves an image", favicon.status_code == 200, f"HTTP {favicon.status_code}")
         check(
-            "favicon is the Kubecost SVG",
-            favicon.headers.get("content-type", "").startswith("image/svg+xml") and b"<svg" in favicon.content,
+            "favicon is the Kubecost PNG",
+            favicon.headers.get("content-type", "").startswith("image/png") and favicon.content[:4] == b"\x89PNG",
             favicon.headers.get("content-type", ""),
         )
         check("server name links to kubecost.com", KUBECOST_WEBSITE_URL in html)

@@ -320,9 +320,7 @@ _THEME_CSS = f"""
     }}
 """
 
-# Copy that names FastMCP to the end user. Each pattern is a single-line
-# substring of FastMCP's own template — nothing here spans a line break, which
-# is what keeps the substitution robust against reindentation.
+# replace fastmcp logo with kubecost logo
 # FastMCP's FASTMCP_LOGO_URL is used by create_logo() as the fallback when no
 # server_icon_url is supplied — which is the case for all callback error pages.
 # Replace it with our data URI so those pages never request an external asset.
