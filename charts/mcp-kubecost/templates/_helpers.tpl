@@ -138,9 +138,9 @@ are not gated by skipSanityChecks: that flag only skips live Secret lookups.
 
 {{/* Canonical FastMCP OAuth callback path. Mirrors _get_oidc_redirect_path(). */}}
 {{- define "mcp-kubecost.oidcRedirectPath" -}}
-{{- $raw := .Values.config.oidc.redirectPath | default "/auth-mcp" | trim }}
+{{- $raw := .Values.config.oidc.redirectPath | default "/callback" | trim }}
 {{- if or (contains "://" $raw) (contains "?" $raw) (contains "#" $raw) }}
-{{- fail (printf "config.oidc.redirectPath must be a path like /auth-mcp, not a URL: %s" $raw) }}
+{{- fail (printf "config.oidc.redirectPath must be a path like /callback, not a URL: %s" $raw) }}
 {{- end }}
 {{- if contains ".." $raw }}
 {{- fail (printf "config.oidc.redirectPath must not contain '..': %s" $raw) }}
@@ -153,70 +153,18 @@ are not gated by skipSanityChecks: that flag only skips live Secret lookups.
 {{- end }}
 
 {{/*
-Path component of config.oidc.baseUrl, normalised without a trailing slash.
-Empty when baseUrl is unset, points at the root of a host, or authMode is not
-"oidc".
-
-A non-empty value means this server is deployed behind a reverse proxy that
-strips that prefix: FastMCP advertises {baseUrl}/authorize, {baseUrl}/token and
-{baseUrl}/register in its OAuth metadata, so the proxy must map
-{prefix}/authorize to /authorize on this Service.
-
-Gated on authMode == "oidc" because baseUrl is only read at runtime in that
-mode. Without the gate, a deployment that switched to api_key but kept its old
-baseUrl would silently relocate its MCP endpoint from /mcp to /.
-
-The scheme check lives here rather than in validateOIDC because validateOIDC is
-only reachable through NOTES.txt: `helm template -s templates/configmap.yaml`
-skips it, and this helper feeds that ConfigMap. Without a scheme, urlParse reads
-the whole value as a path ("k.example.com/mcp" -> prefix "/k.example.com/mcp").
-*/}}
-{{- define "mcp-kubecost.oidcBasePathPrefix" -}}
-{{- if eq (.Values.config.authMode | default "none") "oidc" }}
-{{- $raw := .Values.config.oidc.baseUrl | default "" | trim }}
-{{- if $raw }}
-{{- if not (or (hasPrefix "https://" $raw) (hasPrefix "http://" $raw)) }}
-{{- fail (printf "\n\nFAILURE [mcp-kubecost]: config.oidc.baseUrl %q is missing a scheme. Set a full URL (https://kubecost.example.com or https://kubecost.example.com/mcp) — without a scheme the whole value parses as a URL path and the MCP endpoint would be relocated on the strength of a hostname.\n" $raw) }}
-{{- end }}
-{{- $path := (urlParse $raw).path | default "" }}
-{{- $path = printf "/%s" (trimAll "/" $path) }}
-{{- if ne $path "/" }}{{ $path }}{{ end }}
-{{- end }}
-{{- end }}
-{{- end }}
-
-{{/*
 Route the MCP endpoint is served on inside the container (MCP_HTTP_PATH,
 passed through to `fastmcp run --path`).
 
-Defaults to config.http.path. When config.oidc.baseUrl carries a path prefix the
-proxy strips it, so the endpoint must be served at "/" — otherwise a stripped
-request for the MCP endpoint would arrive as "/" and 404, and the RFC 9728
-resource URL would double the prefix (https://host/mcp/mcp).
+Defaults to /mcp. OAuth has its own public prefix through config.oidc.baseUrl;
+it does not relocate the protected-resource endpoint.
 */}}
 {{- define "mcp-kubecost.httpPath" -}}
 {{- $explicit := (((.Values.config).http).path) | default "" }}
 {{- if $explicit }}
 {{- $explicit }}
-{{- else if (include "mcp-kubecost.oidcBasePathPrefix" .) }}
-{{- "/" }}
 {{- else }}
 {{- "/mcp" }}
-{{- end }}
-{{- end }}
-
-{{/*
-Fail when a path-prefixed config.oidc.baseUrl is combined with an MCP endpoint
-that is not served at "/". These two settings must agree or OAuth discovery
-silently resolves to the wrong URLs.
-
-The check inherits the authMode == "oidc" gate from oidcBasePathPrefix, so a
-non-OIDC deployment carrying a stale baseUrl is never failed here.
-*/}}
-{{- define "mcp-kubecost.validateHttpPath" -}}
-{{- $prefix := include "mcp-kubecost.oidcBasePathPrefix" . }}
-{{- if and $prefix (ne (include "mcp-kubecost.httpPath" .) "/") }}
-{{- fail (printf "\n\nFAILURE [mcp-kubecost]: config.oidc.baseUrl has the path prefix %q, which means a reverse proxy strips that prefix before requests reach this Service. config.http.path must then be \"/\" so the MCP endpoint and the prefix-stripped OAuth paths both resolve here.\n\nTo fix, either:\n  - set config.http.path: \"/\"  (leave it empty to derive this automatically), or\n  - drop the path from config.oidc.baseUrl and serve the MCP endpoint at its own hostname.\n" $prefix) }}
 {{- end }}
 {{- end }}
 
@@ -321,6 +269,7 @@ FASTMCP_SHOW_SERVER_BANNER="false"
 USE_CAC_VIEWS={{ .Values.config.useCacViews | quote }}
 REQUIRE_CLIENT_API_KEY={{ (or .Values.config.requireClientApiKey (eq .Values.config.authMode "api_key")) | quote }}
 MCP_SERVER_NAME={{ .Values.config.mcpServerName | quote }}
+MCP_HTTP_PATH={{ include "mcp-kubecost.httpPath" . | quote }}
 FASTMCP_TELEMETRY_MODE={{ .Values.config.telemetryMode | quote }}
 OTEL_SERVICE_NAME={{ .Values.config.otelServiceName | quote }}
 OTEL_METRICS_EXPORTER={{ .Values.config.otelMetricsExporter | quote }}
@@ -350,6 +299,9 @@ OIDC_AUDIENCE={{ .Values.config.oidc.audience | quote }}
 {{- end }}
 {{- if .Values.config.oidc.baseUrl }}
 OIDC_BASE_URL={{ .Values.config.oidc.baseUrl | quote }}
+{{- end }}
+{{- if .Values.config.oidc.resourceBaseUrl }}
+OIDC_RESOURCE_BASE_URL={{ .Values.config.oidc.resourceBaseUrl | quote }}
 {{- end }}
 OIDC_REDIRECT_PATH={{ include "mcp-kubecost.oidcRedirectPath" . | quote }}
 {{- if .Values.config.oidc.requiredScopes }}
@@ -396,8 +348,8 @@ skipSanityChecks — these are static value checks, not live Secret lookups.
 
 issuerUrl accepts http:// on localhost / 127.0.0.1 to mirror the MCP SDK's own
 validate_issuer_url rule; all other hosts require https://.
-baseUrl requires https:// with no localhost carve-out; FastMCP derives its
-_is_https flag from this value, which drives secure-cookie and redirect behaviour.
+baseUrl and resourceBaseUrl require https:// with no localhost carve-out.
+FastMCP derives secure-cookie and redirect behaviour from baseUrl.
 */}}
 {{- define "mcp-kubecost.validateOIDC" -}}
 {{- if eq (.Values.config.authMode | default "none") "oidc" -}}
@@ -423,7 +375,10 @@ _is_https flag from this value, which drives secure-cookie and redirect behaviou
 {{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.issuerUrl must be an https:// URL, or http:// on localhost / 127.0.0.1.\n\nThis mirrors the MCP SDK's own issuer rule (RFC 8414 requires HTTPS; the SDK carves out localhost for testing). A plaintext issuer on any other host is rejected by the SDK at startup, so the chart refuses it here rather than letting the pod crash-loop.\n\n  Example:\n    config.oidc.issuerUrl: \"https://kubecost.example.com/.well-known/openid-configuration\"\n" -}}
 {{- end -}}
 {{- if not (hasPrefix "https://" (.Values.config.oidc.baseUrl | default "")) -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.baseUrl must be set to an https:// URL.\n\n  Example:\n    config.oidc.baseUrl: \"https://kubecost.example.com\"\n" -}}
+{{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.baseUrl must be set to an https:// authorization-server URL.\n\n  Example:\n    config.oidc.baseUrl: \"https://kubecost.example.com/oauth/mcp\"\n" -}}
+{{- end -}}
+{{- if not (hasPrefix "https://" (.Values.config.oidc.resourceBaseUrl | default "")) -}}
+{{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.resourceBaseUrl must be set to the https:// public base URL that hosts config.http.path.\n\n  Example:\n    config.oidc.resourceBaseUrl: \"https://kubecost.example.com\"\n" -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

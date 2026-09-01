@@ -167,8 +167,33 @@ class TestAuthModeSetting:
         "OIDC_ISSUER_URL": "https://idp.example/.well-known/openid-configuration",
         "OIDC_CLIENT_ID": "client",
         "OIDC_CLIENT_SECRET": "secret",
-        "OIDC_BASE_URL": "https://mcp.example",
+        "OIDC_BASE_URL": "https://mcp.example/oauth/mcp",
+        "OIDC_RESOURCE_BASE_URL": "https://mcp.example",
     }
+
+    def test_oidc_requires_resource_base_url(self, monkeypatch):
+        environment = {**self._OIDC_BASE}
+        environment.pop("OIDC_RESOURCE_BASE_URL")
+        with pytest.raises(ConfigError, match="OIDC_RESOURCE_BASE_URL"):
+            _load_settings(monkeypatch, **environment)
+
+    @pytest.mark.parametrize("name", ["OIDC_BASE_URL", "OIDC_RESOURCE_BASE_URL"])
+    def test_oidc_public_urls_must_be_absolute_http_urls(self, monkeypatch, name):
+        environment = {**self._OIDC_BASE, name: "kubecost.example.com/oauth/mcp"}
+        with pytest.raises(ConfigError, match=f"Invalid URL for {name}"):
+            _load_settings(monkeypatch, **environment)
+
+    def test_oidc_public_urls_drop_trailing_slashes(self, monkeypatch):
+        settings = _load_settings(
+            monkeypatch,
+            **{
+                **self._OIDC_BASE,
+                "OIDC_BASE_URL": "https://mcp.example/oauth/mcp/",
+                "OIDC_RESOURCE_BASE_URL": "https://mcp.example/",
+            },
+        )
+        assert settings.oidc_base_url == "https://mcp.example/oauth/mcp"
+        assert settings.oidc_resource_base_url == "https://mcp.example"
 
     def test_oidc_starts_without_durable_storage_secrets(self, monkeypatch):
         settings = _load_settings(monkeypatch, **self._OIDC_BASE)
@@ -242,7 +267,8 @@ class TestAuthModeSetting:
             OIDC_ISSUER_URL="https://idp.example/.well-known/openid-configuration",
             OIDC_CLIENT_ID="client",
             OIDC_CLIENT_SECRET="secret",
-            OIDC_BASE_URL="https://mcp.example",
+            OIDC_BASE_URL="https://mcp.example/oauth/mcp",
+            OIDC_RESOURCE_BASE_URL="https://mcp.example",
             OIDC_JWT_SIGNING_KEY="j" * 32,
             OIDC_STORAGE_ENCRYPTION_KEY=Fernet.generate_key().decode(),
         )
@@ -312,12 +338,12 @@ class TestAuthModeSetting:
 
 
 class TestOidcRedirectPathSetting:
-    def test_defaults_to_auth_mcp(self, monkeypatch):
+    def test_defaults_to_callback(self, monkeypatch):
         monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
         monkeypatch.delenv("OIDC_REDIRECT_PATH", raising=False)
         get_settings.cache_clear()
         try:
-            assert get_settings().oidc_redirect_path == "/auth-mcp"
+            assert get_settings().oidc_redirect_path == "/callback"
         finally:
             get_settings.cache_clear()
 
@@ -332,7 +358,7 @@ class TestOidcRedirectPathSetting:
 
     def test_rejects_url(self, monkeypatch):
         monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
-        monkeypatch.setenv("OIDC_REDIRECT_PATH", "https://mcp.example/auth-mcp")
+        monkeypatch.setenv("OIDC_REDIRECT_PATH", "https://mcp.example/callback")
         get_settings.cache_clear()
         try:
             try:
@@ -346,7 +372,7 @@ class TestOidcRedirectPathSetting:
 
     def test_rejects_dot_dot(self, monkeypatch):
         monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
-        monkeypatch.setenv("OIDC_REDIRECT_PATH", "/../auth-mcp")
+        monkeypatch.setenv("OIDC_REDIRECT_PATH", "/../callback")
         get_settings.cache_clear()
         try:
             try:

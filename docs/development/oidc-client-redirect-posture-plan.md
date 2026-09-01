@@ -9,7 +9,7 @@ setting.
 
 This setting controls downstream MCP client callbacks. It does **not** replace
 or alter the upstream identity-provider callback:
-`{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}`.
+`{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}` (recommended `/oauth/mcp/callback`).
 
 ## Intended behavior
 

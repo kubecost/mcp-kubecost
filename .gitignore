@@ -240,3 +240,4 @@ todo-list.md
 .kiro/
 .bobtmp/
 .DS_STORE
+.kubeconfig

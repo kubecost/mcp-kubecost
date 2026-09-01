@@ -51,6 +51,9 @@ data:
   {{- if .Values.config.oidc.baseUrl }}
   OIDC_BASE_URL: {{ .Values.config.oidc.baseUrl | quote }}
   {{- end }}
+  {{- if .Values.config.oidc.resourceBaseUrl }}
+  OIDC_RESOURCE_BASE_URL: {{ .Values.config.oidc.resourceBaseUrl | quote }}
+  {{- end }}
   OIDC_REDIRECT_PATH: {{ include "mcp-kubecost.oidcRedirectPath" . | quote }}
   {{- if .Values.config.oidc.requiredScopes }}
   OIDC_REQUIRED_SCOPES: {{ .Values.config.oidc.requiredScopes | quote }}

@@ -58,7 +58,8 @@ _SETTINGS: dict[str, Any] = dict(
     oidc_client_secret=None,
     oidc_audience=None,
     oidc_base_url=None,
-    oidc_redirect_path="/auth-mcp",
+    oidc_resource_base_url=None,
+    oidc_redirect_path="/callback",
     oidc_required_scopes=["openid", "profile"],
     oidc_allowed_client_redirect_uris=None,
     oidc_storage_path="/tmp/mcp-kubecost-test-oauth",
@@ -72,7 +73,8 @@ _OIDC = dict(
     oidc_issuer_url="https://idp.example/.well-known/openid-configuration",
     oidc_client_id="client",
     oidc_client_secret="secret",
-    oidc_base_url="https://mcp.example",
+    oidc_base_url="https://mcp.example/oauth/mcp",
+    oidc_resource_base_url="https://mcp.example",
     oidc_storage_path="/tmp/mcp-kubecost-test-oauth",
     oidc_jwt_signing_key="j" * 32,
     oidc_storage_encryption_key=Fernet.generate_key().decode(),
@@ -174,7 +176,9 @@ class TestCreateOidcProvider:
         assert isinstance(kwargs["client_storage"].key_value, FileTreeStore)
         assert kwargs["jwt_signing_key"] == _OIDC["oidc_jwt_signing_key"]
         assert kwargs["require_authorization_consent"] == "remember"
-        assert kwargs["redirect_path"] == "/auth-mcp"
+        assert kwargs["base_url"] == "https://mcp.example/oauth/mcp"
+        assert kwargs["resource_base_url"] == "https://mcp.example"
+        assert kwargs["redirect_path"] == "/callback"
         assert kwargs["allowed_client_redirect_uris"] is None
         assert kwargs["dcr_client_id_key"] == _OIDC["oidc_storage_encryption_key"]
         assert "verify_id_token" not in kwargs

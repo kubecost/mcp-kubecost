@@ -297,6 +297,7 @@
             "issuerUrl": { "type": "string" },
             "audience": { "type": "string" },
             "baseUrl": { "type": "string" },
+            "resourceBaseUrl": { "type": "string" },
             "redirectPath": { "type": "string" },
             "requiredScopes": { "type": "string" },
             "allowedClientRedirectUris": { "type": "string" },

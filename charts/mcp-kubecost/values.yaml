@@ -256,9 +256,8 @@ config:
   # config.useCacViews enables Kubecost CAC views.
   useCacViews: false
   # config.http.path is the route the MCP endpoint is served on inside the
-  # container (passed to `fastmcp run --path`). Leave empty to derive it:
-  # "/mcp" normally, or "/" when config.oidc.baseUrl carries a path prefix and
-  # a reverse proxy strips that prefix before requests arrive.
+  # container (passed to `fastmcp run --path`). Leave empty for /mcp. This path
+  # is independent of config.oidc.baseUrl.
   http:
     path: ""
 
@@ -298,19 +297,18 @@ config:
     issuerUrl: ""
     # config.oidc.audience is the token audience expected by the provider (optional).
     audience: ""
-    # config.oidc.baseUrl is this MCP server's public URL, not the identity provider's URL.
-    # FastMCP uses it to advertise OAuth metadata and construct the redirect URI that
-    # must be registered with the identity provider. Must be an https:// URL.
-    # Dedicated MCP hostname:        https://mcp.example.com
-    # Sub-path on a Kubecost host:   https://kubecost.example.com/mcp
-    # A path prefix moves FastMCP's whole advertised OAuth surface under it, and
-    # requires a reverse proxy that strips the prefix — the chart then derives
-    # config.http.path: "/" so the stripped paths resolve here.
+    # config.oidc.baseUrl is the public FastMCP authorization-server URL, not the
+    # identity provider or protected-resource URL. A reverse proxy must route this
+    # prefix to FastMCP's root OAuth routes. Must be an https:// URL.
+    # Recommended shared-host layout: https://kubecost.example.com/oauth/mcp
     baseUrl: ""
+    # config.oidc.resourceBaseUrl is the public base URL hosting config.http.path.
+    # FastMCP appends that path to construct the protected resource identifier.
+    # Recommended shared-host layout: https://kubecost.example.com
+    resourceBaseUrl: ""
     # config.oidc.redirectPath is the FastMCP OAuth callback path (OIDC_REDIRECT_PATH).
-    # The default /auth-mcp is for a sub-path on a Kubecost frontend (nginx
-    # owns /auth). Use /auth/callback when this server has a dedicated hostname.
-    redirectPath: "/auth-mcp"
+    # It is relative to baseUrl, so the default produces /oauth/mcp/callback.
+    redirectPath: "/callback"
     # config.oidc.requiredScopes is a comma-separated list of OAuth scopes to request.
     requiredScopes: "openid,profile"
     # Optional JSON array of allowed downstream MCP-client redirect URI patterns.

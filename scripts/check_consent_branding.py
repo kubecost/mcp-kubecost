@@ -110,6 +110,7 @@ def _start_server(port: int, idp_port: int, storage: Path) -> subprocess.Popen[b
         "OIDC_CLIENT_ID": "kubecost-mcp",
         "OIDC_CLIENT_SECRET": "stub-secret",
         "OIDC_BASE_URL": f"http://127.0.0.1:{port}",
+        "OIDC_RESOURCE_BASE_URL": f"http://127.0.0.1:{port}",
         "OIDC_STORAGE_PATH": str(storage),
         "OIDC_JWT_SIGNING_KEY": "k" * 40,
         "FASTMCP_TELEMETRY_MODE": "off",

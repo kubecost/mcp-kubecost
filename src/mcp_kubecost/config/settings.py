@@ -58,6 +58,7 @@ class Settings:
     oidc_client_secret: str | None
     oidc_audience: str | None
     oidc_base_url: str | None
+    oidc_resource_base_url: str | None
     oidc_redirect_path: str
     oidc_required_scopes: list[str]
     oidc_allowed_client_redirect_uris: list[str] | None
@@ -211,26 +212,25 @@ def _get_oidc_allowed_client_redirect_uris() -> list[str] | None:
     return [value.strip() for value in values]
 
 
-_DEFAULT_OIDC_REDIRECT_PATH = "/auth-mcp"
+_DEFAULT_OIDC_REDIRECT_PATH = "/callback"
 _DEFAULT_OIDC_STORAGE_PATH = "/var/lib/mcp-kubecost/oauth"
 
 
 def _get_oidc_redirect_path() -> str:
     """Return the FastMCP OAuth callback path (OIDC_REDIRECT_PATH).
 
-    Defaults to ``/auth-mcp`` — most deployments run this server as a
-    sub-path on an existing Kubecost frontend, where FastMCP's own default
-    of ``/auth/callback`` collides with Kubecost's ``auth_request`` on
-    ``location /auth``. Use ``/auth/callback`` instead when this server has
-    a dedicated hostname (not a Kubecost sub-path). Only this callback is
-    remountable; ``/register``, ``/authorize``, and ``/token`` stay at the
-    server root.
+    Defaults to ``/callback``, relative to ``OIDC_BASE_URL``. The recommended
+    shared-host layout uses an authorization-server base such as
+    ``https://kubecost.example.com/oauth/mcp``, producing the upstream IdP
+    callback ``https://kubecost.example.com/oauth/mcp/callback``. Only this
+    callback is remountable; the other OAuth operational routes are rooted at
+    the authorization-server base URL by the reverse proxy.
     """
     raw = os.getenv("OIDC_REDIRECT_PATH", _DEFAULT_OIDC_REDIRECT_PATH).strip()
     if not raw:
         return _DEFAULT_OIDC_REDIRECT_PATH
     if "://" in raw or "?" in raw or "#" in raw:
-        raise ConfigError(f"Invalid OIDC_REDIRECT_PATH: {raw!r} (expected a path like /auth-mcp, not a URL)")
+        raise ConfigError(f"Invalid OIDC_REDIRECT_PATH: {raw!r} (expected a path like /callback, not a URL)")
     if ".." in raw:
         raise ConfigError(f"Invalid OIDC_REDIRECT_PATH: {raw!r} (must not contain '..')")
     path = raw if raw.startswith("/") else f"/{raw}"
@@ -287,6 +287,7 @@ def get_settings() -> Settings:
     oidc_client_secret: str | None = os.getenv("OIDC_CLIENT_SECRET", "").strip() or None
     oidc_audience: str | None = os.getenv("OIDC_AUDIENCE", "").strip() or None
     oidc_base_url: str | None = os.getenv("OIDC_BASE_URL", "").strip() or None
+    oidc_resource_base_url: str | None = os.getenv("OIDC_RESOURCE_BASE_URL", "").strip() or None
     oidc_jwt_signing_key: str | None = os.getenv("OIDC_JWT_SIGNING_KEY", "").strip() or None
     oidc_storage_encryption_key: str | None = os.getenv("OIDC_STORAGE_ENCRYPTION_KEY", "").strip() or None
 
@@ -300,8 +301,14 @@ def get_settings() -> Settings:
             missing.append("OIDC_CLIENT_SECRET")
         if not oidc_base_url:
             missing.append("OIDC_BASE_URL")
+        if not oidc_resource_base_url:
+            missing.append("OIDC_RESOURCE_BASE_URL")
         if missing:
             raise ConfigError(f"AUTH_MODE={auth_mode.value} requires: {', '.join(missing)}")
+
+        oidc_issuer_url = _get_url_env("OIDC_ISSUER_URL")
+        oidc_base_url = _get_url_env("OIDC_BASE_URL")
+        oidc_resource_base_url = _get_url_env("OIDC_RESOURCE_BASE_URL")
 
         if oidc_jwt_signing_key is not None and len(oidc_jwt_signing_key) < 32:
             raise ConfigError("OIDC_JWT_SIGNING_KEY must be at least 32 characters")
@@ -374,6 +381,7 @@ def get_settings() -> Settings:
         oidc_client_secret=oidc_client_secret,
         oidc_audience=oidc_audience,
         oidc_base_url=oidc_base_url,
+        oidc_resource_base_url=oidc_resource_base_url,
         oidc_redirect_path=_get_oidc_redirect_path(),
         oidc_required_scopes=_get_oidc_scopes(),
         oidc_allowed_client_redirect_uris=_get_oidc_allowed_client_redirect_uris(),

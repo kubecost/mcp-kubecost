@@ -37,7 +37,7 @@ Yes, and that is why it looks tempting. Redirect URIs are a per-client allowlist
 | App            | Redirect URI on the identity provider                                        |
 | -------------- | ---------------------------------------------------------------------------- |
 | Kubecost UI    | Whatever you configured as Kubecost's OIDC redirect URL                      |
-| `mcp-kubecost` | `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}` — by default `https://<host>/auth-mcp` |
+| `mcp-kubecost` | `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}` — recommended `https://<host>/oauth/mcp/callback` |
 
 The identity provider has no concept of "which application is asking" beyond `client_id`, so both flows are equally valid to it. Working is not the same as separated.
 
@@ -104,7 +104,7 @@ So the honest risk is not "tokens become interchangeable everywhere". It is the 
 flowchart LR
   subgraph IdP["Identity provider"]
     C1["client: kubecost-ui<br/>redirect: Kubecost login URL"]
-    C2["client: kubecost-mcp<br/>redirect: /auth-mcp"]
+    C2["client: kubecost-mcp<br/>redirect: /oauth/mcp/callback"]
   end
   U["Kubecost UI pod"] --> C1
   M["mcp-kubecost pod"] --> C2
@@ -137,8 +137,8 @@ helm upgrade --install mcp-kubecost \
   --set config.kubecostApiBasePath=/model \
   --set config.authMode=oidc \
   --set config.oidc.issuerUrl=https://keycloak.example.com/realms/kubecost/.well-known/openid-configuration \
-  --set config.oidc.baseUrl=https://mcp.example.com \
-  --set config.oidc.redirectPath=/auth/callback \
+  --set config.oidc.baseUrl=https://mcp.example.com/oauth/mcp \
+  --set config.oidc.resourceBaseUrl=https://mcp.example.com \
   --set config.oidc.existingSecret=mcp-oidc
 ```
 
@@ -153,7 +153,7 @@ Three things not to do:
 There are legitimate reasons: an identity provider you do not own, where a new client registration is a multi-week ticket. Treat it as a documented, time-boxed exception and compensate:
 
 - Keep both apps at the same trust tier and the same user population. The moment you need different authorization for the MCP than for the UI, the shared client stops working and you migrate anyway.
-- Exact redirect URIs only, on both apps' entries. No wildcard hosts, no wildcard paths. This server's default `/auth-mcp` is already an exact path — keep it that way.
+- Exact redirect URIs only, on both apps' entries. No wildcard hosts and no wildcard paths. Keep this server's `/oauth/mcp/callback` exact.
 - Do not give the client longer token lifetimes than you would accept for the browser UI, since you cannot scope them separately.
 - Store the secret once (external secret operator, sealed secret) rather than pasting it into a second namespace, and put both apps on the same rotation schedule.
 - Record MCP-side request identity yourself, because provider event logs cannot separate the two apps.

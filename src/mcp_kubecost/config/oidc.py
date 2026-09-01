@@ -266,13 +266,15 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
     assert settings.oidc_client_id is not None
     assert settings.oidc_client_secret is not None
     assert settings.oidc_base_url is not None
+    assert settings.oidc_resource_base_url is not None
     assert settings.oidc_jwt_signing_key is not None
     assert settings.oidc_storage_encryption_key is not None
 
     logger.info(
-        "OIDC enabled — issuer=%s, base_url=%s, redirect_path=%s",
+        "OIDC enabled — provider=%s, authorization_server=%s, resource_base=%s, redirect_path=%s",
         settings.oidc_issuer_url,
         settings.oidc_base_url,
+        settings.oidc_resource_base_url,
         settings.oidc_redirect_path,
     )
 
@@ -301,6 +303,7 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
             client_secret=settings.oidc_client_secret,
             audience=settings.oidc_audience,
             base_url=settings.oidc_base_url,
+            resource_base_url=settings.oidc_resource_base_url,
             redirect_path=settings.oidc_redirect_path,
             required_scopes=settings.oidc_required_scopes or None,
             allowed_client_redirect_uris=settings.oidc_allowed_client_redirect_uris,
@@ -318,8 +321,7 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
             "OIDC provider initialization failed "
             f"({type(exc).__name__}): {exc}. "
             "Most often this means OIDC_ISSUER_URL returned an HTML login page instead of "
-            "JSON discovery metadata. If this MCP server shares a Kubecost frontend hostname, "
-            "set a path-prefixed OIDC_BASE_URL (e.g. https://kubecost.example.com/mcp) and "
-            "configure the frontend nginx to proxy OAuth paths to this Service, or give the "
-            "MCP server its own dedicated hostname."
+            "JSON discovery metadata. Confirm that OIDC_BASE_URL names the public OAuth "
+            "authorization-server prefix, OIDC_RESOURCE_BASE_URL names the public origin "
+            "that hosts MCP_HTTP_PATH, and the reverse proxy routes both surfaces to this Service."
         ) from exc
