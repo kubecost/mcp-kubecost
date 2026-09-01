@@ -187,41 +187,23 @@ jobs:
           grep -F -q 'OIDC_ALLOWED_CLIENT_REDIRECT_URIS: "[\"http://localhost:*\",\"https://client.example/callback\"]"' .helm-render/mcp-kubecost-oidc-apikey.yaml
           grep -q 'name: KUBECOST_API_KEY' .helm-render/mcp-kubecost-oidc-apikey.yaml
 
-      # OAuth operations and the MCP protected resource deliberately use
-      # separate public paths on a shared Kubecost hostname.
-      - name: Render separated OIDC and MCP paths
+      # config.externalUrl is the single public origin; the server derives the
+      # fixed /mcp and /oauth/mcp paths from it internally.
+      - name: Render OIDC with externalUrl
         run: |
           helm template mcp-kubecost "$CHART_DIR" \
             --namespace mcp-kubecost \
             --set config.authMode=oidc \
-            --set config.externalUrl="https://kubecost.example.com" \
+            --set config.externalUrl=https://kubecost.example.com \
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
             --set config.oidc.clientSecret=y \
             > .helm-render/mcp-kubecost-oidc-subpath.yaml
-          grep -q 'OIDC_BASE_URL: "https://kubecost.example.com/oauth/mcp"' .helm-render/mcp-kubecost-oidc-subpath.yaml
-          grep -q 'OIDC_RESOURCE_BASE_URL: "https://kubecost.example.com"' .helm-render/mcp-kubecost-oidc-subpath.yaml
-          grep -q 'OIDC_REDIRECT_PATH: "/callback"' .helm-render/mcp-kubecost-oidc-subpath.yaml
+          grep -q 'MCP_EXTERNAL_URL: "https://kubecost.example.com"' .helm-render/mcp-kubecost-oidc-subpath.yaml
           if grep -q 'OIDC_ALLOWED_CLIENT_REDIRECT_URIS:' .helm-render/mcp-kubecost-oidc-subpath.yaml; then
             echo "expected Open OIDC render to omit OIDC_ALLOWED_CLIENT_REDIRECT_URIS" >&2
             exit 1
           fi
-
-      - name: Reject config.http.path without a leading slash (expect failure)
-        run: |
-          if out=$(helm template mcp-kubecost "$CHART_DIR" \
-            --namespace mcp-kubecost \
-            --set config.http.path=mcp 2>&1); then
-            echo "expected helm template to fail with a schema-invalid config.http.path" >&2
-            echo "$out" >&2
-            exit 1
-          fi
-          echo "$out"
-          echo "$out" | grep -F -q "does not match pattern '^(|/.*)$'" || {
-            echo "helm failed, but not because config.http.path lacked a leading slash:" >&2
-            echo "$out" >&2
-            exit 1
-          }
 
       # The issuer scheme rule mirrors the MCP SDK's validate_issuer_url:
       # https everywhere, with an http carve-out for localhost only.
@@ -268,7 +250,6 @@ jobs:
           /work/.helm-render/mcp-kubecost-secure.yaml
           /work/.helm-render/mcp-kubecost-oidc-apikey.yaml
           /work/.helm-render/mcp-kubecost-oidc-subpath.yaml
-          /work/.helm-render/mcp-kubecost-nonoidc-prefix.yaml
 
       - name: Run Kubernetes best-practice linter
         run: >-
