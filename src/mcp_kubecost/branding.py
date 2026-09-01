@@ -27,11 +27,12 @@ Palette and font stack are taken from the Kubecost demo UI's stylesheet
 
 from __future__ import annotations
 
+import base64
 import re
 from collections.abc import Callable
 from functools import wraps
+from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from mcp.types import Icon
 
@@ -70,50 +71,25 @@ KUBECOST_WEBSITE_URL = "https://www.kubecost.com"
 _AUTH_DOCS_URL = "https://github.com/kubecost/mcp-kubecost/blob/main/docs/auth/README.md"
 
 # --- Logo --------------------------------------------------------------------
-# An approximation of the Kubecost mark: three fanned petal outlines sharing a
-# tangent point. Inlined as a data: URI so the page pulls no external asset —
-# the consent CSP permits `img-src data:`, and a self-contained logo needs no
-# reverse-proxy rule and works with no egress.
+# The Kubecost mark as a PNG, inlined as a base64 data: URI so the page pulls no
+# external asset — the consent CSP permits `img-src data:`, and a self-contained
+# logo needs no reverse-proxy rule and works with no egress.
+#
+# Two named files in assets/ let a future rebrand swap one or both PNGs without
+# any code change. The light variant goes first — FastMCP renders `icons[0]` on
+# its OAuth pages, which are light-background.
 
+_ASSETS = Path(__file__).parent / "assets"
+_png_light = (_ASSETS / "kubecost-logo-light.png").read_bytes()
+_png_dark = (_ASSETS / "kubecost-logo-dark.png").read_bytes()
 
-def _logo_svg(stroke: str) -> str:
-    return (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" '
-        'aria-label="Kubecost">'
-        f'<g fill="none" stroke="{stroke}" stroke-width="6" opacity="0.9">'
-        '<ellipse cx="62" cy="42" rx="13.5" ry="30" transform="rotate(9 62 72)"/>'
-        '<ellipse cx="62" cy="42" rx="13.5" ry="30" transform="rotate(-27 62 72)"/>'
-        '<ellipse cx="62" cy="42" rx="13.5" ry="30" transform="rotate(-61 62 72)"/>'
-        "</g></svg>"
-    )
-
-
-def _svg_data_uri(svg: str) -> str:
-    """Percent-encode ``svg`` as a data URI that is safe inside an HTML attribute.
-
-    Percent-encoding rather than base64: smaller, and the markup stays greppable.
-
-    Quotes are deliberately **not** in the safe set. The SVG uses ``"`` for its own
-    attributes, and leaving those raw terminates the enclosing ``href``/``src``
-    attribute early — which silently leaks the remainder of the URI as visible text
-    on the page. ``#`` and ``?`` must stay encoded too, or they truncate the URI at
-    a fragment or query.
-    """
-    return "data:image/svg+xml," + quote(svg, safe="/:=<>() ,-.")
-
-
-# Two variants because a single mint-green mark reads poorly on one background or
-# the other: the mid-tone green holds up on white (consent card, light client
-# sidebars), the bright one on dark. Kept as separate constants so the light
-# variant can stay first — FastMCP renders `icons[0]` on its OAuth pages, which
-# are light.
-KUBECOST_LOGO_DATA_URI = _svg_data_uri(_logo_svg(ACCENT))
-KUBECOST_LOGO_DARK_DATA_URI = _svg_data_uri(_logo_svg(ACCENT_BRIGHT))
+KUBECOST_LOGO_DATA_URI = "data:image/png;base64," + base64.b64encode(_png_light).decode()
+KUBECOST_LOGO_DARK_DATA_URI = "data:image/png;base64," + base64.b64encode(_png_dark).decode()
 
 # Served verbatim at /favicon.ico. Bytes, not a data URI — this one goes over the
 # wire as a response body.
-FAVICON_SVG = _logo_svg(ACCENT).encode()
-FAVICON_MEDIA_TYPE = "image/svg+xml"
+FAVICON_PNG = _png_light
+FAVICON_MEDIA_TYPE = "image/png"
 
 
 def server_icons() -> list[Icon]:
@@ -124,13 +100,13 @@ def server_icons() -> list[Icon]:
     which is the only icon mechanism MCP has. ``/favicon.ico`` is a browser
     convention and is invisible to MCP clients.
 
-    ``sizes=["any"]`` is the spec's spelling for a scalable format. ``theme``
-    lets a client pick the variant that stays visible against its own light or
-    dark chrome; it rides along as an extra field on ``Icon``.
+    ``sizes=["128x128"]`` reflects the concrete pixel dimensions of the PNG.
+    ``theme`` lets a client pick the variant that stays visible against its own
+    light or dark chrome; it rides along as an extra field on ``Icon``.
     """
     return [
-        Icon(src=KUBECOST_LOGO_DATA_URI, mimeType="image/svg+xml", sizes=["any"], theme="light"),
-        Icon(src=KUBECOST_LOGO_DARK_DATA_URI, mimeType="image/svg+xml", sizes=["any"], theme="dark"),
+        Icon(src=KUBECOST_LOGO_DATA_URI, mimeType="image/png", sizes=["128x128"], theme="light"),
+        Icon(src=KUBECOST_LOGO_DARK_DATA_URI, mimeType="image/png", sizes=["128x128"], theme="dark"),
     ]
 
 

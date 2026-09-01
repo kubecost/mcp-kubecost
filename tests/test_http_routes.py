@@ -14,7 +14,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
 
-from mcp_kubecost.branding import FAVICON_SVG
+from mcp_kubecost.branding import FAVICON_PNG
 from mcp_kubecost.logging_fastmcp import HealthProbeLogFilter
 from mcp_kubecost.middleware import ToolConcurrencyLimitMiddleware
 from mcp_kubecost.server import favicon_endpoint, health_endpoint, mcp, version_endpoint
@@ -87,13 +87,13 @@ class TestFaviconRoute:
     def test_registered(self):
         assert "/favicon.ico" in _custom_route_paths()
 
-    async def test_serves_the_kubecost_mark_as_svg(self):
+    async def test_serves_the_kubecost_mark_as_png(self):
         response = await favicon_endpoint(MagicMock(spec=Request))
         assert response.status_code == 200
-        assert response.media_type == "image/svg+xml"
+        assert response.media_type == "image/png"
         body = bytes(response.body)
-        assert body.startswith(b"<svg") and body.endswith(b"</svg>")
-        assert body == FAVICON_SVG
+        assert body[:4] == b"\x89PNG"
+        assert body == FAVICON_PNG
 
     async def test_is_cacheable(self):
         response = await favicon_endpoint(MagicMock(spec=Request))
@@ -153,7 +153,7 @@ class TestProbesStayUnauthenticatedWithAuthEnabled:
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.get("/favicon.ico")
         assert response.status_code == 200
-        assert response.headers["content-type"].startswith("image/svg+xml")
+        assert response.headers["content-type"].startswith("image/png")
 
     async def test_mcp_endpoint_rejects_missing_credentials(self):
         transport = httpx.ASGITransport(app=self._authed_app().http_app())

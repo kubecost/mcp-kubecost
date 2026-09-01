@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import html as html_module
 import re
-from urllib.parse import unquote
 
 import pytest
 from fastmcp.server.auth.handlers import authorize as fastmcp_authorize
@@ -19,10 +18,8 @@ from fastmcp.server.auth.oauth_proxy import consent as fastmcp_consent, proxy as
 
 from mcp_kubecost import branding
 from mcp_kubecost.branding import (
-    ACCENT,
-    ACCENT_BRIGHT,
     FAVICON_MEDIA_TYPE,
-    FAVICON_SVG,
+    FAVICON_PNG,
     FONT_STACK,
     INK,
     KUBECOST_LOGO_DARK_DATA_URI,
@@ -68,17 +65,11 @@ def _render_consent() -> str:
 # --- Logo --------------------------------------------------------------------
 
 
-def test_logo_is_a_self_contained_svg_data_uri():
+def test_logo_is_a_self_contained_png_data_uri():
     """No external asset: the consent CSP allows `img-src data:` and egress may not exist."""
-    for uri, stroke in ((KUBECOST_LOGO_DATA_URI, ACCENT), (KUBECOST_LOGO_DARK_DATA_URI, ACCENT_BRIGHT)):
-        assert uri.startswith("data:image/svg+xml,")
-        svg = unquote(uri.removeprefix("data:image/svg+xml,"))
-        assert svg.startswith("<svg") and svg.endswith("</svg>")
-        assert stroke in svg
-        # '#' unescaped would truncate the URI at the fragment.
-        assert "#" not in uri
-        # A raw quote terminates the enclosing href/src attribute early and leaks
-        # the rest of the URI onto the page as text. This regressed once.
+    for uri in (KUBECOST_LOGO_DATA_URI, KUBECOST_LOGO_DARK_DATA_URI):
+        assert uri.startswith("data:image/png;base64,")
+        # A raw quote would terminate the enclosing href/src attribute early.
         assert '"' not in uri and "'" not in uri
 
 
@@ -87,9 +78,9 @@ def test_server_icons_offers_a_light_and_dark_variant():
     assert [icon.src for icon in icons] == [KUBECOST_LOGO_DATA_URI, KUBECOST_LOGO_DARK_DATA_URI]
     assert [getattr(icon, "theme", None) for icon in icons] == ["light", "dark"]
     for icon in icons:
-        assert icon.mimeType == "image/svg+xml"
-        # The spec's spelling for a scalable format, rather than a pixel size.
-        assert icon.sizes == ["any"]
+        assert icon.mimeType == "image/png"
+        # Concrete pixel size for a raster image.
+        assert icon.sizes == ["128x128"]
 
 
 def test_light_variant_is_first_because_fastmcp_renders_icons_zero():
@@ -102,13 +93,13 @@ def test_icon_theme_survives_serialization():
     """`theme` is not a declared field on mcp.types.Icon; it rides on extra="allow"."""
     dumped = server_icons()[0].model_dump(exclude_none=True)
     assert dumped["theme"] == "light"
-    assert dumped["sizes"] == ["any"]
+    assert dumped["sizes"] == ["128x128"]
 
 
 def test_favicon_bytes_are_the_same_mark():
-    assert FAVICON_SVG.startswith(b"<svg") and FAVICON_SVG.endswith(b"</svg>")
-    assert FAVICON_MEDIA_TYPE == "image/svg+xml"
-    assert ACCENT.encode() in FAVICON_SVG
+    # PNG magic bytes: \x89PNG\r\n\x1a\n
+    assert FAVICON_PNG[:4] == b"\x89PNG"
+    assert FAVICON_MEDIA_TYPE == "image/png"
 
 
 # --- Theme overlay -----------------------------------------------------------

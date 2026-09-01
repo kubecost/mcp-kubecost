@@ -18,7 +18,7 @@ from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from mcp_kubecost.branding import FAVICON_MEDIA_TYPE, FAVICON_SVG, KUBECOST_WEBSITE_URL, server_icons
+from mcp_kubecost.branding import FAVICON_MEDIA_TYPE, FAVICON_PNG, KUBECOST_WEBSITE_URL, server_icons
 from mcp_kubecost.client import kubecost_client_lifespan
 from mcp_kubecost.config.oidc import create_oidc_provider
 from mcp_kubecost.config.settings import apply_http_rich_logging, get_settings
@@ -135,11 +135,11 @@ async def favicon_endpoint(_request: Request) -> Response:
     too. Unauthenticated, like ``/health`` and ``/version`` — it is a logo, and
     the request arrives before any OAuth flow completes.
 
-    Content type is SVG despite the ``.ico`` path; browsers honour the header
+    Content type is PNG despite the ``.ico`` path; browsers honour the header
     rather than the extension. Not an MCP concern — clients read ``serverInfo.icons``.
     """
     return Response(
-        content=FAVICON_SVG,
+        content=FAVICON_PNG,
         media_type=FAVICON_MEDIA_TYPE,
         # Immutable content, so let browsers stop asking. Public: no auth, no secrets.
         headers={"Cache-Control": "public, max-age=86400"},
