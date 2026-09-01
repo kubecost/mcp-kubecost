@@ -4,6 +4,7 @@ This page is the full technical reference for both auth layers. For a high-level
 
 - [Protecting the MCP HTTP endpoint (OIDC)](#protecting-the-mcp-http-endpoint-oidc)
   - [Identity provider setup](#identity-provider-setup)
+  - [Consent screen branding](#consent-screen-branding)
   - [Reusing the Kubecost UI's OIDC client](#reusing-the-kubecost-uis-oidc-client)
   - [Shared Kubecost frontend hostname](#shared-kubecost-frontend-hostname)
   - [Unauthenticated HTTP paths](#unauthenticated-http-paths)
@@ -30,7 +31,9 @@ The MCP client's own redirect (`http://localhost:<port>/callback`, Claude's `htt
 For an enterprise Restricted posture, set `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` to a JSON array of approved FastMCP redirect patterns (Helm: `config.oidc.allowedClientRedirectUris`). Only listed callbacks can then register. Start Open, inspect `Client registered with redirect_uri` server logs to identify the callbacks your clients actually use, configure those patterns, and test every supported client. An unset or blank setting remains Open; `[]` intentionally denies all client redirects. The IdP Valid redirect URI remains only `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}`. See OpenAI's [authentication guide](https://developers.openai.com/plugins/build/auth#redirect-url) for the current ChatGPT callback forms.
 
 FastMCP displays consent once per MCP client and remembers the decision in a
-signed browser cookie. OAuth registrations, authorization codes, and tokens are
+signed browser cookie. The consent screen and the OAuth error pages are
+Kubecost-branded — see [Consent screen branding](#consent-screen-branding).
+OAuth registrations, authorization codes, and tokens are
 stored by the built-in FileTreeStore through a Fernet encryption wrapper. The
 Helm chart persists that directory on a PVC when `config.authMode` is `oidc`
 (`persistence.enabled` defaults to auto). Keep the signing and encryption
@@ -55,6 +58,46 @@ also re-randomizes these ids — one more reason to set it explicitly.
 Optional: `OIDC_AUDIENCE` when the provider issues JWT access tokens for a specific API audience. Do not set it for providers that issue opaque access tokens — those are verified via the `id_token`, whose audience is the OAuth client id. `OIDC_REQUIRED_SCOPES` defaults to `openid,profile`.
 
 Some other providers issue **opaque** access tokens, not JWTs. The server detects that from the token response and verifies the `id_token` instead. JWT access-token issuers (Keycloak, typical Azure/Okta) keep access-token verification. No extra setting is required.
+
+### Consent screen branding
+
+The consent screen, the OAuth error pages, and the unregistered-client page are
+rendered by FastMCP, which styles them with its own logo and palette by default.
+[`branding.py`](../../src/mcp_kubecost/branding.py) restyles them to match the
+Kubecost UI: its palette and font stack (Space Grotesk with a system fallback)
+are taken from the Kubecost frontend's own design tokens. There is nothing to
+configure — it applies automatically whenever `AUTH_MODE=oidc`.
+
+Two seams are used. `server.py` passes `icons=` and `website_url=` to `FastMCP()`,
+which FastMCP reads to set the page logo and hyperlink the server name; this part
+is supported API. The palette, fonts, and the few strings naming FastMCP to the
+reader are then applied by appending a stylesheet to the HTML FastMCP returns,
+because FastMCP exposes no theming hook. FastMCP keeps ownership of the consent
+form, its CSRF token, and cookie handling — only the presentation is replaced.
+
+Consequences worth knowing:
+
+- **The pages fetch nothing external.** The logo and favicon are inline SVG
+  `data:` URIs and the CSS is inline, so nothing needs adding to the
+  reverse-proxy rules above and the pages render with no egress.
+- **No favicon 404s.** FastMCP's page template declares no icon, so a browser
+  falls back to requesting `/favicon.ico` at the origin root — a 404 in the
+  access log on every fresh visit. The branded pages declare the icon inline,
+  which suppresses the request rather than serving it. This also works on a
+  shared Kubecost hostname, where root `/favicon.ico` belongs to the Kubecost
+  frontend and would never reach this server. A `GET /favicon.ico` route covers
+  what the overlay cannot: FastMCP also returns a few bare HTML fragments with
+  no `<head>`, and a browser pointed at `/mcp` or any 404 asks for the favicon too.
+- **The Content-Security-Policy is unchanged.** `style-src 'unsafe-inline'` and
+  `img-src data:` are already in FastMCP's default consent CSP. `consent_csp_policy`
+  is left unset. No webfont is fetched, so no `font-src` is needed; browsers
+  without Space Grotesk installed fall back to the same system stack the
+  Kubecost UI uses.
+- **A FastMCP upgrade degrades gracefully.** Overrides that no longer match
+  simply stop applying and those elements revert to FastMCP's styling; the flow
+  keeps working either way. `tests/test_branding.py` asserts the selectors and
+  copy substitutions still bite, so this surfaces as a test failure rather than
+  a silently un-branded page.
 
 ### Reusing the Kubecost UI's OIDC client
 
@@ -133,12 +176,15 @@ If you cannot change the Kubecost frontend nginx, the cleanest resolution is to 
 
 These FastMCP custom routes are **not** wrapped in OAuth middleware. Kubernetes probes must use them — kubelet cannot present OIDC or `X-API-KEY`.
 
-| Path           | Purpose                                            |
-| -------------- | -------------------------------------------------- |
-| `GET /health`  | Liveness / readiness (chart default `probes.path`) |
-| `GET /version` | Package version                                    |
+| Path               | Purpose                                            |
+| ------------------ | -------------------------------------------------- |
+| `GET /health`      | Liveness / readiness (chart default `probes.path`) |
+| `GET /version`     | Package version                                    |
+| `GET /favicon.ico` | Kubecost mark, so browsers stop 404ing             |
 
 Uvicorn access logs for `GET /health` are dropped. Do not point probes at `/mcp`.
+
+`/favicon.ico` must stay unauthenticated because a browser requests it during the OAuth flow, before any token exists. It serves a constant SVG with no request-derived content and reveals nothing an unauthenticated caller could not already learn from `/version`.
 
 ## Configuration
 

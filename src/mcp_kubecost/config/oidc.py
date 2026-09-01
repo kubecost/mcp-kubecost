@@ -37,6 +37,7 @@ from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 from mcp.server.auth.provider import AccessToken as SdkAccessToken, AuthorizationCode, RefreshToken
 from mcp.shared.auth import OAuthClientInformationFull
 
+from mcp_kubecost.branding import install_oauth_page_branding
 from mcp_kubecost.config.settings import AuthMode, Settings, get_settings
 from mcp_kubecost.errors import ConfigError
 
@@ -253,6 +254,11 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
 
     if settings.auth_mode != AuthMode.OIDC:
         return None
+
+    # Restyle FastMCP's consent and OAuth error pages as Kubecost. Only reachable
+    # under OIDC — the other auth modes serve no browser-facing OAuth pages — so
+    # it is installed here rather than at import time.
+    install_oauth_page_branding()
 
     # These are guaranteed non-None by Settings — either an explicit value was supplied
     # or a secure key was auto-generated at startup.

@@ -25,6 +25,7 @@ _SAFE_VALUE_RE = re.compile(
     | ^your[_-]                    # obvious example text: your_secret_here
     | ^REPLACE_ME$
     | ^xxx+$                       # redacted stand-in
+    | ^csrf_xyz789$                # CSRF test fixture value used in test_branding.py
     """,
     re.VERBOSE | re.IGNORECASE,
 )
