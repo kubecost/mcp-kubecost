@@ -80,8 +80,29 @@ _AUTH_DOCS_URL = "https://github.com/kubecost/mcp-kubecost/blob/main/docs/auth/R
 # its OAuth pages, which are light-background.
 
 _ASSETS = Path(__file__).parent / "assets"
-_png_light = (_ASSETS / "kubecost-logo-light.png").read_bytes()
-_png_dark = (_ASSETS / "kubecost-logo-dark.png").read_bytes()
+
+
+def _read_asset(name: str) -> bytes:
+    """Read a bundled asset, turning a missing file into an actionable error.
+
+    A bare ``FileNotFoundError`` at import time (e.g. from a packaging config
+    that stops shipping ``assets/``) crashes the server and every test with a
+    path and nothing else. Re-raising as ``ImportError`` keeps this a hard
+    failure — a missing logo is not something to degrade gracefully from — but
+    names the package and the fix.
+    """
+    path = _ASSETS / name
+    try:
+        return path.read_bytes()
+    except FileNotFoundError as exc:
+        raise ImportError(
+            f"mcp_kubecost.branding: required asset {name!r} not found at {path}. "
+            "The package build must include src/mcp_kubecost/assets/*.png."
+        ) from exc
+
+
+_png_light = _read_asset("kubecost-logo-light.png")
+_png_dark = _read_asset("kubecost-logo-dark.png")
 
 KUBECOST_LOGO_DATA_URI = "data:image/png;base64," + base64.b64encode(_png_light).decode()
 KUBECOST_LOGO_DARK_DATA_URI = "data:image/png;base64," + base64.b64encode(_png_dark).decode()
@@ -366,7 +387,11 @@ def apply_kubecost_branding(html: str) -> str:
         html = html.replace(old, new)
     # The <style> goes in as its own block after FastMCP's, so equal-specificity
     # rules win on cascade order. `style-src 'unsafe-inline'` is already allowed.
-    return _HEAD_CLOSE.sub(f"{_FAVICON_LINK}<style>{_THEME_CSS}</style></head>", html, count=1)
+    # A callable replacement (rather than a raw string) sidesteps re.sub's own
+    # backslash-escape handling (\1, \g<name>, ...) — CSS is full of backslash
+    # escapes that would otherwise be at the mercy of what re.sub thinks they mean.
+    injected = f"{_FAVICON_LINK}<style>{_THEME_CSS}</style></head>"
+    return _HEAD_CLOSE.sub(lambda _match: injected, html, count=1)
 
 
 def _brand_html_builder(builder: Callable[..., str]) -> Callable[..., str]:

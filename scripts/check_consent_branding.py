@@ -118,7 +118,9 @@ def _start_server(port: int, idp_port: int, storage: Path) -> subprocess.Popen[b
     }
     proc = subprocess.Popen(
         [
-            str(REPO_ROOT / ".venv/bin/fastmcp"),
+            "uv",
+            "run",
+            "fastmcp",
             "run",
             str(REPO_ROOT / "src/mcp_kubecost/server.py"),
             "--transport",
