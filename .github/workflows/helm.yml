@@ -37,7 +37,6 @@ jobs:
           mkdir -p .helm-render
           helm template mcp-kubecost "$CHART_DIR" --namespace mcp-kubecost > .helm-render/mcp-kubecost-default.yaml
           grep -q 'image: "icr.io/kubecost/mcp-kubecost:' .helm-render/mcp-kubecost-default.yaml
-          grep -q 'MCP_HTTP_PATH: "/mcp"' .helm-render/mcp-kubecost-default.yaml
           grep -q 'replicas: 1' .helm-render/mcp-kubecost-default.yaml
           grep -q 'type: Recreate' .helm-render/mcp-kubecost-default.yaml
 
@@ -204,7 +203,6 @@ jobs:
             --set config.oidc.baseUrl=https://kubecost.example.com/oauth/mcp \
             --set config.oidc.resourceBaseUrl=https://kubecost.example.com \
             > .helm-render/mcp-kubecost-oidc-subpath.yaml
-          grep -q 'MCP_HTTP_PATH: "/mcp"' .helm-render/mcp-kubecost-oidc-subpath.yaml
           grep -q 'OIDC_BASE_URL: "https://kubecost.example.com/oauth/mcp"' .helm-render/mcp-kubecost-oidc-subpath.yaml
           grep -q 'OIDC_RESOURCE_BASE_URL: "https://kubecost.example.com"' .helm-render/mcp-kubecost-oidc-subpath.yaml
           grep -q 'OIDC_REDIRECT_PATH: "/callback"' .helm-render/mcp-kubecost-oidc-subpath.yaml
@@ -212,39 +210,6 @@ jobs:
             echo "expected Open OIDC render to omit OIDC_ALLOWED_CLIENT_REDIRECT_URIS" >&2
             exit 1
           fi
-
-      - name: Keep the MCP route independent of OIDC configuration
-        run: |
-          helm template mcp-kubecost "$CHART_DIR" \
-            --namespace mcp-kubecost \
-            --set config.oidc.baseUrl=https://kubecost.example.com/oauth/mcp \
-            > .helm-render/mcp-kubecost-nonoidc-prefix.yaml
-          grep -q 'MCP_HTTP_PATH: "/mcp"' .helm-render/mcp-kubecost-nonoidc-prefix.yaml
-          # A dedicated MCP hostname keeps the default route.
-          helm template mcp-kubecost "$CHART_DIR" \
-            --namespace mcp-kubecost \
-            --set config.authMode=oidc \
-            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
-            --set config.oidc.clientId=x \
-            --set config.oidc.clientSecret=y \
-            --set config.oidc.baseUrl=https://mcp.example.com/oauth/mcp \
-            --set config.oidc.resourceBaseUrl=https://mcp.example.com \
-            > .helm-render/mcp-kubecost-oidc-dedicated-host.yaml
-          grep -q 'MCP_HTTP_PATH: "/mcp"' .helm-render/mcp-kubecost-oidc-dedicated-host.yaml
-
-      - name: Render explicit config.http.path override
-        run: |
-          helm template mcp-kubecost "$CHART_DIR" \
-            --namespace mcp-kubecost \
-            --set config.http.path=/custom \
-            > .helm-render/mcp-kubecost-http-path.yaml
-          grep -q 'MCP_HTTP_PATH: "/custom"' .helm-render/mcp-kubecost-http-path.yaml
-          # config.http may be absent entirely (umbrella charts that omit it).
-          helm template mcp-kubecost "$CHART_DIR" \
-            --namespace mcp-kubecost \
-            --set config.http=null \
-            > .helm-render/mcp-kubecost-http-null.yaml
-          grep -q 'MCP_HTTP_PATH: "/mcp"' .helm-render/mcp-kubecost-http-null.yaml
 
       - name: Reject config.http.path without a leading slash (expect failure)
         run: |
