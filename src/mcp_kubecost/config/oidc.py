@@ -36,12 +36,19 @@ from key_value.aio.stores.filetree import (
 from key_value.aio.wrappers.encryption import FernetEncryptionWrapper
 from mcp.server.auth.provider import AccessToken as SdkAccessToken, AuthorizationCode, RefreshToken
 from mcp.shared.auth import OAuthClientInformationFull
+from starlette.routing import Route
 
 from mcp_kubecost.branding import install_oauth_page_branding
 from mcp_kubecost.config.settings import AuthMode, Settings, get_settings
 from mcp_kubecost.errors import ConfigError
 
 logger = logging.getLogger(__name__)
+
+MCP_PATH = "/mcp"
+OAUTH_PREFIX = "/oauth/mcp"
+OAUTH_CALLBACK_PATH = "/callback"
+_AUTHORIZATION_SERVER_METADATA_PATH = "/.well-known/oauth-authorization-server"
+_OIDC_METADATA_PATH = "/.well-known/openid-configuration"
 
 # Per-request: True when the current verification token is the OIDC id_token.
 _verify_id_token: ContextVar[bool] = ContextVar("oidc_verify_id_token", default=False)
@@ -114,6 +121,40 @@ class AdaptiveOidcProxy(OIDCProxy):
         digest = hmac.new(self._dcr_client_id_key, material.encode(), hashlib.sha256).hexdigest()
         # UUID shape keeps the wire format identical to the SDK's uuid4().
         return str(uuid.UUID(digest[:32]))
+
+    def get_routes(self, mcp_path: str | None = None) -> list[Route]:
+        """Mount OAuth routes at the fixed public namespace.
+
+        FastMCP uses ``base_url`` to advertise path-prefixed endpoints but
+        normally mounts the operational routes at the application root. Mount
+        them at the same paths we advertise so Kubernetes routing never needs
+        to rewrite requests. Discovery stays in the RFC-defined well-known
+        namespace.
+        """
+        if mcp_path not in (None, MCP_PATH):
+            raise ConfigError(f"The MCP endpoint is fixed at {MCP_PATH}; received {mcp_path!r}")
+
+        mounted: list[Route] = []
+        for route in super().get_routes(MCP_PATH):
+            if route.path == _AUTHORIZATION_SERVER_METADATA_PATH:
+                mounted.append(self._copy_route(route, f"{_AUTHORIZATION_SERVER_METADATA_PATH}{OAUTH_PREFIX}"))
+                mounted.append(self._copy_route(route, f"{_OIDC_METADATA_PATH}{OAUTH_PREFIX}"))
+            elif route.path.startswith("/.well-known/"):
+                mounted.append(route)
+            else:
+                mounted.append(self._copy_route(route, f"{OAUTH_PREFIX}{route.path}"))
+        return mounted
+
+    @staticmethod
+    def _copy_route(route: Route, path: str) -> Route:
+        """Copy a Starlette route while changing only its mounted path."""
+        return Route(
+            path=path,
+            endpoint=route.endpoint,
+            methods=route.methods,
+            name=route.name,
+            include_in_schema=route.include_in_schema,
+        )
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         """Register a client under an id derived from its metadata.
@@ -265,17 +306,16 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
     assert settings.oidc_issuer_url is not None
     assert settings.oidc_client_id is not None
     assert settings.oidc_client_secret is not None
-    assert settings.oidc_base_url is not None
-    assert settings.oidc_resource_base_url is not None
+    assert settings.external_url is not None
     assert settings.oidc_jwt_signing_key is not None
     assert settings.oidc_storage_encryption_key is not None
 
     logger.info(
-        "OIDC enabled — provider=%s, authorization_server=%s, resource_base=%s, redirect_path=%s",
+        "OIDC enabled — provider=%s, external_url=%s, mcp_path=%s, oauth_prefix=%s",
         settings.oidc_issuer_url,
-        settings.oidc_base_url,
-        settings.oidc_resource_base_url,
-        settings.oidc_redirect_path,
+        settings.external_url,
+        MCP_PATH,
+        OAUTH_PREFIX,
     )
 
     try:
@@ -302,9 +342,9 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
             client_id=settings.oidc_client_id,
             client_secret=settings.oidc_client_secret,
             audience=settings.oidc_audience,
-            base_url=settings.oidc_base_url,
-            resource_base_url=settings.oidc_resource_base_url,
-            redirect_path=settings.oidc_redirect_path,
+            base_url=f"{settings.external_url}{OAUTH_PREFIX}",
+            resource_base_url=settings.external_url,
+            redirect_path=OAUTH_CALLBACK_PATH,
             required_scopes=settings.oidc_required_scopes or None,
             allowed_client_redirect_uris=settings.oidc_allowed_client_redirect_uris,
             client_storage=encrypted_storage,
@@ -321,7 +361,7 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
             "OIDC provider initialization failed "
             f"({type(exc).__name__}): {exc}. "
             "Most often this means OIDC_ISSUER_URL returned an HTML login page instead of "
-            "JSON discovery metadata. Confirm that OIDC_BASE_URL names the public OAuth "
-            "authorization-server prefix, OIDC_RESOURCE_BASE_URL names the public origin "
-            "that hosts MCP_HTTP_PATH, and the reverse proxy routes both surfaces to this Service."
+            "JSON discovery metadata. Confirm that MCP_EXTERNAL_URL names the public origin "
+            "and that the reverse proxy routes /mcp, /oauth/mcp, and their well-known metadata "
+            "paths to this Service without rewriting them."
         ) from exc

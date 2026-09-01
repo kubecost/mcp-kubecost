@@ -136,37 +136,56 @@ are not gated by skipSanityChecks: that flag only skips live Secret lookups.
 {{- end }}
 {{- end }}
 
-{{/* Canonical FastMCP OAuth callback path. Mirrors _get_oidc_redirect_path(). */}}
-{{- define "mcp-kubecost.oidcRedirectPath" -}}
-{{- $raw := .Values.config.oidc.redirectPath | default "/callback" | trim }}
-{{- if or (contains "://" $raw) (contains "?" $raw) (contains "#" $raw) }}
-{{- fail (printf "config.oidc.redirectPath must be a path like /callback, not a URL: %s" $raw) }}
-{{- end }}
-{{- if contains ".." $raw }}
-{{- fail (printf "config.oidc.redirectPath must not contain '..': %s" $raw) }}
-{{- end }}
-{{- $path := printf "/%s" (trimAll "/" $raw) }}
-{{- if eq $path "/" }}
-{{- fail "config.oidc.redirectPath must be a dedicated callback path, not '/'" }}
-{{- end }}
-{{- $path }}
-{{- end }}
-
 {{/*
-Route the MCP endpoint is served on inside the container (MCP_HTTP_PATH,
-passed through to `fastmcp run --path`).
+Resolve the public MCP origin (MCP_EXTERNAL_URL): config.externalUrl if set
+(validated as an https:// origin with no path/query/fragment), otherwise
+inferred as https://<host> when exactly one of httpRoute/ingress is enabled
+with exactly one non-wildcard hostname. Mirrors _get_external_url() in
+src/mcp_kubecost/config/settings.py.
 
-Defaults to /mcp. OAuth has its own public prefix through config.oidc.baseUrl;
-it does not relocate the protected-resource endpoint.
+Fails when both routes are enabled simultaneously, when an explicit value's
+host is not in the enabled route's hostnames, or when config.authMode is
+"oidc" and no origin can be resolved. Otherwise returns "" for chart installs
+that don't need it (no OIDC, no route, or an ambiguous route left unset).
 */}}
-{{- define "mcp-kubecost.httpPath" -}}
-{{- $explicit := (((.Values.config).http).path) | default "" }}
-{{- if $explicit }}
-{{- $explicit }}
-{{- else }}
-{{- "/mcp" }}
-{{- end }}
-{{- end }}
+{{- define "mcp-kubecost.externalUrl" -}}
+{{- $httpRouteOn := .Values.httpRoute.enabled -}}
+{{- $ingressOn := .Values.ingress.enabled -}}
+{{- if and $httpRouteOn $ingressOn -}}
+{{- fail "\n\nFAILURE [mcp-kubecost]: httpRoute.enabled and ingress.enabled cannot both be true. Choose one chart-managed route.\n" -}}
+{{- end -}}
+{{- $routeHosts := list -}}
+{{- if $httpRouteOn -}}
+{{- $routeHosts = .Values.httpRoute.hostnames | default (list) -}}
+{{- else if $ingressOn -}}
+{{- range .Values.ingress.hosts | default (list) -}}
+{{- $routeHosts = append $routeHosts .host -}}
+{{- end -}}
+{{- end -}}
+{{- $explicit := .Values.config.externalUrl | default "" | trim | trimSuffix "/" -}}
+{{- if $explicit -}}
+{{- if not (hasPrefix "https://" $explicit) -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: config.externalUrl must be an https:// origin with no path: %s\n" $explicit) -}}
+{{- end -}}
+{{- $explicitHost := trimPrefix "https://" $explicit -}}
+{{- if and (gt (len $routeHosts) 0) (not (has $explicitHost $routeHosts)) -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: config.externalUrl host %q is not one of the enabled route's hostnames %v.\n" $explicitHost $routeHosts) -}}
+{{- end -}}
+{{- $explicit -}}
+{{- else -}}
+{{- $nonWildcard := list -}}
+{{- range $routeHosts -}}
+{{- if not (hasPrefix "*" .) -}}
+{{- $nonWildcard = append $nonWildcard . -}}
+{{- end -}}
+{{- end -}}
+{{- if eq (len $nonWildcard) 1 -}}
+{{- printf "https://%s" (first $nonWildcard) -}}
+{{- else if eq (.Values.config.authMode | default "none") "oidc" -}}
+{{- fail "\n\nFAILURE [mcp-kubecost]: config.externalUrl could not be inferred.\n\nSet config.externalUrl explicitly, or enable exactly one of httpRoute/ingress with exactly one non-wildcard hostname.\n\n  Example:\n    config.externalUrl: \"https://kubecost.example.com\"\n" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
 
 {{/* Return the chart name, allowing a user override. */}}
 {{- define "mcp-kubecost.name" -}}
@@ -269,7 +288,6 @@ FASTMCP_SHOW_SERVER_BANNER="false"
 USE_CAC_VIEWS={{ .Values.config.useCacViews | quote }}
 REQUIRE_CLIENT_API_KEY={{ (or .Values.config.requireClientApiKey (eq .Values.config.authMode "api_key")) | quote }}
 MCP_SERVER_NAME={{ .Values.config.mcpServerName | quote }}
-MCP_HTTP_PATH={{ include "mcp-kubecost.httpPath" . | quote }}
 FASTMCP_TELEMETRY_MODE={{ .Values.config.telemetryMode | quote }}
 OTEL_SERVICE_NAME={{ .Values.config.otelServiceName | quote }}
 OTEL_METRICS_EXPORTER={{ .Values.config.otelMetricsExporter | quote }}
@@ -297,13 +315,7 @@ OIDC_ISSUER_URL={{ .Values.config.oidc.issuerUrl | quote }}
 {{- if .Values.config.oidc.audience }}
 OIDC_AUDIENCE={{ .Values.config.oidc.audience | quote }}
 {{- end }}
-{{- if .Values.config.oidc.baseUrl }}
-OIDC_BASE_URL={{ .Values.config.oidc.baseUrl | quote }}
-{{- end }}
-{{- if .Values.config.oidc.resourceBaseUrl }}
-OIDC_RESOURCE_BASE_URL={{ .Values.config.oidc.resourceBaseUrl | quote }}
-{{- end }}
-OIDC_REDIRECT_PATH={{ include "mcp-kubecost.oidcRedirectPath" . | quote }}
+MCP_EXTERNAL_URL={{ include "mcp-kubecost.externalUrl" . | quote }}
 {{- if .Values.config.oidc.requiredScopes }}
 OIDC_REQUIRED_SCOPES={{ .Values.config.oidc.requiredScopes | quote }}
 {{- end }}
@@ -348,8 +360,9 @@ skipSanityChecks — these are static value checks, not live Secret lookups.
 
 issuerUrl accepts http:// on localhost / 127.0.0.1 to mirror the MCP SDK's own
 validate_issuer_url rule; all other hosts require https://.
-baseUrl and resourceBaseUrl require https:// with no localhost carve-out.
-FastMCP derives secure-cookie and redirect behaviour from baseUrl.
+config.externalUrl requires https:// with no localhost carve-out (see
+mcp-kubecost.externalUrl). FastMCP derives secure-cookie and redirect
+behaviour from it.
 */}}
 {{- define "mcp-kubecost.validateOIDC" -}}
 {{- if eq (.Values.config.authMode | default "none") "oidc" -}}
@@ -374,11 +387,8 @@ FastMCP derives secure-cookie and redirect behaviour from baseUrl.
 {{- if not (or (hasPrefix "https://" $issuer) $issuerLocal) -}}
 {{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.issuerUrl must be an https:// URL, or http:// on localhost / 127.0.0.1.\n\nThis mirrors the MCP SDK's own issuer rule (RFC 8414 requires HTTPS; the SDK carves out localhost for testing). A plaintext issuer on any other host is rejected by the SDK at startup, so the chart refuses it here rather than letting the pod crash-loop.\n\n  Example:\n    config.oidc.issuerUrl: \"https://kubecost.example.com/.well-known/openid-configuration\"\n" -}}
 {{- end -}}
-{{- if not (hasPrefix "https://" (.Values.config.oidc.baseUrl | default "")) -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.baseUrl must be set to an https:// authorization-server URL.\n\n  Example:\n    config.oidc.baseUrl: \"https://kubecost.example.com/oauth/mcp\"\n" -}}
-{{- end -}}
-{{- if not (hasPrefix "https://" (.Values.config.oidc.resourceBaseUrl | default "")) -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.resourceBaseUrl must be set to the https:// public base URL that hosts config.http.path.\n\n  Example:\n    config.oidc.resourceBaseUrl: \"https://kubecost.example.com\"\n" -}}
+{{- if not (include "mcp-kubecost.externalUrl" .) -}}
+{{- fail "\n\nFAILURE [mcp-kubecost]: config.externalUrl could not be resolved.\n\nSet config.externalUrl explicitly, or enable exactly one of httpRoute/ingress with exactly one non-wildcard hostname.\n\n  Example:\n    config.externalUrl: \"https://kubecost.example.com\"\n" -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

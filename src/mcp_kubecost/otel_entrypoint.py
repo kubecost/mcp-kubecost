@@ -18,7 +18,7 @@ import sys
 
 from dotenv import load_dotenv
 
-_FASTMCP_ARGS = ("fastmcp", "run", "config/fastmcp-http.json", "--skip-env")
+_FASTMCP_ARGS = ("fastmcp", "run", "config/fastmcp-http.json", "--skip-env", "--path", "/mcp")
 
 
 def _configure_http_logging() -> None:
@@ -52,58 +52,16 @@ def _telemetry_enabled() -> bool:
     return mode not in {"", "off"}
 
 
-def _normalize_http_path(raw: str) -> str:
-    """Return MCP_HTTP_PATH as a clean absolute path.
-
-    Mirrors ``config.settings._get_oidc_redirect_path()``: reject anything that
-    is not a plain path, then normalize the slashes. ``"/"`` is a legitimate
-    value here (unlike the OAuth callback path) — it is the whole point of the
-    setting.
-    """
-    if "://" in raw or "?" in raw or "#" in raw:
-        raise ValueError(f"Invalid MCP_HTTP_PATH: {raw!r} (expected a path like /mcp, not a URL)")
-    if ".." in raw:
-        raise ValueError(f"Invalid MCP_HTTP_PATH: {raw!r} (must not contain '..')")
-    if raw.startswith("-"):
-        # A leading dash would be consumed by the fastmcp CLI as a flag rather
-        # than read as the value of --path.
-        raise ValueError(f"Invalid MCP_HTTP_PATH: {raw!r} (must not start with '-')")
-    path = raw if raw.startswith("/") else f"/{raw}"
-    path = path.rstrip("/")
-    return path or "/"
-
-
 def _fastmcp_args() -> tuple[str, ...]:
-    """Return the ``fastmcp run`` argv, honouring MCP_HTTP_PATH.
-
-    ``fastmcp run --path`` overrides FastMCP's own ``/mcp/`` default for the
-    MCP endpoint, so the route can be changed at deploy time without rebuilding
-    the image. Set MCP_HTTP_PATH="/" when a reverse proxy strips a path prefix
-    (e.g. nginx maps /mcp/* to this Service), so that the prefix-stripped OAuth
-    paths (/authorize, /token, ...) and the MCP endpoint all resolve at the root
-    of this server.
-
-    Raises:
-        ValueError: MCP_HTTP_PATH is set to something that is not a path.
-    """
-    raw = os.environ.get("MCP_HTTP_PATH", "").strip()
-    if not raw:
-        return _FASTMCP_ARGS
-    # A requested path is always forwarded, even when it matches FastMCP's
-    # current default: the chart sets it to pin the route, not to restate a
-    # default that could move under us.
-    return (*_FASTMCP_ARGS, "--path", _normalize_http_path(raw))
+    """Return the ``fastmcp run`` argv with the public MCP path pinned."""
+    return _FASTMCP_ARGS
 
 
 def main() -> None:
     _load_env_file()
     _configure_http_logging()
 
-    try:
-        args = _fastmcp_args()
-    except ValueError as exc:
-        print(exc, file=sys.stderr)
-        sys.exit(1)
+    args = _fastmcp_args()
 
     if _telemetry_enabled():
         try:

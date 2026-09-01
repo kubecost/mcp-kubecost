@@ -18,9 +18,18 @@ spec:
     - host: {{ .host | quote }}
       http:
         paths:
-          {{- range .paths }}
-          - path: {{ .path }}
-            pathType: {{ .pathType }}
+          {{- range $path := list "/mcp" "/oauth/mcp" }}
+          - path: {{ $path }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "mcp-kubecost.fullname" $ }}
+                port:
+                  name: http
+          {{- end }}
+          {{- range $path := list "/.well-known/oauth-protected-resource/mcp" "/.well-known/oauth-authorization-server/oauth/mcp" "/.well-known/openid-configuration/oauth/mcp" }}
+          - path: {{ $path }}
+            pathType: Exact
             backend:
               service:
                 name: {{ include "mcp-kubecost.fullname" $ }}

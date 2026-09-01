@@ -109,8 +109,7 @@ def _start_server(port: int, idp_port: int, storage: Path) -> subprocess.Popen[b
         "OIDC_ISSUER_URL": f"http://127.0.0.1:{idp_port}/.well-known/openid-configuration",
         "OIDC_CLIENT_ID": "kubecost-mcp",
         "OIDC_CLIENT_SECRET": "stub-secret",
-        "OIDC_BASE_URL": f"http://127.0.0.1:{port}",
-        "OIDC_RESOURCE_BASE_URL": f"http://127.0.0.1:{port}",
+        "MCP_EXTERNAL_URL": f"http://127.0.0.1:{port}",
         "OIDC_STORAGE_PATH": str(storage),
         "OIDC_JWT_SIGNING_KEY": "k" * 40,
         "FASTMCP_TELEMETRY_MODE": "off",
@@ -153,7 +152,7 @@ def _start_server(port: int, idp_port: int, storage: Path) -> subprocess.Popen[b
 
 def _consent_page(client: httpx.Client, base: str, port: int, name: str) -> httpx.Response:
     reg = client.post(
-        f"{base}/register",
+        f"{base}/oauth/mcp/register",
         json={
             "client_name": name,
             "redirect_uris": [f"http://127.0.0.1:{port}/callback"],
@@ -168,7 +167,7 @@ def _consent_page(client: httpx.Client, base: str, port: int, name: str) -> http
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
     r = client.get(
-        f"{base}/authorize",
+        f"{base}/oauth/mcp/authorize",
         params={
             "response_type": "code",
             "client_id": reg.json()["client_id"],
@@ -248,7 +247,7 @@ def run_checks(base: str) -> tuple[list[tuple[str, bool, str]], str]:
         check("consent form fields intact", bool(txn and csrf))
 
         approve = client.post(
-            f"{base}/consent",
+            f"{base}/oauth/mcp/consent",
             data={"txn_id": txn, "csrf_token": csrf, "submit": "true", "action": "approve"},
         )
         loc = approve.headers.get("location", "")
@@ -256,14 +255,14 @@ def run_checks(base: str) -> tuple[list[tuple[str, bool, str]], str]:
 
         txn2, csrf2 = _form_fields(_consent_page(client, base, callback_port, "Deny Probe").text)
         deny = client.post(
-            f"{base}/consent",
+            f"{base}/oauth/mcp/consent",
             data={"txn_id": txn2, "csrf_token": csrf2, "submit": "true", "action": "deny"},
         )
         check("deny returns access_denied", "error=access_denied" in deny.headers.get("location", ""))
 
         txn3, _ = _form_fields(_consent_page(client, base, callback_port, "CSRF Probe").text)
         forged = client.post(
-            f"{base}/consent",
+            f"{base}/oauth/mcp/consent",
             data={"txn_id": txn3, "csrf_token": "forged", "submit": "true", "action": "approve"},
         )
         check("forged CSRF token rejected", forged.status_code >= 400, f"HTTP {forged.status_code}")

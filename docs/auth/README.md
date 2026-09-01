@@ -19,9 +19,10 @@ This server has two independent, optional auth layers. One protects the **MCP HT
 | `oidc`    | Valid OIDC token via FastMCP `OIDCProxy`                              | Optional env/header fallback |
 | `api_key` | Incoming `X-API-KEY` required (same as `REQUIRE_CLIENT_API_KEY=true`) | Header forwarded to Kubecost |
 
-`oidc` requires `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`,
-`OIDC_BASE_URL`, and `OIDC_RESOURCE_BASE_URL`. Durable deployments should also
-set `OIDC_JWT_SIGNING_KEY` and `OIDC_STORAGE_ENCRYPTION_KEY` rather than relying
+`oidc` requires `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and
+`MCP_EXTERNAL_URL` (the public origin of this server, e.g.
+`https://kubecost.example.com`). Durable deployments should also set
+`OIDC_JWT_SIGNING_KEY` and `OIDC_STORAGE_ENCRYPTION_KEY` rather than relying
 on ephemeral generated keys.
 
 > [!TIP]

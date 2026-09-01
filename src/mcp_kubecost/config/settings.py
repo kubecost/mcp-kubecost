@@ -57,9 +57,7 @@ class Settings:
     oidc_client_id: str | None
     oidc_client_secret: str | None
     oidc_audience: str | None
-    oidc_base_url: str | None
-    oidc_resource_base_url: str | None
-    oidc_redirect_path: str
+    external_url: str | None
     oidc_required_scopes: list[str]
     oidc_allowed_client_redirect_uris: list[str] | None
     oidc_storage_path: str
@@ -142,6 +140,30 @@ def _get_url_env(name: str) -> str:
     return value
 
 
+def _get_external_url() -> str:
+    """Return the public MCP origin from ``MCP_EXTERNAL_URL``.
+
+    Production origins must use HTTPS. Plain HTTP is accepted only for
+    localhost so the complete OAuth flow remains testable without TLS. Paths,
+    credentials, queries, and fragments are rejected because all public paths
+    are fixed by the server.
+    """
+    value = _get_required_env("MCP_EXTERNAL_URL").rstrip("/")
+    parsed = urlparse(value)
+    is_local_http = (
+        parsed.scheme == "http"
+        and parsed.hostname is not None
+        and (parsed.hostname == "localhost" or parsed.hostname.startswith("127."))
+    )
+    if parsed.scheme != "https" and not is_local_http:
+        raise ConfigError("Invalid MCP_EXTERNAL_URL: expected an https:// origin (http:// is allowed on localhost)")
+    if not parsed.netloc or parsed.username is not None or parsed.password is not None:
+        raise ConfigError("Invalid MCP_EXTERNAL_URL: expected an origin like https://kubecost.example.com")
+    if parsed.path not in ("", "/") or parsed.params or parsed.query or parsed.fragment:
+        raise ConfigError("Invalid MCP_EXTERNAL_URL: paths, query strings, and fragments are not allowed")
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
 def _get_ssl_verify_env() -> bool | str:
     """Return the httpx ssl verify value from KUBECOST_SSL_VERIFY / SSL_CA_BUNDLE.
 
@@ -212,40 +234,14 @@ def _get_oidc_allowed_client_redirect_uris() -> list[str] | None:
     return [value.strip() for value in values]
 
 
-_DEFAULT_OIDC_REDIRECT_PATH = "/callback"
 _DEFAULT_OIDC_STORAGE_PATH = "/var/lib/mcp-kubecost/oauth"
-
-
-def _get_oidc_redirect_path() -> str:
-    """Return the FastMCP OAuth callback path (OIDC_REDIRECT_PATH).
-
-    Defaults to ``/callback``, relative to ``OIDC_BASE_URL``. The recommended
-    shared-host layout uses an authorization-server base such as
-    ``https://kubecost.example.com/oauth/mcp``, producing the upstream IdP
-    callback ``https://kubecost.example.com/oauth/mcp/callback``. Only this
-    callback is remountable; the other OAuth operational routes are rooted at
-    the authorization-server base URL by the reverse proxy.
-    """
-    raw = os.getenv("OIDC_REDIRECT_PATH", _DEFAULT_OIDC_REDIRECT_PATH).strip()
-    if not raw:
-        return _DEFAULT_OIDC_REDIRECT_PATH
-    if "://" in raw or "?" in raw or "#" in raw:
-        raise ConfigError(f"Invalid OIDC_REDIRECT_PATH: {raw!r} (expected a path like /callback, not a URL)")
-    if ".." in raw:
-        raise ConfigError(f"Invalid OIDC_REDIRECT_PATH: {raw!r} (must not contain '..')")
-    path = raw if raw.startswith("/") else f"/{raw}"
-    if path != "/":
-        path = path.rstrip("/")
-    if path == "/":
-        raise ConfigError("Invalid OIDC_REDIRECT_PATH: '/' (use a dedicated callback path)")
-    return path
 
 
 def _get_oidc_storage_path() -> str:
     """Return the normalized absolute directory used for encrypted OAuth state.
 
-    Validation mirrors ``_get_oidc_redirect_path()``: reject ``..`` outright rather
-    than silently resolving it, then normalize so the stored value is stable
+    Reject ``..`` outright rather than silently resolving it, then normalize so
+    the stored value is stable
     (no trailing slash, no ``.`` segments).
 
     The nesting requirement is not cosmetic. ``build_oidc_provider()`` calls
@@ -286,8 +282,7 @@ def get_settings() -> Settings:
     oidc_client_id: str | None = os.getenv("OIDC_CLIENT_ID", "").strip() or None
     oidc_client_secret: str | None = os.getenv("OIDC_CLIENT_SECRET", "").strip() or None
     oidc_audience: str | None = os.getenv("OIDC_AUDIENCE", "").strip() or None
-    oidc_base_url: str | None = os.getenv("OIDC_BASE_URL", "").strip() or None
-    oidc_resource_base_url: str | None = os.getenv("OIDC_RESOURCE_BASE_URL", "").strip() or None
+    external_url: str | None = os.getenv("MCP_EXTERNAL_URL", "").strip() or None
     oidc_jwt_signing_key: str | None = os.getenv("OIDC_JWT_SIGNING_KEY", "").strip() or None
     oidc_storage_encryption_key: str | None = os.getenv("OIDC_STORAGE_ENCRYPTION_KEY", "").strip() or None
 
@@ -299,16 +294,13 @@ def get_settings() -> Settings:
             missing.append("OIDC_CLIENT_ID")
         if not oidc_client_secret:
             missing.append("OIDC_CLIENT_SECRET")
-        if not oidc_base_url:
-            missing.append("OIDC_BASE_URL")
-        if not oidc_resource_base_url:
-            missing.append("OIDC_RESOURCE_BASE_URL")
+        if not external_url:
+            missing.append("MCP_EXTERNAL_URL")
         if missing:
             raise ConfigError(f"AUTH_MODE={auth_mode.value} requires: {', '.join(missing)}")
 
         oidc_issuer_url = _get_url_env("OIDC_ISSUER_URL")
-        oidc_base_url = _get_url_env("OIDC_BASE_URL")
-        oidc_resource_base_url = _get_url_env("OIDC_RESOURCE_BASE_URL")
+        external_url = _get_external_url()
 
         if oidc_jwt_signing_key is not None and len(oidc_jwt_signing_key) < 32:
             raise ConfigError("OIDC_JWT_SIGNING_KEY must be at least 32 characters")
@@ -380,9 +372,7 @@ def get_settings() -> Settings:
         oidc_client_id=oidc_client_id,
         oidc_client_secret=oidc_client_secret,
         oidc_audience=oidc_audience,
-        oidc_base_url=oidc_base_url,
-        oidc_resource_base_url=oidc_resource_base_url,
-        oidc_redirect_path=_get_oidc_redirect_path(),
+        external_url=external_url,
         oidc_required_scopes=_get_oidc_scopes(),
         oidc_allowed_client_redirect_uris=_get_oidc_allowed_client_redirect_uris(),
         oidc_storage_path=_get_oidc_storage_path(),

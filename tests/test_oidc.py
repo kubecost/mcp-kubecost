@@ -28,8 +28,12 @@ from mcp.server.auth.provider import RegistrationError
 from mcp.server.auth.settings import ClientRegistrationOptions
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
+from starlette.routing import Route
 
 from mcp_kubecost.config.oidc import (
+    MCP_PATH,
+    OAUTH_CALLBACK_PATH,
+    OAUTH_PREFIX,
     AdaptiveOidcProxy,
     AdaptiveTokenVerifier,
     create_oidc_provider,
@@ -57,9 +61,7 @@ _SETTINGS: dict[str, Any] = dict(
     oidc_client_id=None,
     oidc_client_secret=None,
     oidc_audience=None,
-    oidc_base_url=None,
-    oidc_resource_base_url=None,
-    oidc_redirect_path="/callback",
+    external_url=None,
     oidc_required_scopes=["openid", "profile"],
     oidc_allowed_client_redirect_uris=None,
     oidc_storage_path="/tmp/mcp-kubecost-test-oauth",
@@ -73,8 +75,7 @@ _OIDC = dict(
     oidc_issuer_url="https://idp.example/.well-known/openid-configuration",
     oidc_client_id="client",
     oidc_client_secret="secret",
-    oidc_base_url="https://mcp.example/oauth/mcp",
-    oidc_resource_base_url="https://mcp.example",
+    external_url="https://mcp.example",
     oidc_storage_path="/tmp/mcp-kubecost-test-oauth",
     oidc_jwt_signing_key="j" * 32,
     oidc_storage_encryption_key=Fernet.generate_key().decode(),
@@ -149,6 +150,46 @@ def _dcr_proxy(
     return proxy
 
 
+class TestFixedPublicRoutes:
+    @staticmethod
+    async def _endpoint(_request):
+        return None
+
+    def test_mounts_operational_and_discovery_routes_without_rewrites(self):
+        parent_routes = [
+            Route("/.well-known/oauth-authorization-server", self._endpoint, methods=["GET"]),
+            Route("/.well-known/oauth-protected-resource/mcp", self._endpoint, methods=["GET"]),
+            Route("/authorize", self._endpoint, methods=["GET", "POST"]),
+            Route("/token", self._endpoint, methods=["POST"]),
+            Route("/register", self._endpoint, methods=["POST"]),
+            Route("/revoke", self._endpoint, methods=["POST"]),
+            Route("/callback", self._endpoint, methods=["GET"]),
+            Route("/consent", self._endpoint, methods=["GET", "POST"]),
+        ]
+        proxy = _uninitialized_proxy()
+
+        with patch.object(OIDCProxy, "get_routes", return_value=parent_routes) as get_routes:
+            routes = proxy.get_routes(MCP_PATH)
+
+        get_routes.assert_called_once_with(MCP_PATH)
+        assert [route.path for route in routes] == [
+            "/.well-known/oauth-authorization-server/oauth/mcp",
+            "/.well-known/openid-configuration/oauth/mcp",
+            "/.well-known/oauth-protected-resource/mcp",
+            "/oauth/mcp/authorize",
+            "/oauth/mcp/token",
+            "/oauth/mcp/register",
+            "/oauth/mcp/revoke",
+            "/oauth/mcp/callback",
+            "/oauth/mcp/consent",
+        ]
+
+    def test_rejects_a_different_mcp_path(self):
+        proxy = _uninitialized_proxy()
+        with pytest.raises(ConfigError, match="fixed at /mcp"):
+            proxy.get_routes("/custom")
+
+
 class TestCreateOidcProvider:
     def test_none_when_auth_disabled(self):
         assert create_oidc_provider(_settings()) is None
@@ -176,27 +217,14 @@ class TestCreateOidcProvider:
         assert isinstance(kwargs["client_storage"].key_value, FileTreeStore)
         assert kwargs["jwt_signing_key"] == _OIDC["oidc_jwt_signing_key"]
         assert kwargs["require_authorization_consent"] == "remember"
-        assert kwargs["base_url"] == "https://mcp.example/oauth/mcp"
+        assert kwargs["base_url"] == f"https://mcp.example{OAUTH_PREFIX}"
         assert kwargs["resource_base_url"] == "https://mcp.example"
-        assert kwargs["redirect_path"] == "/callback"
+        assert kwargs["redirect_path"] == OAUTH_CALLBACK_PATH
         assert kwargs["allowed_client_redirect_uris"] is None
         assert kwargs["dcr_client_id_key"] == _OIDC["oidc_storage_encryption_key"]
         assert "verify_id_token" not in kwargs
         # _install_adaptive_verifier is now called from AdaptiveOidcProxy.__init__,
         # not from create_oidc_provider, so no explicit call assertion needed here.
-
-    def test_forwards_dedicated_host_redirect_path(self, tmp_path):
-        with patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy") as proxy:
-            create_oidc_provider(
-                _settings(
-                    **{
-                        **_OIDC,
-                        "oidc_redirect_path": "/auth/callback",
-                        "oidc_storage_path": str(tmp_path),
-                    }
-                )
-            )
-        assert proxy.call_args.kwargs["redirect_path"] == "/auth/callback"
 
     def test_forwards_restricted_client_redirects(self, tmp_path):
         redirects = ["http://localhost:*", "https://client.example/callback"]
