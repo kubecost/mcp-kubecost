@@ -323,7 +323,13 @@ _THEME_CSS = f"""
 # Copy that names FastMCP to the end user. Each pattern is a single-line
 # substring of FastMCP's own template — nothing here spans a line break, which
 # is what keeps the substitution robust against reindentation.
+# FastMCP's FASTMCP_LOGO_URL is used by create_logo() as the fallback when no
+# server_icon_url is supplied — which is the case for all callback error pages.
+# Replace it with our data URI so those pages never request an external asset.
+_FASTMCP_LOGO_URL = "https://gofastmcp.com/assets/brand/blue-logo.png"
+
 _COPY_SUBSTITUTIONS: tuple[tuple[str, str], ...] = (
+    (_FASTMCP_LOGO_URL, KUBECOST_LOGO_DATA_URI),
     ("This FastMCP server", "This Kubecost MCP server"),
     ("FastMCP security &rarr;", "MCP security &rarr;"),
     ("FastMCP security →", "MCP security →"),
@@ -349,10 +355,12 @@ _KUBECOST_BRANDED = "_kubecost_branded"
 def apply_kubecost_branding(html: str) -> str:
     """Return ``html`` restyled as Kubecost.
 
-    Adds the theme stylesheet and an inline favicon to ``<head>``, and rewrites
-    the few strings in FastMCP's copy that name FastMCP to the reader. Returns
-    the input unchanged if there is no ``<head>`` to extend — FastMCP emits a few
-    bare HTML fragments, which is what the ``/favicon.ico`` route covers.
+    Adds the theme stylesheet and an inline favicon to ``<head>``, rewrites the
+    few strings in FastMCP's copy that name FastMCP to the reader, and replaces
+    the FastMCP fallback logo URL with the Kubecost PNG data URI so callback
+    error pages (which omit ``server_icon_url``) never fetch an external asset.
+    Returns the input unchanged if there is no ``<head>`` to extend — FastMCP
+    emits a few bare HTML fragments, which is what the ``/favicon.ico`` route covers.
     """
     if not _HEAD_CLOSE.search(html):
         return html  # bare fragment: nothing to restyle, leave it verbatim

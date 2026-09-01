@@ -235,6 +235,21 @@ def test_error_pages_declare_a_favicon(branding_installed):
     assert 'rel="icon"' in html
 
 
+def test_callback_error_pages_use_kubecost_logo_not_fastmcp(branding_installed):
+    """Callback error pages omit server_icon_url; FastMCP falls back to its own logo URL.
+
+    The branding overlay must replace that URL with the Kubecost data URI so the page
+    never makes an external request and the FastMCP logo never appears.
+    """
+    html = fastmcp_proxy.create_error_html(
+        error_title="OAuth Error",
+        error_message="Missing authorization code.",
+        # No server_icon_url — simulates the callback handler's create_error_html calls.
+    )
+    assert "gofastmcp.com" not in html, "FastMCP logo URL must be replaced"
+    assert KUBECOST_LOGO_DATA_URI in html, "Kubecost logo data URI must appear instead"
+
+
 def test_error_pages_are_branded(branding_installed):
     html = fastmcp_proxy.create_error_html(
         error_title="Authorization Failed",
