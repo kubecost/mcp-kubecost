@@ -151,6 +151,21 @@ class TestCreateOidcProvider:
     def test_none_when_auth_disabled(self):
         assert create_oidc_provider(_settings()) is None
 
+    def test_installs_kubecost_page_branding(self, tmp_path):
+        with (
+            patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy"),
+            patch("mcp_kubecost.config.oidc.install_oauth_page_branding") as install,
+        ):
+            create_oidc_provider(_settings(**{**_OIDC, "oidc_storage_path": str(tmp_path)}))
+        install.assert_called_once()
+
+    @pytest.mark.parametrize("auth_mode", [AuthMode.NONE, AuthMode.OPEN, AuthMode.API_KEY])
+    def test_no_page_branding_without_oidc(self, auth_mode):
+        """The other auth modes serve no browser-facing OAuth pages, so leave FastMCP alone."""
+        with patch("mcp_kubecost.config.oidc.install_oauth_page_branding") as install:
+            assert create_oidc_provider(_settings(auth_mode=auth_mode)) is None
+        install.assert_not_called()
+
     def test_uses_encrypted_file_storage_and_remembered_consent(self, tmp_path):
         with patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy") as proxy:
             create_oidc_provider(_settings(**{**_OIDC, "oidc_storage_path": str(tmp_path)}))

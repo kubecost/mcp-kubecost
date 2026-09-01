@@ -105,6 +105,11 @@ install-claude:
 vulture:
     uv run vulture
 
+# Serve the OAuth consent screen against a stub IdP and assert it is Kubecost-branded.
+# The only local path that reaches this page — STDIO serves no HTTP routes.
+check-consent-branding *ARGS:
+    uv run scripts/check_consent_branding.py {{ARGS}}
+
 # Spell-check all prose and source files tracked by cspell
 spell-check:
     #!/usr/bin/env bash

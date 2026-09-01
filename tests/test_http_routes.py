@@ -14,9 +14,10 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
 
+from mcp_kubecost.branding import FAVICON_SVG
 from mcp_kubecost.logging_fastmcp import HealthProbeLogFilter
 from mcp_kubecost.middleware import ToolConcurrencyLimitMiddleware
-from mcp_kubecost.server import health_endpoint, mcp, version_endpoint
+from mcp_kubecost.server import favicon_endpoint, health_endpoint, mcp, version_endpoint
 
 
 def _custom_route_paths() -> set[str]:
@@ -75,6 +76,30 @@ class TestVersionRoute:
         assert payload["version"]
 
 
+class TestFaviconRoute:
+    """Browsers request /favicon.ico for any HTML page that declares no icon.
+
+    The branded OAuth pages declare one inline so they never ask, but FastMCP also
+    returns bare HTML fragments with no <head>, and a browser pointed at /mcp or a
+    404 asks too. Serving it keeps those out of the access log as 404s.
+    """
+
+    def test_registered(self):
+        assert "/favicon.ico" in _custom_route_paths()
+
+    async def test_serves_the_kubecost_mark_as_svg(self):
+        response = await favicon_endpoint(MagicMock(spec=Request))
+        assert response.status_code == 200
+        assert response.media_type == "image/svg+xml"
+        body = bytes(response.body)
+        assert body.startswith(b"<svg") and body.endswith(b"</svg>")
+        assert body == FAVICON_SVG
+
+    async def test_is_cacheable(self):
+        response = await favicon_endpoint(MagicMock(spec=Request))
+        assert "max-age" in response.headers["cache-control"]
+
+
 class TestRuntimeProtection:
     def test_rate_and_concurrency_middleware_are_registered(self):
         rate = next(item for item in mcp.middleware if isinstance(item, RateLimitingMiddleware))
@@ -102,6 +127,10 @@ class TestProbesStayUnauthenticatedWithAuthEnabled:
         async def version(_request: Request) -> Response:
             return await version_endpoint(_request)
 
+        @app.custom_route("/favicon.ico", methods=["GET"])
+        async def favicon(_request: Request) -> Response:
+            return await favicon_endpoint(_request)
+
         return app
 
     async def test_health_returns_200_without_credentials(self):
@@ -117,6 +146,14 @@ class TestProbesStayUnauthenticatedWithAuthEnabled:
             response = await client.get("/version")
         assert response.status_code == 200
         assert "version" in response.json()
+
+    async def test_favicon_returns_200_without_credentials(self):
+        """A browser hits this mid-OAuth, before any token exists."""
+        transport = httpx.ASGITransport(app=self._authed_app().http_app())
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/favicon.ico")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("image/svg+xml")
 
     async def test_mcp_endpoint_rejects_missing_credentials(self):
         transport = httpx.ASGITransport(app=self._authed_app().http_app())

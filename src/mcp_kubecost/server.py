@@ -16,8 +16,9 @@ from dotenv import load_dotenv
 from fastmcp import FastMCP
 from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
+from mcp_kubecost.branding import FAVICON_MEDIA_TYPE, FAVICON_SVG, KUBECOST_WEBSITE_URL, server_icons
 from mcp_kubecost.client import kubecost_client_lifespan
 from mcp_kubecost.config.oidc import create_oidc_provider
 from mcp_kubecost.config.settings import apply_http_rich_logging, get_settings
@@ -59,6 +60,11 @@ def create_server(server_name) -> FastMCP:
         strict_input_validation=True,
         auth=auth,
         lifespan=kubecost_client_lifespan,
+        # FastMCP reads these off the server instance when it renders the OAuth
+        # consent screen: the icon becomes the page logo and the name becomes a
+        # link to the website. See mcp_kubecost.branding for the rest of the theme.
+        icons=server_icons(),
+        website_url=KUBECOST_WEBSITE_URL,
     )
     mcp.add_middleware(
         RateLimitingMiddleware(
@@ -117,6 +123,27 @@ async def version_endpoint(_request: Request) -> JSONResponse:
     except Exception:
         v = "unknown"
     return JSONResponse({"version": v})
+
+
+@mcp.custom_route("/favicon.ico", methods=["GET"])
+async def favicon_endpoint(_request: Request) -> Response:
+    """Serve the Kubecost mark so browsers stop 404ing on the implicit favicon.
+
+    The branded OAuth pages declare the icon inline and never request this, but
+    FastMCP also returns a few bare HTML fragments with no ``<head>`` to inject
+    into, and a browser pointed at ``/mcp`` or any 404 asks for ``/favicon.ico``
+    too. Unauthenticated, like ``/health`` and ``/version`` — it is a logo, and
+    the request arrives before any OAuth flow completes.
+
+    Content type is SVG despite the ``.ico`` path; browsers honour the header
+    rather than the extension. Not an MCP concern — clients read ``serverInfo.icons``.
+    """
+    return Response(
+        content=FAVICON_SVG,
+        media_type=FAVICON_MEDIA_TYPE,
+        # Immutable content, so let browsers stop asking. Public: no auth, no secrets.
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 def main() -> None:

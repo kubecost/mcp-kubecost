@@ -22,6 +22,7 @@ The virtual environment lives at `.venv/`. Invoke its interpreter directly — d
 .venv/bin/ruff check . --fix
 .venv/bin/pyrefly check                 # type check
 just vulture                            # dead-code scan (configured; do not pass extra paths)
+just check-consent-branding             # serves the OAuth consent screen and asserts branding
 uvx pre-commit run --config .github/pre-commit-config-ci.yaml --all-files
 ```
 
@@ -38,7 +39,8 @@ Run `ruff format`, `ruff check --fix`, and `pyrefly check` after every Python ed
 | Workflow guidance prompt (skill) | New module under [`src/mcp_kubecost/skills/`](src/mcp_kubecost/skills/), register in [`skills/__init__.py`](src/mcp_kubecost/skills/__init__.py) |
 | Sizing profiles, aggregation helpers | [`src/mcp_kubecost/domain/kubecost/`](src/mcp_kubecost/domain/kubecost/) |
 | HTTP client / auth | [`src/mcp_kubecost/client.py`](src/mcp_kubecost/client.py) |
-| HTTP custom routes (`/health`, `/version`) | [`server.py`](src/mcp_kubecost/server.py) |
+| HTTP custom routes (`/health`, `/version`, `/favicon.ico`) | [`server.py`](src/mcp_kubecost/server.py) |
+| OAuth consent / error page look and feel | [`src/mcp_kubecost/branding.py`](src/mcp_kubecost/branding.py) |
 | Env-backed settings | [`src/mcp_kubecost/config/settings.py`](src/mcp_kubecost/config/settings.py) |
 | FastMCP run configs (stdio / HTTP / public demo client) | [`config/`](config/) |
 
@@ -182,6 +184,66 @@ The per-request read uses FastMCP's `get_http_headers()`, which returns `{}` whe
 
 `REQUIRE_CLIENT_API_KEY=true` rejects HTTP requests with no header, raising `MissingClientApiKeyError` → `ErrorCode.AUTHENTICATION_FAILED`. The check sits *between* steps 1 and 2, so a configured `KUBECOST_API_KEY` does not satisfy it. It is skipped entirely on STDIO, where a client cannot send headers.
 
+## OAuth Page Branding
+
+FastMCP renders the browser-facing OAuth pages (consent, OAuth errors, unregistered client) and styles them with **its own** logo and palette. [`branding.py`](src/mcp_kubecost/branding.py) makes them read as Kubecost, using two seams:
+
+1. `server.py` passes `icons=server_icons()` and `website_url=` to `FastMCP()`. FastMCP reads both off the server instance when rendering, which sets the page logo and hyperlinks the server name. This is supported API — no patching.
+2. `install_oauth_page_branding()`, called from `create_oidc_provider()`, rebinds FastMCP's three page builders to wrappers that append a Kubecost stylesheet plus an inline `<link rel="icon">` to the returned HTML, and rewrite the handful of strings that name FastMCP to the reader.
+
+There is no theming hook in FastMCP 3.4.7 — `fastmcp.utilities.ui` composes its palette into a `<style>` block at render time, and `require_authorization_consent="external"` means "host consent yourself", not "restyle it". Rebinding the builders is the only option short of reimplementing FastMCP's CSRF and cookie handling, so keep the overlay **purely presentational**: never touch the consent form, its CSRF token, or the transaction fields.
+
+Rules to preserve:
+
+- The palette and font stack come from the **Kubecost UI's own design tokens** (`demo.kubecost.xyz` stylesheet). Change the constants in `branding.py`, not individual CSS rules.
+- Keep the logo an inline SVG `data:` URI and the CSS inline. The pages must fetch nothing external — otherwise they need new reverse-proxy rules (see [docs/auth/auth-technical.md](docs/auth/auth-technical.md)) and break in air-gapped clusters.
+- Do not set `consent_csp_policy`. `style-src 'unsafe-inline'` and `img-src data:` are already in FastMCP's default consent CSP, so the overlay needs no CSP relaxation. Adding a webfont would, which is why Space Grotesk is declared but never fetched.
+- Copy substitutions in `_COPY_SUBSTITUTIONS` must each be a **single-line** substring of FastMCP's template; nothing may span a line break, or reindentation upstream silently breaks it.
+- Branding is installed only under `AUTH_MODE=oidc`; the other modes serve no browser pages. `install_oauth_page_branding()` is idempotent and warns rather than raises when a builder has been renamed — un-branded pages are cosmetic, not a startup failure.
+- `tests/test_branding.py` is the FastMCP-upgrade tripwire. If it fails after a dependency bump, re-check the builder names and markup in `fastmcp/server/auth/oauth_proxy/ui.py` before relaxing an assertion.
+
+### Icons: two audiences, two mechanisms
+
+`server_icons()` feeds both, and they are unrelated transports for the same mark. Do not conflate them:
+
+| Audience | Mechanism | Notes |
+|---|---|---|
+| **MCP clients** | `serverInfo.icons` (`FastMCP(icons=...)`) | The *only* icon mechanism MCP has. Advertised on **every** transport, STDIO included. Verify with the Kiro power. |
+| **Browsers** | inline `<link rel="icon">` + `GET /favicon.ico` | Browser convention, invisible to MCP clients. |
+
+- `sizes=["any"]` is the spec's spelling for a scalable format — not a pixel size. `theme` (`"light"` / `"dark"`) rides on `Icon`'s `extra="allow"`; it is not a declared field in the installed SDK, so a test pins that it survives serialization.
+- **Keep the light variant at `icons[0]`.** FastMCP renders `icons[0]` on its OAuth pages, which are light-background, and mint `#63e892` washes out there. `ACCENT` (`#31c46c`) is the light-background variant; `ACCENT_BRIGHT` is for dark client chrome.
+- **`_svg_data_uri()` must percent-encode quotes.** The SVG uses `"` for its own attributes; leaving those raw terminates the enclosing `href`/`src` attribute and leaks the rest of the URI onto the page as visible text. FastMCP escapes its own `<img src>`, so this only bit the `<link rel="icon">` we add. A test asserts no raw quote survives.
+- Declaring the icon inline **suppresses** the `/favicon.ico` request rather than serving it, which is what makes it work on a shared Kubecost hostname where root `/favicon.ico` belongs to the Kubecost frontend. The route exists for what the overlay cannot reach: FastMCP's bare HTML fragments (no `<head>` to inject into), plus browsers pointed at `/mcp` or any 404.
+
+### Verifying the consent screen
+
+`tests/test_branding.py` covers the HTML **builders**. To check the page as actually **served**, run:
+
+```bash
+just check-consent-branding                          # 16 checks, human-readable report
+just check-consent-branding --check                  # quiet, exit 1 on any failure
+just check-consent-branding --save /tmp/consent.html # dump the served HTML to eyeball
+```
+
+[`scripts/check_consent_branding.py`](scripts/check_consent_branding.py) starts a stub OIDC discovery endpoint, boots the real server with `AUTH_MODE=oidc`, performs DCR, walks `/authorize` to the consent page, and asserts the palette, font, logo, and copy applied **and** that the flow still works — approve redirects upstream, deny returns `access_denied`, a forged CSRF token is rejected. The stub IdP serves only discovery metadata and an empty JWKS; consent never exchanges a token, so no signing keys are needed.
+
+The script separates the two seams by design. Disable `install_oauth_page_branding()` and the palette/copy checks fail while the logo and website-link checks still pass, because those come from `FastMCP(icons=..., website_url=...)` instead. A failure therefore tells you *which* seam broke.
+
+**This is the only local path that reaches the consent screen.** Nothing else renders it:
+
+| Path | Reaches consent screen? | Why |
+|------|------------------------|-----|
+| `just check-consent-branding` | **yes** | HTTP + `AUTH_MODE=oidc` + a stub IdP |
+| `.venv/bin/pytest` | no — builders only | calls `create_consent_html()` directly, no server |
+| STDIO (`.venv/bin/mcp-kubecost`) | no | serves no HTTP routes at all |
+| `just serve` / `config/fastmcp-http.json` | no | HTTP, but `AUTH_MODE` is unset so `auth=None` |
+| `mcp-kubecost` Kiro power | no | STDIO, and sets no `AUTH_MODE` |
+
+One caveat if you test favicon behaviour by hand: over plain **http** the consent CSP's `img-src https: data:` blocks the browser's implicit `/favicon.ico` fetch, so a local http server shows no request either way and the check looks like a false pass. Reproduce over **https**, where `img-src https:` matches the page's own origin. Chrome's `--screenshot` mode also skips favicon fetching entirely; use `--dump-dom`.
+
+Do not try to verify consent branding through the Kiro power or `just inspect` — see [Kiro power](#kiro-power-local-mcp-client-check) for what those *can* check.
+
 ## Transport / Local Verification
 
 - **STDIO:** `.venv/bin/mcp-kubecost`, `.venv/bin/python -m mcp_kubecost.server`, or `uv run fastmcp run config/fastmcp.json`
@@ -197,6 +259,22 @@ Call a live tool against the public demo:
 ```bash
 just call-json get_kubecost_cost_comparison '{"aggregate": "namespace"}'
 ```
+
+### Kiro power (local MCP client check)
+
+A Kiro power may be installed at `.kiro/powers/mcp-kubecost/`, wrapping this repo as an MCP server for the IDE. **`.kiro/` is gitignored** — the power is a developer's local config, not part of the repo, so never treat its presence or its `mcp.json` contents as guaranteed. It runs the STDIO entry point (`uv run --project . mcp-kubecost`) and typically points `KUBECOST_BASE_URL` at a local instance, which will fail without a port-forward; repoint it at `https://demo.kubecost.xyz` to exercise it.
+
+The power is a genuine end-to-end client check and the only path that shows what a **real MCP client** sees. Use it to confirm:
+
+- the server starts under a real client handshake and `tools/list` returns **11 tools**, **11 prompts**, **4 resources**
+- tool calls round-trip and return `status: ok`
+- `serverInfo` advertises what `FastMCP()` was given — two themed Kubecost SVG `data:` URIs in `icons`, and `websiteUrl` of `https://www.kubecost.com`
+
+That last one matters: `icons=` and `website_url=` were added for the consent screen, but they are also sent to every MCP client, so the power is the only way to verify the icon actually reaches clients. Client-side rendering is still uneven — Claude Code has an open issue to read `serverInfo.icons` — so a client showing no icon is not necessarily a bug here.
+
+The power **cannot** test anything HTTP-only — consent screen, OAuth error pages, `/health`, `/version`, `/favicon.ico`, `X-API-KEY` header resolution, or `REQUIRE_CLIENT_API_KEY`. STDIO serves no HTTP routes, and `get_http_headers()` returns `{}` there by design. Reach for `just check-consent-branding` or `config/fastmcp-http.json` instead.
+
+A newly added power is not visible to an in-flight agent session — the client wires powers up at session start, so start a new session before expecting to call it.
 
 ## Boundaries
 
