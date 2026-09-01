@@ -2,6 +2,25 @@ apiVersion: v1
 entries:
   mcp-kubecost:
   - apiVersion: v2
+    appVersion: 0.11.0
+    created: "2026-09-01T02:24:41.747887666Z"
+    description: FinOps MCP server for Kubecost analytics.
+    digest: b655ab2bfc586aeed8a5bbbbc0dc865f95e383918461ca893eb57215a1cf7660
+    home: https://github.com/kubecost/mcp-kubecost
+    icon: https://raw.githubusercontent.com/kubecost/.github/9602bea0c06773da66ba43cb9ce5e1eb2b797c32/kubecost_logo.png
+    keywords:
+    - kubecost
+    - finops
+    - mcp
+    kubeVersion: '>=1.27.0-0'
+    name: mcp-kubecost
+    sources:
+    - https://github.com/kubecost/mcp-kubecost
+    type: application
+    urls:
+    - https://github.com/kubecost/mcp-kubecost/releases/download/v0.11.0/mcp-kubecost-0.11.0.tgz
+    version: 0.11.0
+  - apiVersion: v2
     appVersion: 0.10.0
     created: "2026-08-28T00:55:31.567127343Z"
     description: FinOps MCP server for Kubecost analytics.
@@ -318,4 +337,4 @@ entries:
     urls:
     - https://github.com/kubecost/mcp-kubecost/releases/download/v0.5.1/mcp-kubecost-0.5.1.tgz
     version: 0.5.1
-generated: "2026-08-28T00:55:31.5660615Z"
+generated: "2026-09-01T02:24:41.746488236Z"
