@@ -52,7 +52,6 @@
     },
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
-    "replicaCount": { "type": "integer", "minimum": 1 },
     "image": {
       "type": "object",
       "additionalProperties": false,
@@ -84,7 +83,8 @@
           },
           "required": ["type"]
         },
-        "fsGroup": { "type": ["integer", "null"], "minimum": 1 }
+        "fsGroup": { "type": ["integer", "null"], "minimum": 1 },
+        "fsGroupChangePolicy": { "type": "string", "enum": ["Always", "OnRootMismatch"] }
       }
     },
     "containerSecurityContext": {
@@ -189,6 +189,33 @@
       "required": ["enabled", "className", "annotations", "hosts", "tls"]
     },
     "resources": { "type": "object" },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": ["boolean", "null"] },
+        "storageClass": { "type": "string" },
+        "accessModes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"] }
+        },
+        "size": { "type": "string", "minLength": 1 },
+        "annotations": { "type": "object" }
+      },
+      "required": ["storageClass", "accessModes", "size", "annotations"]
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "replicas": { "type": "integer", "minimum": 0 },
+        "strategy": { "type": "object" },
+        "annotations": { "type": "object" },
+        "labels": { "type": "object" },
+        "selector": { "type": "object" }
+      }
+    },
     "probes": {
       "type": "object",
       "additionalProperties": false,
@@ -220,12 +247,17 @@
         },
         "requestTimeoutSeconds": { "type": "number", "exclusiveMinimum": 0 },
         "requestRetryCount": { "type": "integer", "minimum": 0 },
+        "rateLimitRequestsPerSecond": { "type": "number", "exclusiveMinimum": 0 },
+        "rateLimitBurstCapacity": { "type": "integer", "minimum": 1 },
+        "maxConcurrentToolCalls": { "type": "integer", "minimum": 1 },
         "defaultWindow": { "type": "string", "minLength": 1 },
         "logLevel": { "type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "debug", "info", "warning", "error", "critical"] },
         "useCacViews": { "type": "boolean" },
         "authMode": { "type": "string", "enum": ["none", "open", "oidc", "api_key"] },
         "requireClientApiKey": { "type": "boolean" },
+        "fastmcpHttpHostOriginProtection": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["auto"] }] },
         "fastmcpHttpAllowedHosts": { "type": "string" },
+        "fastmcpHttpAllowedOrigins": { "type": "string" },
         "http": {
           "type": "object",
           "additionalProperties": false,
@@ -267,13 +299,16 @@
             "baseUrl": { "type": "string" },
             "redirectPath": { "type": "string" },
             "requiredScopes": { "type": "string" },
+            "allowedClientRedirectUris": { "type": "string" },
             "clientId": { "type": "string" },
             "clientSecret": { "type": "string" },
+            "jwtSigningKey": { "type": "string" },
+            "storageEncryptionKey": { "type": "string" },
             "existingSecret": { "type": "string" }
           }
         }
       },
-      "required": ["authMode", "kubecostApiBaseUrl", "kubecostApiPort", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "defaultWindow", "logLevel", "useCacViews", "requireClientApiKey", "fastmcpHttpAllowedHosts", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "ssl", "oidc"]
+      "required": ["authMode", "kubecostApiBaseUrl", "kubecostApiPort", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "rateLimitRequestsPerSecond", "rateLimitBurstCapacity", "maxConcurrentToolCalls", "defaultWindow", "logLevel", "useCacViews", "requireClientApiKey", "fastmcpHttpHostOriginProtection", "fastmcpHttpAllowedHosts", "fastmcpHttpAllowedOrigins", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "ssl", "oidc"]
     },
     "nodeSelector": { "type": "object" },
     "tolerations": { "type": "array" },

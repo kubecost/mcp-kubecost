@@ -9,11 +9,13 @@ from unittest.mock import MagicMock
 import httpx
 from fastmcp import FastMCP
 from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 from starlette.routing import Route
 
 from mcp_kubecost.logging_fastmcp import HealthProbeLogFilter
+from mcp_kubecost.middleware import ToolConcurrencyLimitMiddleware
 from mcp_kubecost.server import health_endpoint, mcp, version_endpoint
 
 
@@ -71,6 +73,17 @@ class TestVersionRoute:
         payload = _json_body(response)
         assert "version" in payload
         assert payload["version"]
+
+
+class TestRuntimeProtection:
+    def test_rate_and_concurrency_middleware_are_registered(self):
+        rate = next(item for item in mcp.middleware if isinstance(item, RateLimitingMiddleware))
+        concurrency = next(item for item in mcp.middleware if isinstance(item, ToolConcurrencyLimitMiddleware))
+
+        assert rate.max_requests_per_second == 10.0
+        assert rate.burst_capacity == 20
+        assert rate.global_limit is True
+        assert concurrency.max_concurrent == 10
 
 
 class TestProbesStayUnauthenticatedWithAuthEnabled:

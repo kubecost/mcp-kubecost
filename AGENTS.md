@@ -72,7 +72,7 @@ Every tool response extends `BaseToolResponse` (`status: QueryStatus`, `message`
 - Both windows must be **explicit RFC3339 ranges** ending before today (UTC).
 - **All named aliases are rejected** (`lastweek`, `lastmonth`, `7d`, `today`, etc.) — there is no alias for "the period before lastmonth", making aliases a dead end for comparisons.
 - RFC3339 ranges of **different lengths are allowed**; a `warnings` entry flags the mismatch and points the caller at the normalized fields.
-- Default windows are computed **at import time** as a rolling 7-day window: `current_window` = the 7 days ending yesterday UTC, `baseline_window` = the 7 days before that. A long-lived process therefore serves stale defaults; callers should pass explicit windows.
+- Default windows are computed **for each tool call** as a rolling 7-day window: `current_window` = the 7 days ending yesterday UTC, `baseline_window` = the 7 days before that. Callers may still pass explicit windows for reproducible reports.
 - Each row carries `row_status` (`new` / `removed` / `unchanged` / `changed`) — there is no `is_new` boolean. A dimension costing zero in **both** windows is `unchanged`, not `new`.
 - Each row also carries per-day figures — `current_daily_cost`, `baseline_daily_cost`, `daily_change`, `normalized_pct_change` — so unequal-length periods are comparable. Rows still sort by absolute raw `change`.
 - The response `notes` list explains idle handling and, when present, `__unallocated__` rows. `notes` is guidance; `warnings` is "something may be wrong".
@@ -161,7 +161,7 @@ FastMCP serializes each returned Pydantic model **twice** — once as a JSON `Te
 
 All configuration flows through `get_settings()` in [`config/settings.py`](src/mcp_kubecost/config/settings.py) — `client.py` reads no environment variables directly. [`.env.example`](.env.example) is the complete, accurate template; copy it to `.env`.
 
-`KUBECOST_BASE_URL` is the only required variable. The rest have defaults: `KUBECOST_API_BASE_PATH`, `KUBECOST_API_KEY`, `REQUIRE_CLIENT_API_KEY`, `KUBECOST_SSL_VERIFY`, `SSL_CA_BUNDLE`, `REQUEST_TIMEOUT_SECONDS`, `REQUEST_RETRY_COUNT`, `DEFAULT_WINDOW`, `USE_CAC_VIEWS`, `FASTMCP_LOG_LEVEL`, `FASTMCP_ENABLE_RICH_LOGGING` (forced off in HTTP mode), `FASTMCP_TELEMETRY_MODE`, `OTEL_*`, `OIDC_REDIRECT_PATH` (`/auth-mcp`; use `/auth/callback` when MCP has a dedicated hostname). Opaque OIDC access tokens are detected from the token response — there is no `OIDC_VERIFY_ID_TOKEN` setting. `MCP_SERVER_NAME` is read in `server.py` and is not in `.env.example`.
+`KUBECOST_BASE_URL` is the only required variable. The rest have defaults: `KUBECOST_API_BASE_PATH`, `KUBECOST_API_KEY`, `REQUIRE_CLIENT_API_KEY`, `KUBECOST_SSL_VERIFY`, `SSL_CA_BUNDLE`, `REQUEST_TIMEOUT_SECONDS`, `REQUEST_RETRY_COUNT`, `DEFAULT_WINDOW`, `USE_CAC_VIEWS`, `FASTMCP_LOG_LEVEL`, `FASTMCP_ENABLE_RICH_LOGGING` (forced off in HTTP mode), `FASTMCP_TELEMETRY_MODE`, `OTEL_*`, `OIDC_REDIRECT_PATH` (`/auth-mcp`; use `/auth/callback` when MCP has a dedicated hostname), and `OIDC_STORAGE_PATH` (`/var/lib/mcp-kubecost/oauth`). Opaque OIDC access tokens are detected from the token response — there is no `OIDC_VERIFY_ID_TOKEN` setting. `MCP_SERVER_NAME` is read in `server.py` and is not in `.env.example`.
 
 Two variables are read outside `get_settings()`, in [`otel_entrypoint.py`](src/mcp_kubecost/otel_entrypoint.py), because they shape the `fastmcp run` argv before the server process exists: `FASTMCP_TELEMETRY_MODE` and `MCP_HTTP_PATH` (the route the MCP endpoint is served on, `--path`; default `/mcp`, set `/` behind a prefix-stripping proxy). The entrypoint calls `load_dotenv()` itself so both still work from `.env`, and validates `MCP_HTTP_PATH` the way `_get_oidc_redirect_path()` validates its input. Running `fastmcp run config/fastmcp-http.json` directly bypasses the entrypoint and ignores both.
 
@@ -204,10 +204,6 @@ just call-json get_kubecost_cost_comparison '{"aggregate": "namespace"}'
 - Do not reintroduce removed tools (`kubecost_get_cluster_cost_by_workload`, `kubecost_get_infra_costs`, `list_container_clusters`, `kubecost_get_request_sizing`)
 - Only create git commits when explicitly asked
 - **`just readme-tools` is destructive.** `scripts/generate_tools_readme.py` rewrites *everything* in README.md between `## Tools` and `## Quick Start`, not just the tables — it will delete hand-written sections in that range. Review its diff before keeping it, or edit the tables by hand.
-
-## Known Gaps
-
-- `_default_wow_windows()` is evaluated at import time, so default comparison windows go stale in a long-running process.
 
 ## Related Docs
 

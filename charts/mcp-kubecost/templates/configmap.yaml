@@ -9,8 +9,14 @@ data:
   KUBECOST_API_BASE_PATH: {{ .Values.config.kubecostApiBasePath | quote }}
   REQUEST_TIMEOUT_SECONDS: {{ .Values.config.requestTimeoutSeconds | quote }}
   REQUEST_RETRY_COUNT: {{ .Values.config.requestRetryCount | quote }}
+  MCP_RATE_LIMIT_REQUESTS_PER_SECOND: {{ .Values.config.rateLimitRequestsPerSecond | quote }}
+  MCP_RATE_LIMIT_BURST_CAPACITY: {{ .Values.config.rateLimitBurstCapacity | quote }}
+  MCP_MAX_CONCURRENT_TOOL_CALLS: {{ .Values.config.maxConcurrentToolCalls | quote }}
   DEFAULT_WINDOW: {{ .Values.config.defaultWindow | quote }}
+  FASTMCP_TRANSPORT: "streamable-http"
   FASTMCP_LOG_LEVEL: {{ .Values.config.logLevel | upper | quote }}
+  FASTMCP_ENABLE_RICH_LOGGING: "false"
+  FASTMCP_SHOW_SERVER_BANNER: "false"
   USE_CAC_VIEWS: {{ .Values.config.useCacViews | quote }}
   REQUIRE_CLIENT_API_KEY: {{ (or .Values.config.requireClientApiKey (eq .Values.config.authMode "api_key")) | quote }}
   MCP_SERVER_NAME: {{ .Values.config.mcpServerName | quote }}
@@ -20,11 +26,16 @@ data:
   OTEL_METRICS_EXPORTER: {{ .Values.config.otelMetricsExporter | quote }}
   OTEL_LOGS_EXPORTER: {{ .Values.config.otelLogsExporter | quote }}
   KUBECOST_SSL_VERIFY: {{ .Values.config.ssl.verify | quote }}
+  OIDC_STORAGE_PATH: "/var/lib/mcp-kubecost/oauth"
   {{- if .Values.config.otelExporterOtlpEndpoint }}
   OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.config.otelExporterOtlpEndpoint | quote }}
   {{- end }}
+  FASTMCP_HTTP_HOST_ORIGIN_PROTECTION: {{ .Values.config.fastmcpHttpHostOriginProtection | quote }}
   {{- if .Values.config.fastmcpHttpAllowedHosts }}
   FASTMCP_HTTP_ALLOWED_HOSTS: {{ .Values.config.fastmcpHttpAllowedHosts | quote }}
+  {{- end }}
+  {{- if .Values.config.fastmcpHttpAllowedOrigins }}
+  FASTMCP_HTTP_ALLOWED_ORIGINS: {{ .Values.config.fastmcpHttpAllowedOrigins | quote }}
   {{- end }}
   {{- if .Values.config.ssl.caBundle.existingSecret }}
   SSL_CA_BUNDLE: {{ .Values.config.ssl.caBundle.mountPath | quote }}
@@ -43,5 +54,8 @@ data:
   OIDC_REDIRECT_PATH: {{ include "mcp-kubecost.oidcRedirectPath" . | quote }}
   {{- if .Values.config.oidc.requiredScopes }}
   OIDC_REQUIRED_SCOPES: {{ .Values.config.oidc.requiredScopes | quote }}
+  {{- end }}
+  {{- if .Values.config.oidc.allowedClientRedirectUris }}
+  OIDC_ALLOWED_CLIENT_REDIRECT_URIS: {{ .Values.config.oidc.allowedClientRedirectUris | quote }}
   {{- end }}
   {{- end }}

@@ -239,3 +239,4 @@ k8s/debug-pod.yaml
 todo-list.md
 .kiro/
 .bobtmp/
+.DS_STORE

@@ -6,24 +6,32 @@ metadata:
   name: {{ include "mcp-kubecost.fullname" . }}
   labels:
     {{- include "mcp-kubecost.labels" . | nindent 4 }}
+    {{- with ((.Values.deployment).labels) }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
   {{- with include "mcp-kubecost.annotations" . }}
   annotations:
     {{- . | nindent 4 }}
   {{- end }}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: {{ ((.Values.deployment).replicas) | default 1 }}
+  {{- with ((.Values.deployment).strategy) }}
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "mcp-kubecost.selectorLabels" . | nindent 6 }}
+      {{- with ((.Values.deployment).selector) }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
   template:
     metadata:
       labels:
         {{- include "mcp-kubecost.selectorLabels" . | nindent 8 }}
+        {{- with ((.Values.deployment).selector) }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         {{- with ((.Values.global).additionalLabels) }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -73,16 +81,31 @@ spec:
                   key: {{ .Values.config.kubecostApiKey.key }}
             {{- end }}
             {{- if $hasOidc }}
+            {{- $oidcSecretName := ternary .Values.config.oidc.existingSecret (include "mcp-kubecost.oidcSecretName" .) (ne .Values.config.oidc.existingSecret "") }}
             - name: OIDC_CLIENT_ID
               valueFrom:
                 secretKeyRef:
-                  name: {{ if .Values.config.oidc.existingSecret }}{{ .Values.config.oidc.existingSecret }}{{ else }}{{ include "mcp-kubecost.oidcSecretName" . }}{{ end }}
+                  name: {{ $oidcSecretName }}
                   key: OIDC_CLIENT_ID
             - name: OIDC_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ if .Values.config.oidc.existingSecret }}{{ .Values.config.oidc.existingSecret }}{{ else }}{{ include "mcp-kubecost.oidcSecretName" . }}{{ end }}
+                  name: {{ $oidcSecretName }}
                   key: OIDC_CLIENT_SECRET
+            {{- if or .Values.config.oidc.jwtSigningKey .Values.config.oidc.existingSecret }}
+            - name: OIDC_JWT_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $oidcSecretName }}
+                  key: OIDC_JWT_SIGNING_KEY
+            {{- end }}
+            {{- if or .Values.config.oidc.storageEncryptionKey .Values.config.oidc.existingSecret }}
+            - name: OIDC_STORAGE_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $oidcSecretName }}
+                  key: OIDC_STORAGE_ENCRYPTION_KEY
+            {{- end }}
             {{- end }}
           {{- end }}
           ports:
@@ -122,15 +145,24 @@ spec:
             timeoutSeconds: {{ .Values.probes.timeoutSeconds }}
             failureThreshold: {{ .Values.probes.failureThreshold }}
           {{- end }}
-          {{- if .Values.config.ssl.caBundle.existingSecret }}
           volumeMounts:
+            - name: oauth-storage
+              mountPath: /var/lib/mcp-kubecost
+          {{- if .Values.config.ssl.caBundle.existingSecret }}
             - name: ca-bundle
               mountPath: {{ .Values.config.ssl.caBundle.mountPath }}
               subPath: {{ .Values.config.ssl.caBundle.key }}
               readOnly: true
           {{- end }}
-      {{- if .Values.config.ssl.caBundle.existingSecret }}
       volumes:
+        - name: oauth-storage
+          {{- if include "mcp-kubecost.persistenceEnabled" . }}
+          persistentVolumeClaim:
+            claimName: {{ include "mcp-kubecost.oauthStorageClaimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- if .Values.config.ssl.caBundle.existingSecret }}
         - name: ca-bundle
           secret:
             secretName: {{ .Values.config.ssl.caBundle.existingSecret }}

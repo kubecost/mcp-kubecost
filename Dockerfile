@@ -31,7 +31,8 @@ RUN rm -rf \
       /python/cpython-*/lib/python*/ensurepip \
       /python/cpython-*/lib/python*/site-packages/pip \
       /python/cpython-*/lib/python*/site-packages/pip-*.dist-info \
-      /python/cpython-*/bin/pip*
+      /python/cpython-*/bin/pip* \
+    && install -d -m 0750 -o 65532 -g 65532 /var/lib/mcp-kubecost
 
 # ── Runtime stage ────────────────────────────────────────────────────────────
 # distroless/base has libc + libssl but no Python, no shell, no pebble.
@@ -44,6 +45,7 @@ COPY --from=builder /usr/share/terminfo /usr/share/terminfo
 # Copy the uv-managed Python runtime (venv symlinks point into here)
 COPY --from=builder /python /python
 COPY --from=builder /app/ /app/
+COPY --from=builder --chown=65532:65532 /var/lib/mcp-kubecost/ /var/lib/mcp-kubecost/
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
@@ -56,5 +58,6 @@ ENV PATH="/app/.venv/bin:$PATH" \
 WORKDIR /app
 
 EXPOSE 3030
+VOLUME ["/var/lib/mcp-kubecost"]
 
 CMD ["/app/.venv/bin/mcp-kubecost-http"]

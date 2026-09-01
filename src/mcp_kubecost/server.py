@@ -14,12 +14,15 @@ os.environ["FASTMCP_SHOW_SERVER_BANNER"] = "false"
 
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
+from mcp_kubecost.client import kubecost_client_lifespan
 from mcp_kubecost.config.oidc import create_oidc_provider
 from mcp_kubecost.config.settings import apply_http_rich_logging, get_settings
 from mcp_kubecost.errors import ConfigError
+from mcp_kubecost.middleware import ToolConcurrencyLimitMiddleware
 from mcp_kubecost.skills import register_all_skills
 from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
 
@@ -45,6 +48,7 @@ def create_server(server_name) -> FastMCP:
 
     # Build OIDC auth provider (None when OIDC is not enabled)
     auth = create_oidc_provider()
+    settings = get_settings()
 
     # Create the MCP server instance
     mcp = FastMCP(
@@ -54,7 +58,16 @@ def create_server(server_name) -> FastMCP:
         on_duplicate="error",
         strict_input_validation=True,
         auth=auth,
+        lifespan=kubecost_client_lifespan,
     )
+    mcp.add_middleware(
+        RateLimitingMiddleware(
+            max_requests_per_second=settings.rate_limit_requests_per_second,
+            burst_capacity=settings.rate_limit_burst_capacity,
+            global_limit=True,
+        )
+    )
+    mcp.add_middleware(ToolConcurrencyLimitMiddleware(settings.max_concurrent_tool_calls))
 
     # Register all toolsets
     register_kubecost_tools(mcp)
@@ -70,10 +83,10 @@ load_dotenv(".env")  # reads variables from a .env file and sets them in os.envi
 apply_http_rich_logging()  # HTTP: fastmcp.settings.enable_rich_logging = False
 import mcp_kubecost.logging_fastmcp  # noqa: E402,F401 -- must follow load_dotenv so FASTMCP_LOG_LEVEL is set
 
-logging.getLogger("mcp_kubecost").setLevel(logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+logging.getLogger("mcp_kubecost").setLevel(getattr(logging, settings.log_level, logging.INFO))
 if logger.isEnabledFor(logging.DEBUG):
     logger.debug("Effective settings:\n%s", json.dumps(settings.to_loggable_dict(), indent=2))
 mcp_server_name = os.getenv("MCP_SERVER_NAME", "mcp-kubecost")

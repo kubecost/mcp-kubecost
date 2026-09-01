@@ -52,7 +52,10 @@ The only friction a second client adds is administrative:
 1. Create one more client in the identity provider.
 2. Store one more secret.
 
-This server delegates consent to the identity provider (`require_authorization_consent="external"`), so if your provider forces a per-client consent screen, users see it once for the new client. Turn consent off on the client if that matters — it is a per-client setting, which is itself an argument for having a second client.
+This server remembers FastMCP consent per MCP client. If your provider also
+forces a per-client consent screen, users see that provider screen once for the
+new client. Turn provider-side consent off on the client if that matters — it is
+a per-client setting, which is itself an argument for having a second client.
 
 ## What a shared client costs you
 
@@ -72,7 +75,7 @@ It also creates invisible coupling: a wildcard added to the Kubecost entries lat
 
 The token audience is derived from the client, so with one client nothing in a token distinguishes "minted for the Kubecost UI" from "minted for the MCP". This server makes that concrete: when the provider issues opaque access tokens, it verifies the `id_token`, whose audience is the OAuth client ID.
 
-The direction that matters is MCP toward Kubecost. The MCP pod holds live upstream access and refresh tokens in memory for each connected user. If those tokens carry the same audience the Kubecost UI accepts, they are also usable directly against Kubecost as that user. Separate clients let Kubecost reject them.
+The direction that matters is MCP toward Kubecost. The MCP server holds live upstream access and refresh tokens in its encrypted, PVC-backed FileTreeStore for connected users. If those tokens carry the same audience the Kubecost UI accepts, they are also usable directly against Kubecost as that user. Separate clients let Kubecost reject them.
 
 ### Everything the identity provider scopes per client
 
@@ -110,13 +113,13 @@ flowchart LR
 
 Create a second confidential client for the MCP with these settings:
 
-| Setting                 | Value                                                                                |
-| ----------------------- | ------------------------------------------------------------------------------------ |
-| Client authentication   | On — this is a confidential client with a secret                                     |
-| Authorization code flow | Enabled (standard flow)                                                              |
-| Valid redirect URIs     | `{config.oidc.baseUrl}{config.oidc.redirectPath}`                                    |
-| Scopes                  | Must include `openid` and `profile` (the `OIDC_REQUIRED_SCOPES` default)             |
-| Consent                 | Off, unless you specifically want a consent screen for agent access                  |
+| Setting                 | Value                                                                    |
+| ----------------------- | ------------------------------------------------------------------------ |
+| Client authentication   | On — this is a confidential client with a secret                         |
+| Authorization code flow | Enabled (standard flow)                                                  |
+| Valid redirect URIs     | `{config.oidc.baseUrl}{config.oidc.redirectPath}`                        |
+| Scopes                  | Must include `openid` and `profile` (the `OIDC_REQUIRED_SCOPES` default) |
+| Consent                 | Off, unless you specifically want a consent screen for agent access      |
 
 Then point the chart at a Secret holding only the MCP client's credentials:
 
@@ -142,7 +145,7 @@ helm upgrade --install mcp-kubecost \
 Three things not to do:
 
 - Do not add the MCP callback to the Kubecost client, or Kubecost's callback to the MCP client. That recreates the shared allowlist without sharing credentials.
-- Do not register MCP client callbacks (`http://localhost:<port>/callback`, `https://claude.ai/api/mcp/auth_callback`) on the identity provider. Those belong to this server's dynamic client registration.
+- Do not register MCP client callbacks (`http://localhost:<port>/callback`, Claude's callback, or either ChatGPT connector callback) on the identity provider. Those belong to the MCP client registration layer.
 - Do not reuse the Kubecost API key as the OIDC secret, or vice versa. They are separate layers — see [`README.md`](README.md).
 
 ## If you have to share one client
@@ -158,18 +161,19 @@ There are legitimate reasons: an identity provider you do not own, where a new c
 
 ## Migrating from a shared client to a dedicated one
 
-There is no user-visible downtime beyond one re-authentication, and MCP client registrations are held in memory anyway, so a restart already forces them to re-register.
+There is no user-visible downtime beyond one re-authentication. MCP client
+registrations remain on the OAuth state PVC across the Deployment recreation.
 
 1. Create the new client as described above, with only the MCP callback registered.
-2. Update the MCP Secret (or `config.oidc.clientId` / `clientSecret`) with the new credentials and `helm upgrade`. The rolling restart picks them up.
+2. Update the MCP Secret (or `config.oidc.clientId` / `clientSecret`) with the new credentials and `helm upgrade`. The default `Recreate` strategy (`deployment.strategy`) picks them up.
 3. Reconnect one MCP client and confirm login and a tool call succeed.
 4. Remove the MCP callback from the Kubecost client's redirect URI list.
 5. Rotate the old shared secret, since it was distributed more widely than it should have been.
 
-If step 3 fails with `invalid_redirect_uri`, compare the provider error's `redirect_uri` parameter against the client's registered list — see [Troubleshooting](README.md#troubleshooting).
+If step 3 fails with `invalid_redirect_uri`, compare the provider error's `redirect_uri` parameter against the client's registered list — see [Troubleshooting](auth-technical.md#troubleshooting).
 
 ## Related
 
-- [`README.md`](README.md) — the two auth layers, `AUTH_MODE`, Kubecost API keys, pod hardening
-- [Identity provider setup](README.md#identity-provider-setup) — the callback URI this server expects
-- [Shared Kubecost frontend hostname](README.md#shared-kubecost-frontend-hostname) — a different kind of sharing: one _hostname_ for both apps
+- [`README.md`](README.md) — the two auth layers, `AUTH_MODE`, Kubecost API keys
+- [Identity provider setup](auth-technical.md#identity-provider-setup) — the callback URI this server expects
+- [Shared Kubecost frontend hostname](auth-technical.md#shared-kubecost-frontend-hostname) — a different kind of sharing: one _hostname_ for both apps

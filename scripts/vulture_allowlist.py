@@ -7,6 +7,7 @@
 # FastMCP framework overrides, called by the base class.
 _get_verification_token  # unused method (src/mcp_kubecost/config/oidc.py:90)
 _uses_alternate_verification  # unused method (src/mcp_kubecost/config/oidc.py:106)
+on_call_tool  # unused method (src/mcp_kubecost/middleware.py:21)
 
 # Enum members are constructed dynamically from their serialized values.
 NONE  # unused variable (src/mcp_kubecost/config/settings.py:20)

@@ -25,6 +25,9 @@ _SETTINGS: dict[str, Any] = dict(
     retry_count=2,
     default_window="15d",
     log_level="INFO",
+    rate_limit_requests_per_second=10.0,
+    rate_limit_burst_capacity=20,
+    max_concurrent_tool_calls=10,
     auth_mode=AuthMode.NONE,
     oidc_issuer_url=None,
     oidc_client_id=None,
@@ -33,6 +36,11 @@ _SETTINGS: dict[str, Any] = dict(
     oidc_base_url=None,
     oidc_redirect_path="/auth-mcp",
     oidc_required_scopes=["openid", "profile"],
+    oidc_allowed_client_redirect_uris=None,
+    oidc_storage_path="/tmp/mcp-kubecost-test-oauth",
+    oidc_jwt_signing_key=None,
+    oidc_storage_encryption_key=None,
+    oidc_ephemeral_keys=False,
 )
 
 

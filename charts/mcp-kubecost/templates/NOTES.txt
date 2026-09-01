@@ -1,2 +1,19 @@
 {{- include "mcp-kubecost.validateOIDC" . -}}
 The mcp-kubecost server has been installed as {{ include "mcp-kubecost.fullname" . }}.
+{{- if and (eq (.Values.config.authMode | default "none") "oidc") (not (include "mcp-kubecost.persistenceEnabled" .)) }}
+
+WARNING: config.authMode is "oidc" but persistence.enabled is false. OAuth
+client registrations, grants, and tokens are stored in an emptyDir volume,
+which is wiped whenever the pod is rescheduled (rollouts, node evictions,
+crashes). MCP clients will be forced to re-register and users will need to
+re-authorize every time the pod restarts. Set persistence.enabled: true to
+avoid this.
+{{- end }}
+{{- if gt (((.Values.deployment).replicas) | default 1 | int) 1 }}
+
+WARNING: deployment.replicas is {{ ((.Values.deployment).replicas) | default 1 }}.
+FastMCP HTTP sessions and rate limits are process-local. FileTreeStore cannot
+share OAuth state across pods; this replica count is only valid behind an MCP
+gateway or OAuth proxy with persistence disabled. Switch
+deployment.strategy.type to RollingUpdate for a rolling HA rollout.
+{{- end }}

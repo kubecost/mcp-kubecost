@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 import os
+import secrets
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
 from urllib.parse import urlparse
+
+from cryptography.fernet import Fernet
 
 from mcp_kubecost.errors import ConfigError
 
@@ -43,6 +47,9 @@ class Settings:
     retry_count: int
     default_window: str
     log_level: str
+    rate_limit_requests_per_second: float
+    rate_limit_burst_capacity: int
+    max_concurrent_tool_calls: int
 
     # OIDC authentication (HTTP transport only)
     auth_mode: AuthMode
@@ -53,14 +60,26 @@ class Settings:
     oidc_base_url: str | None
     oidc_redirect_path: str
     oidc_required_scopes: list[str]
+    oidc_allowed_client_redirect_uris: list[str] | None
+    oidc_storage_path: str
+    oidc_jwt_signing_key: str | None
+    oidc_storage_encryption_key: str | None
+    oidc_ephemeral_keys: bool
 
     def to_loggable_dict(self) -> dict:
         """Return a copy of settings safe for logging (sensitive fields redacted)."""
         d = dataclasses.asdict(self)
+        # Key must match the dataclass field name exactly (dataclasses.asdict uses field names).
+        # The field is intentionally uppercase (KUBECOST_API_KEY) — do not rename without updating here.
         if d.get("KUBECOST_API_KEY") is not None:
             d["KUBECOST_API_KEY"] = "***"
-        if d.get("oidc_client_secret") is not None:
-            d["oidc_client_secret"] = "***"
+        for name in (
+            "oidc_client_secret",
+            "oidc_jwt_signing_key",
+            "oidc_storage_encryption_key",
+        ):
+            if d.get(name) is not None:
+                d[name] = "***"
         # Serialize auth_mode as its string value for readability
         d["auth_mode"] = self.auth_mode.value
         return d
@@ -178,7 +197,22 @@ def _get_oidc_scopes() -> list[str]:
     return [s.strip() for s in raw.split(",") if s.strip()]
 
 
+def _get_oidc_allowed_client_redirect_uris() -> list[str] | None:
+    """Parse an optional JSON allowlist for downstream MCP-client redirects."""
+    raw = os.getenv("OIDC_ALLOWED_CLIENT_REDIRECT_URIS", "").strip()
+    if not raw:
+        return None
+    try:
+        values = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConfigError("OIDC_ALLOWED_CLIENT_REDIRECT_URIS must be a JSON array of non-empty strings") from exc
+    if not isinstance(values, list) or not all(isinstance(value, str) and value.strip() for value in values):
+        raise ConfigError("OIDC_ALLOWED_CLIENT_REDIRECT_URIS must be a JSON array of non-empty strings")
+    return [value.strip() for value in values]
+
+
 _DEFAULT_OIDC_REDIRECT_PATH = "/auth-mcp"
+_DEFAULT_OIDC_STORAGE_PATH = "/var/lib/mcp-kubecost/oauth"
 
 
 def _get_oidc_redirect_path() -> str:
@@ -207,6 +241,39 @@ def _get_oidc_redirect_path() -> str:
     return path
 
 
+def _get_oidc_storage_path() -> str:
+    """Return the normalized absolute directory used for encrypted OAuth state.
+
+    Validation mirrors ``_get_oidc_redirect_path()``: reject ``..`` outright rather
+    than silently resolving it, then normalize so the stored value is stable
+    (no trailing slash, no ``.`` segments).
+
+    The nesting requirement is not cosmetic. ``build_oidc_provider()`` calls
+    ``shutil.rmtree()`` on this directory when the storage encryption key is
+    ephemeral, so a stray ``/`` or ``/var`` here would turn startup into a
+    destructive operation against the container filesystem.
+
+    Canonicalizing from segments rather than via ``os.path.normpath()`` is
+    deliberate: POSIX gives a leading ``//`` implementation-defined meaning and
+    ``normpath`` preserves it, so ``//var//lib//oauth`` would survive as
+    ``//var/lib/oauth``. ``..`` is rejected above rather than resolved, so there is
+    nothing left for ``normpath`` to do here.
+    """
+    raw = os.getenv("OIDC_STORAGE_PATH", _DEFAULT_OIDC_STORAGE_PATH).strip()
+    if not raw or not os.path.isabs(raw):
+        raise ConfigError(f"Invalid OIDC_STORAGE_PATH: {raw!r} (expected an absolute path)")
+    if ".." in raw:
+        raise ConfigError(f"Invalid OIDC_STORAGE_PATH: {raw!r} (must not contain '..')")
+    segments = [segment for segment in raw.split("/") if segment and segment != "."]
+    if len(segments) < 2:
+        raise ConfigError(
+            f"Invalid OIDC_STORAGE_PATH: {raw!r} "
+            f"(expected a nested directory such as {_DEFAULT_OIDC_STORAGE_PATH}, "
+            "not a filesystem root or top-level directory)"
+        )
+    return "/" + "/".join(segments)
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Load and cache settings from environment."""
@@ -220,6 +287,8 @@ def get_settings() -> Settings:
     oidc_client_secret: str | None = os.getenv("OIDC_CLIENT_SECRET", "").strip() or None
     oidc_audience: str | None = os.getenv("OIDC_AUDIENCE", "").strip() or None
     oidc_base_url: str | None = os.getenv("OIDC_BASE_URL", "").strip() or None
+    oidc_jwt_signing_key: str | None = os.getenv("OIDC_JWT_SIGNING_KEY", "").strip() or None
+    oidc_storage_encryption_key: str | None = os.getenv("OIDC_STORAGE_ENCRYPTION_KEY", "").strip() or None
 
     if auth_mode == AuthMode.OIDC:
         missing = []
@@ -234,6 +303,39 @@ def get_settings() -> Settings:
         if missing:
             raise ConfigError(f"AUTH_MODE={auth_mode.value} requires: {', '.join(missing)}")
 
+        if oidc_jwt_signing_key is not None and len(oidc_jwt_signing_key) < 32:
+            raise ConfigError("OIDC_JWT_SIGNING_KEY must be at least 32 characters")
+        if oidc_storage_encryption_key is not None:
+            try:
+                Fernet(oidc_storage_encryption_key.encode())
+            except Exception as exc:
+                raise ConfigError(
+                    "OIDC_STORAGE_ENCRYPTION_KEY is not a valid Fernet key "
+                    f"(expected a 32-byte URL-safe base64 string, e.g. from `python -c "
+                    f'"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`): {exc}'
+                ) from exc
+
+        # oidc_ephemeral_keys is not "did we generate any key" — it is "is the OAuth
+        # state on disk now unreadable". build_oidc_provider() rmtree()s the storage
+        # directory when it is True (see config/oidc.py), so only a key whose absence
+        # invalidates persisted state may set it.
+        ephemeral = False
+        if oidc_jwt_signing_key is None:
+            oidc_jwt_signing_key = secrets.token_hex(32)
+            # Deliberately does NOT set ephemeral. A fresh signing key only invalidates
+            # tokens already issued to clients; the encrypted client registrations on
+            # disk were never signed with it and stay readable. Keep them and let
+            # clients re-authorize — wiping them here would be an over-broad reaction.
+            logger.warning("OIDC_JWT_SIGNING_KEY is not set — using an ephemeral key")
+        if oidc_storage_encryption_key is None:
+            oidc_storage_encryption_key = Fernet.generate_key().decode()
+            # A new random Fernet key cannot decrypt state written under the previous
+            # one, so every read would fail. The directory has to be discarded.
+            ephemeral = True
+            logger.warning("OIDC_STORAGE_ENCRYPTION_KEY is not set — using an ephemeral key")
+    else:
+        ephemeral = False
+
     # AUTH_MODE=api_key is the same gate as REQUIRE_CLIENT_API_KEY=true.
     require_client_api_key = _get_bool_env("REQUIRE_CLIENT_API_KEY", False) or auth_mode == AuthMode.API_KEY
     request_timeout_seconds = _get_float_env("REQUEST_TIMEOUT_SECONDS", 15.0)
@@ -242,6 +344,15 @@ def get_settings() -> Settings:
     retry_count = _get_int_env("REQUEST_RETRY_COUNT", 2)
     if retry_count < 0:
         raise ConfigError("REQUEST_RETRY_COUNT must be 0 or greater")
+    rate_limit_requests_per_second = _get_float_env("MCP_RATE_LIMIT_REQUESTS_PER_SECOND", 10.0)
+    if rate_limit_requests_per_second <= 0:
+        raise ConfigError("MCP_RATE_LIMIT_REQUESTS_PER_SECOND must be greater than 0")
+    rate_limit_burst_capacity = _get_int_env("MCP_RATE_LIMIT_BURST_CAPACITY", 20)
+    if rate_limit_burst_capacity <= 0:
+        raise ConfigError("MCP_RATE_LIMIT_BURST_CAPACITY must be greater than 0")
+    max_concurrent_tool_calls = _get_int_env("MCP_MAX_CONCURRENT_TOOL_CALLS", 10)
+    if max_concurrent_tool_calls <= 0:
+        raise ConfigError("MCP_MAX_CONCURRENT_TOOL_CALLS must be greater than 0")
 
     return Settings(
         kubecost_base_url=kubecost_base_url,
@@ -253,6 +364,9 @@ def get_settings() -> Settings:
         retry_count=retry_count,
         default_window=os.getenv("DEFAULT_WINDOW", "15d").strip(),
         log_level=os.getenv("FASTMCP_LOG_LEVEL", "INFO").upper(),
+        rate_limit_requests_per_second=rate_limit_requests_per_second,
+        rate_limit_burst_capacity=rate_limit_burst_capacity,
+        max_concurrent_tool_calls=max_concurrent_tool_calls,
         use_cac_views=_get_bool_env("USE_CAC_VIEWS", False),
         auth_mode=auth_mode,
         oidc_issuer_url=oidc_issuer_url,
@@ -262,4 +376,9 @@ def get_settings() -> Settings:
         oidc_base_url=oidc_base_url,
         oidc_redirect_path=_get_oidc_redirect_path(),
         oidc_required_scopes=_get_oidc_scopes(),
+        oidc_allowed_client_redirect_uris=_get_oidc_allowed_client_redirect_uris(),
+        oidc_storage_path=_get_oidc_storage_path(),
+        oidc_jwt_signing_key=oidc_jwt_signing_key,
+        oidc_storage_encryption_key=oidc_storage_encryption_key,
+        oidc_ephemeral_keys=ephemeral,
     )
