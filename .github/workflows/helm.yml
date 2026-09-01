@@ -62,9 +62,7 @@ jobs:
             --set config.authMode=oidc \
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
-            --set config.oidc.clientSecret=y \
-            --set config.oidc.baseUrl=https://mcp.example.com/oauth/mcp \
-            --set config.oidc.resourceBaseUrl=https://mcp.example.com 2>&1); then
+            --set config.oidc.clientSecret=y 2>&1); then
             echo "expected helm template to fail with replicas>1 and authMode=oidc" >&2
             echo "$out" >&2
             exit 1
@@ -181,8 +179,6 @@ jobs:
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
             --set config.oidc.clientSecret=y \
-            --set config.oidc.baseUrl=https://mcp.example.com/oauth/mcp \
-            --set config.oidc.resourceBaseUrl=https://mcp.example.com \
             --set-string 'config.oidc.allowedClientRedirectUris=["http://localhost:*"\,"https://client.example/callback"]' \
             > .helm-render/mcp-kubecost-oidc-apikey.yaml
           grep -q 'AUTH_MODE: "oidc"' .helm-render/mcp-kubecost-oidc-apikey.yaml
@@ -200,8 +196,6 @@ jobs:
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
             --set config.oidc.clientSecret=y \
-            --set config.oidc.baseUrl=https://kubecost.example.com/oauth/mcp \
-            --set config.oidc.resourceBaseUrl=https://kubecost.example.com \
             > .helm-render/mcp-kubecost-oidc-subpath.yaml
           grep -q 'OIDC_BASE_URL: "https://kubecost.example.com/oauth/mcp"' .helm-render/mcp-kubecost-oidc-subpath.yaml
           grep -q 'OIDC_RESOURCE_BASE_URL: "https://kubecost.example.com"' .helm-render/mcp-kubecost-oidc-subpath.yaml
@@ -227,68 +221,6 @@ jobs:
             exit 1
           }
 
-      - name: Require resourceBaseUrl for OIDC (expect failure)
-        run: |
-          if out=$(helm template mcp-kubecost "$CHART_DIR" \
-            --namespace mcp-kubecost \
-            --set config.authMode=oidc \
-            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
-            --set config.oidc.clientId=x \
-            --set config.oidc.clientSecret=y \
-            --set config.oidc.baseUrl=https://kubecost.example.com/oauth/mcp 2>&1); then
-            echo "expected helm template to fail without config.oidc.resourceBaseUrl" >&2
-            echo "$out" >&2
-            exit 1
-          fi
-          echo "$out"
-          echo "$out" | grep -F -q 'config.oidc.resourceBaseUrl must be set' || {
-            echo "helm failed, but not because config.oidc.resourceBaseUrl was missing:" >&2
-            echo "$out" >&2
-            exit 1
-          }
-
-      - name: Render scheme-less baseUrl (expect failure)
-        run: |
-          if out=$(helm template mcp-kubecost "$CHART_DIR" \
-            --namespace mcp-kubecost \
-            --set config.authMode=oidc \
-            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
-            --set config.oidc.clientId=x \
-            --set config.oidc.clientSecret=y \
-            --set config.oidc.baseUrl=kubecost.example.com/oauth/mcp \
-            --set config.oidc.resourceBaseUrl=https://kubecost.example.com 2>&1); then
-            echo "expected helm template to fail with a scheme-less config.oidc.baseUrl" >&2
-            echo "$out" >&2
-            exit 1
-          fi
-          echo "$out"
-          echo "$out" | grep -F -q 'config.oidc.baseUrl must be set to an https://' || {
-            echo "helm failed, but not because config.oidc.baseUrl had no scheme:" >&2
-            echo "$out" >&2
-            exit 1
-          }
-
-      - name: Render scheme-less resourceBaseUrl (expect failure)
-        run: |
-          if out=$(helm template mcp-kubecost "$CHART_DIR" \
-            --namespace mcp-kubecost \
-            --set config.authMode=oidc \
-            --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
-            --set config.oidc.clientId=x \
-            --set config.oidc.clientSecret=y \
-            --set config.oidc.baseUrl=https://kubecost.example.com/oauth/mcp \
-            --set config.oidc.resourceBaseUrl=kubecost.example.com 2>&1); then
-            echo "expected helm template to fail with a scheme-less config.oidc.resourceBaseUrl" >&2
-            echo "$out" >&2
-            exit 1
-          fi
-          echo "$out"
-          echo "$out" | grep -F -q 'config.oidc.resourceBaseUrl must be set to the https://' || {
-            echo "helm failed, but not because config.oidc.resourceBaseUrl had no scheme:" >&2
-            echo "$out" >&2
-            exit 1
-          }
-
       # The issuer scheme rule mirrors the MCP SDK's validate_issuer_url:
       # https everywhere, with an http carve-out for localhost only.
       - name: Accept an http localhost issuer
@@ -299,8 +231,6 @@ jobs:
             --set config.oidc.issuerUrl=http://localhost:8080/realms/x/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
             --set config.oidc.clientSecret=y \
-            --set config.oidc.baseUrl=https://mcp.example.com/oauth/mcp \
-            --set config.oidc.resourceBaseUrl=https://mcp.example.com \
             > /dev/null
 
       - name: Render plaintext non-localhost issuer (expect failure)
@@ -310,9 +240,7 @@ jobs:
             --set config.authMode=oidc \
             --set config.oidc.issuerUrl=http://keycloak.keycloak.svc/realms/x/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
-            --set config.oidc.clientSecret=y \
-            --set config.oidc.baseUrl=https://mcp.example.com/oauth/mcp \
-            --set config.oidc.resourceBaseUrl=https://mcp.example.com 2>&1); then
+            --set config.oidc.clientSecret=y 2>&1); then
             echo "expected helm template to fail with a plaintext non-localhost issuerUrl" >&2
             echo "$out" >&2
             exit 1
