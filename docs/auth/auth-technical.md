@@ -86,7 +86,7 @@ location = /.well-known/oauth-authorization-server/oauth/mcp {
 
 If the deployed FastMCP version advertises an OpenID discovery fallback, route `/.well-known/openid-configuration/oauth/mcp` to its root `/.well-known/openid-configuration` route the same way. Keep Kubecost's existing `/auth`, `/login`, and `/oidc` routes unchanged.
 
-The exact nginx configuration belongs in the parent Kubecost chart because that chart owns the shared frontend. This repository's [plan.md](../../plan.md) describes the required parent-chart work.
+The exact nginx configuration belongs in the parent Kubecost chart because that chart owns the shared frontend.
 
 If the MCP has a dedicated hostname, use the same logical separation there. For example, `OIDC_RESOURCE_BASE_URL=https://mcp.example.com`, `MCP_HTTP_PATH=/mcp`, and `OIDC_BASE_URL=https://mcp.example.com/oauth/mcp`.
 

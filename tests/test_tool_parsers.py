@@ -98,6 +98,18 @@ class TestParseAllocationResponse:
         assert dims == []
         assert rows == []
 
+    def test_null_bucket_returns_empty(self):
+        dims, rows = _parse_allocation_response({"data": [None]})
+        assert dims == []
+        assert rows == []
+
+    def test_null_bucket_does_not_discard_valid_buckets(self, allocation_response_one_ns):
+        response = {**allocation_response_one_ns, "data": [None, *allocation_response_one_ns["data"]]}
+        dims, rows = _parse_allocation_response(response)
+        assert "cluster" in dims
+        assert "namespace" in dims
+        assert len(rows) == 1
+
     def test_single_entry_dimensions(self, allocation_response_one_ns):
         dims, rows = _parse_allocation_response(allocation_response_one_ns)
         assert "cluster" in dims
