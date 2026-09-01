@@ -298,13 +298,15 @@ def _parse_allocation_response(
     ``name`` — so synthetic entries such as ``__idle__``, whose ``properties`` are
     empty, still report their name instead of collapsing into a blank key.
     """
-    data_list: list[dict] = response.get("data", [])
-    if not data_list:
+    data = response.get("data")
+    if not isinstance(data, list):
         return [], []
 
     all_entries: list[dict] = []
-    for bucket in data_list:
-        all_entries.extend(bucket.values())
+    for bucket in data:
+        if not isinstance(bucket, dict):
+            continue
+        all_entries.extend(entry for entry in bucket.values() if isinstance(entry, dict))
 
     if not all_entries:
         return [], []

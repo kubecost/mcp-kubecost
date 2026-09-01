@@ -20,7 +20,6 @@ data:
   USE_CAC_VIEWS: {{ .Values.config.useCacViews | quote }}
   REQUIRE_CLIENT_API_KEY: {{ (or .Values.config.requireClientApiKey (eq .Values.config.authMode "api_key")) | quote }}
   MCP_SERVER_NAME: {{ .Values.config.mcpServerName | quote }}
-  MCP_HTTP_PATH: {{ include "mcp-kubecost.httpPath" . | quote }}
   FASTMCP_TELEMETRY_MODE: {{ .Values.config.telemetryMode | quote }}
   OTEL_SERVICE_NAME: {{ .Values.config.otelServiceName | quote }}
   OTEL_METRICS_EXPORTER: {{ .Values.config.otelMetricsExporter | quote }}
@@ -48,10 +47,7 @@ data:
   {{- if .Values.config.oidc.audience }}
   OIDC_AUDIENCE: {{ .Values.config.oidc.audience | quote }}
   {{- end }}
-  {{- if .Values.config.oidc.baseUrl }}
-  OIDC_BASE_URL: {{ .Values.config.oidc.baseUrl | quote }}
-  {{- end }}
-  OIDC_REDIRECT_PATH: {{ include "mcp-kubecost.oidcRedirectPath" . | quote }}
+  MCP_EXTERNAL_URL: {{ include "mcp-kubecost.externalUrl" . | quote }}
   {{- if .Values.config.oidc.requiredScopes }}
   OIDC_REQUIRED_SCOPES: {{ .Values.config.oidc.requiredScopes | quote }}
   {{- end }}

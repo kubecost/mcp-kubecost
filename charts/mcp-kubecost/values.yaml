@@ -118,13 +118,8 @@ httpRoute:
   # httpRoute.hostnames are the hostnames matched by the Gateway listener.
   hostnames:
     - mcp.example.com
-  # httpRoute.rules defines Gateway API matches, filters, timeouts, and backendRefs.
-  # If backendRefs is omitted from a rule, this chart routes it to its own Service.
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /
+  # The chart generates matches for /mcp, /oauth/mcp, and the required
+  # well-known discovery paths. Requests are forwarded without path rewrites.
 
 ingress:
   # ingress.enabled controls whether the legacy Kubernetes Ingress is rendered.
@@ -135,12 +130,10 @@ ingress:
   # ingress.annotations are annotations added to the Ingress.
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-http
-  # ingress.hosts configures hostnames and paths routed to the MCP server.
+  # ingress.hosts configures hostnames routed to the MCP server. The chart
+  # generates the same fixed paths as the HTTPRoute.
   hosts:
     - host: mcp.example.com
-      paths:
-        - path: /
-          pathType: Prefix
   # ingress.tls configures TLS secrets and their hostnames.
   tls:
     - secretName: kubecost-mcp-server-tls
@@ -255,12 +248,11 @@ config:
   logLevel: INFO
   # config.useCacViews enables Kubecost CAC views.
   useCacViews: false
-  # config.http.path is the route the MCP endpoint is served on inside the
-  # container (passed to `fastmcp run --path`). Leave empty to derive it:
-  # "/mcp" normally, or "/" when config.oidc.baseUrl carries a path prefix and
-  # a reverse proxy strips that prefix before requests arrive.
-  http:
-    path: ""
+  # config.externalUrl is the public origin of this MCP server, with no path.
+  # Required for OIDC unless the chart can infer it from exactly one enabled
+  # Ingress or HTTPRoute containing exactly one non-wildcard hostname.
+  # The fixed public URLs are /mcp and /oauth/mcp on this origin.
+  externalUrl: ""
 
   # Enable FastMCP's Host/Origin request guard. "auto" protects local binds and
   # activates strict checks when either allowlist below is configured.
@@ -298,19 +290,6 @@ config:
     issuerUrl: ""
     # config.oidc.audience is the token audience expected by the provider (optional).
     audience: ""
-    # config.oidc.baseUrl is this MCP server's public URL, not the identity provider's URL.
-    # FastMCP uses it to advertise OAuth metadata and construct the redirect URI that
-    # must be registered with the identity provider. Must be an https:// URL.
-    # Dedicated MCP hostname:        https://mcp.example.com
-    # Sub-path on a Kubecost host:   https://kubecost.example.com/mcp
-    # A path prefix moves FastMCP's whole advertised OAuth surface under it, and
-    # requires a reverse proxy that strips the prefix — the chart then derives
-    # config.http.path: "/" so the stripped paths resolve here.
-    baseUrl: ""
-    # config.oidc.redirectPath is the FastMCP OAuth callback path (OIDC_REDIRECT_PATH).
-    # The default /auth-mcp is for a sub-path on a Kubecost frontend (nginx
-    # owns /auth). Use /auth/callback when this server has a dedicated hostname.
-    redirectPath: "/auth-mcp"
     # config.oidc.requiredScopes is a comma-separated list of OAuth scopes to request.
     requiredScopes: "openid,profile"
     # Optional JSON array of allowed downstream MCP-client redirect URI patterns.

@@ -9,7 +9,7 @@ setting.
 
 This setting controls downstream MCP client callbacks. It does **not** replace
 or alter the upstream identity-provider callback:
-`{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}`.
+`{MCP_EXTERNAL_URL}/oauth/mcp/callback`, a fixed path.
 
 ## Intended behavior
 
@@ -103,7 +103,7 @@ Restricted allowlist.
   `Client registered with redirect_uri` logs, form the allowlist from real
   clients, configure it, then test each supported client.
 - [x] Preserve the guidance that only
-  `{OIDC_BASE_URL}{OIDC_REDIRECT_PATH}` is registered at the identity provider.
+  `{MCP_EXTERNAL_URL}/oauth/mcp/callback` is registered at the identity provider.
 - [x] Keep `docs/auth/oidc-client-sharing.md` focused on upstream IdP client
   callback registration; a cross-reference is not needed because the primary
   OIDC guide now distinguishes the two callback controls.

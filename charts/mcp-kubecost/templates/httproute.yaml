@@ -1,10 +1,4 @@
 {{- if .Values.httpRoute.enabled }}
-{{- $rules := deepCopy .Values.httpRoute.rules }}
-{{- range $rules }}
-  {{- if not (hasKey . "backendRefs") }}
-    {{- $_ := set . "backendRefs" (list (dict "name" (include "mcp-kubecost.fullname" $) "port" $.Values.service.port)) }}
-  {{- end }}
-{{- end }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -23,5 +17,23 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   rules:
-    {{- toYaml $rules | nindent 4 }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /mcp
+        - path:
+            type: PathPrefix
+            value: /oauth/mcp
+        - path:
+            type: Exact
+            value: /.well-known/oauth-protected-resource/mcp
+        - path:
+            type: Exact
+            value: /.well-known/oauth-authorization-server/oauth/mcp
+        - path:
+            type: Exact
+            value: /.well-known/openid-configuration/oauth/mcp
+      backendRefs:
+        - name: {{ include "mcp-kubecost.fullname" . }}
+          port: {{ .Values.service.port }}
 {{- end }}

@@ -167,8 +167,38 @@ class TestAuthModeSetting:
         "OIDC_ISSUER_URL": "https://idp.example/.well-known/openid-configuration",
         "OIDC_CLIENT_ID": "client",
         "OIDC_CLIENT_SECRET": "secret",
-        "OIDC_BASE_URL": "https://mcp.example",
+        "MCP_EXTERNAL_URL": "https://mcp.example",
     }
+
+    def test_oidc_requires_external_url(self, monkeypatch):
+        environment = {**self._OIDC_BASE}
+        environment.pop("MCP_EXTERNAL_URL")
+        with pytest.raises(ConfigError, match="MCP_EXTERNAL_URL"):
+            _load_settings(monkeypatch, **environment)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "kubecost.example.com",
+            "http://kubecost.example.com",
+            "https://kubecost.example.com/path",
+            "https://user@kubecost.example.com",
+            "https://kubecost.example.com?query=yes",
+            "https://kubecost.example.com#fragment",
+        ],
+    )
+    def test_oidc_external_url_must_be_a_secure_origin(self, monkeypatch, value):
+        with pytest.raises(ConfigError, match="MCP_EXTERNAL_URL"):
+            _load_settings(monkeypatch, **{**self._OIDC_BASE, "MCP_EXTERNAL_URL": value})
+
+    def test_oidc_external_url_drops_trailing_slash(self, monkeypatch):
+        settings = _load_settings(monkeypatch, **{**self._OIDC_BASE, "MCP_EXTERNAL_URL": "https://mcp.example/"})
+        assert settings.external_url == "https://mcp.example"
+
+    @pytest.mark.parametrize("value", ["http://localhost:3030", "http://127.0.0.1:3030"])
+    def test_oidc_external_url_allows_local_http(self, monkeypatch, value):
+        settings = _load_settings(monkeypatch, **{**self._OIDC_BASE, "MCP_EXTERNAL_URL": value})
+        assert settings.external_url == value
 
     def test_oidc_starts_without_durable_storage_secrets(self, monkeypatch):
         settings = _load_settings(monkeypatch, **self._OIDC_BASE)
@@ -242,7 +272,7 @@ class TestAuthModeSetting:
             OIDC_ISSUER_URL="https://idp.example/.well-known/openid-configuration",
             OIDC_CLIENT_ID="client",
             OIDC_CLIENT_SECRET="secret",
-            OIDC_BASE_URL="https://mcp.example",
+            MCP_EXTERNAL_URL="https://mcp.example",
             OIDC_JWT_SIGNING_KEY="j" * 32,
             OIDC_STORAGE_ENCRYPTION_KEY=Fernet.generate_key().decode(),
         )
@@ -307,54 +337,6 @@ class TestAuthModeSetting:
         get_settings.cache_clear()
         try:
             assert get_settings().require_client_api_key is True
-        finally:
-            get_settings.cache_clear()
-
-
-class TestOidcRedirectPathSetting:
-    def test_defaults_to_auth_mcp(self, monkeypatch):
-        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
-        monkeypatch.delenv("OIDC_REDIRECT_PATH", raising=False)
-        get_settings.cache_clear()
-        try:
-            assert get_settings().oidc_redirect_path == "/auth-mcp"
-        finally:
-            get_settings.cache_clear()
-
-    def test_reads_env_and_normalizes(self, monkeypatch):
-        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
-        monkeypatch.setenv("OIDC_REDIRECT_PATH", "auth/callback/")
-        get_settings.cache_clear()
-        try:
-            assert get_settings().oidc_redirect_path == "/auth/callback"
-        finally:
-            get_settings.cache_clear()
-
-    def test_rejects_url(self, monkeypatch):
-        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
-        monkeypatch.setenv("OIDC_REDIRECT_PATH", "https://mcp.example/auth-mcp")
-        get_settings.cache_clear()
-        try:
-            try:
-                get_settings()
-            except ConfigError as exc:
-                assert "OIDC_REDIRECT_PATH" in str(exc)
-            else:
-                raise AssertionError("expected ConfigError")
-        finally:
-            get_settings.cache_clear()
-
-    def test_rejects_dot_dot(self, monkeypatch):
-        monkeypatch.setenv("KUBECOST_BASE_URL", "http://localhost:9090")
-        monkeypatch.setenv("OIDC_REDIRECT_PATH", "/../auth-mcp")
-        get_settings.cache_clear()
-        try:
-            try:
-                get_settings()
-            except ConfigError as exc:
-                assert "OIDC_REDIRECT_PATH" in str(exc)
-            else:
-                raise AssertionError("expected ConfigError")
         finally:
             get_settings.cache_clear()
 
