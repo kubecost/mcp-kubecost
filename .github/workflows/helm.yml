@@ -179,7 +179,7 @@ jobs:
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
             --set config.oidc.clientId=x \
             --set config.oidc.clientSecret=y \
-            --set config.externalUrl: "https://kubecost.example.com" \
+            --set config.externalUrl="https://kubecost.example.com" \
             --set-string 'config.oidc.allowedClientRedirectUris=["http://localhost:*"\,"https://client.example/callback"]' \
             > .helm-render/mcp-kubecost-oidc-apikey.yaml
           grep -q 'AUTH_MODE: "oidc"' .helm-render/mcp-kubecost-oidc-apikey.yaml
