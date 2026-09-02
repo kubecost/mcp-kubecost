@@ -297,8 +297,8 @@ config:
     # clients. This does not configure the upstream IdP callback.
     # Example Restricted posture: '["http://localhost:*", "https://client.example/callback"]'
     allowedClientRedirectUris: ""
-    # config.oidc.clientId is the OIDC client ID. Prefer existingSecret for production.
-    clientId: ""
+    # config.oidc.clientID is the OIDC client ID. Prefer existingSecret for production.
+    clientID: ""
     # config.oidc.clientSecret is the OIDC client secret. Prefer existingSecret for production.
     clientSecret: ""
     # Optional — auto-generated as an ephemeral key at startup when unset. Set explicitly in

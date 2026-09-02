@@ -364,8 +364,8 @@ jwtSigningKey and storageEncryptionKey are included only when non-empty, matchin
 the conditional stringData entries in secret.yaml.
 */}}
 {{- define "mcp-kubecost.oidc-stringdata" -}}
-{{- if and .Values.config.oidc.clientId .Values.config.oidc.clientSecret (not .Values.config.oidc.existingSecret) -}}
-OIDC_CLIENT_ID={{ .Values.config.oidc.clientId }}
+{{- if and .Values.config.oidc.clientID .Values.config.oidc.clientSecret (not .Values.config.oidc.existingSecret) -}}
+OIDC_CLIENT_ID={{ .Values.config.oidc.clientID }}
 OIDC_CLIENT_SECRET={{ .Values.config.oidc.clientSecret }}
 {{- if .Values.config.oidc.jwtSigningKey }}
 OIDC_JWT_SIGNING_KEY={{ .Values.config.oidc.jwtSigningKey }}
@@ -389,10 +389,10 @@ behaviour from it.
 */}}
 {{- define "mcp-kubecost.validateOIDC" -}}
 {{- if eq (.Values.config.authMode | default "none") "oidc" -}}
-{{- $hasInline := and .Values.config.oidc.clientId .Values.config.oidc.clientSecret -}}
+{{- $hasInline := and .Values.config.oidc.clientID .Values.config.oidc.clientSecret -}}
 {{- $hasExisting := .Values.config.oidc.existingSecret -}}
 {{- if not (or $hasInline $hasExisting) -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: config.authMode is \"oidc\" but its durable OAuth secrets are incomplete.\n\nTo fix, choose one of:\n  Option A — set clientId and clientSecret (jwtSigningKey and storageEncryptionKey are optional; ephemeral keys are auto-generated when omitted).\n\n  Option B — reference a pre-existing Secret with keys OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, and optionally OIDC_JWT_SIGNING_KEY and OIDC_STORAGE_ENCRYPTION_KEY:\n    config.oidc.existingSecret: \"<secret-name>\"\n" -}}
+{{- fail "\n\nFAILURE [mcp-kubecost]: config.authMode is \"oidc\" but its durable OAuth secrets are incomplete.\n\nTo fix, choose one of:\n  Option A — set clientID and clientSecret (jwtSigningKey and storageEncryptionKey are optional; ephemeral keys are auto-generated when omitted).\n\n  Option B — reference a pre-existing Secret with keys OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, and optionally OIDC_JWT_SIGNING_KEY and OIDC_STORAGE_ENCRYPTION_KEY:\n    config.oidc.existingSecret: \"<secret-name>\"\n" -}}
 {{- end -}}
 {{- if and $hasInline .Values.config.oidc.jwtSigningKey -}}
 {{- if lt (len .Values.config.oidc.jwtSigningKey) 32 -}}
