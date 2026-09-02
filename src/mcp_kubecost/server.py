@@ -136,7 +136,7 @@ async def favicon_endpoint(_request: Request) -> Response:
     the request arrives before any OAuth flow completes.
 
     Content type is PNG despite the ``.ico`` path; browsers honour the header
-    rather than the extension. Not an MCP concern — clients read ``serverInfo.icons``.
+    rather than the extension. MCP clients do not use this route; they read ``serverInfo.icons``.
     """
     return Response(
         content=FAVICON_PNG,

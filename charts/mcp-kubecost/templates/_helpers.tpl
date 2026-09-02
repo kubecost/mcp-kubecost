@@ -377,9 +377,9 @@ OIDC_STORAGE_ENCRYPTION_KEY={{ .Values.config.oidc.storageEncryptionKey }}
 {{- end }}
 
 {{/*
-Fail when authMode is "oidc" but no OIDC credentials are configured, or when
-issuerUrl / baseUrl are missing or not https:// URLs. Not gated by
-skipSanityChecks — these are static value checks, not live Secret lookups.
+Validate the standalone chart's OIDC configuration. Credentials must come from
+exactly one source: a complete inline clientID/clientSecret pair or an
+existingSecret. Whitespace-only credential values are treated as unset.
 
 issuerUrl accepts http:// on localhost / 127.0.0.1 to mirror the MCP SDK's own
 validate_issuer_url rule; all other hosts require https://.
@@ -389,10 +389,16 @@ behaviour from it.
 */}}
 {{- define "mcp-kubecost.validateOIDC" -}}
 {{- if eq (.Values.config.authMode | default "none") "oidc" -}}
-{{- $hasInline := and .Values.config.oidc.clientID .Values.config.oidc.clientSecret -}}
-{{- $hasExisting := .Values.config.oidc.existingSecret -}}
+{{- $clientID := trim (.Values.config.oidc.clientID | default "") -}}
+{{- $clientSecret := trim (.Values.config.oidc.clientSecret | default "") -}}
+{{- $hasAnyInline := or (not (empty $clientID)) (not (empty $clientSecret)) -}}
+{{- $hasInline := and (not (empty $clientID)) (not (empty $clientSecret)) -}}
+{{- $hasExisting := not (empty (trim (.Values.config.oidc.existingSecret | default ""))) -}}
 {{- if not (or $hasInline $hasExisting) -}}
 {{- fail "\n\nFAILURE [mcp-kubecost]: config.authMode is \"oidc\" but its durable OAuth secrets are incomplete.\n\nTo fix, choose one of:\n  Option A — set clientID and clientSecret (jwtSigningKey and storageEncryptionKey are optional; ephemeral keys are auto-generated when omitted).\n\n  Option B — reference a pre-existing Secret with keys OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, and optionally OIDC_JWT_SIGNING_KEY and OIDC_STORAGE_ENCRYPTION_KEY:\n    config.oidc.existingSecret: \"<secret-name>\"\n" -}}
+{{- end -}}
+{{- if and $hasAnyInline $hasExisting -}}
+{{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.existingSecret cannot be combined with inline clientID or clientSecret values. Supply exactly one credential source so the active credentials are unambiguous.\n" -}}
 {{- end -}}
 {{- if and $hasInline .Values.config.oidc.jwtSigningKey -}}
 {{- if lt (len .Values.config.oidc.jwtSigningKey) 32 -}}

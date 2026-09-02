@@ -75,7 +75,7 @@ Restricted allowlist.
 
 - [x] Add `config.oidc.allowedClientRedirectUris: ""` to
   `charts/mcp-kubecost/values.yaml`, directly after `requiredScopes`.
-- [x] Document that an empty value is Open, it concerns MCP-client callbacks
+- [x] Document that an empty value is Open and governs MCP-client callbacks
   rather than the IdP callback, and a Restricted value is a JSON-array string.
 - [x] Provide the former localhost/Claude/ChatGPT patterns only as a commented
   example, never as the default policy.
