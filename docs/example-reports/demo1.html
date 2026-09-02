@@ -1,0 +1,567 @@
+
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Kubecost Savings Health Report</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    color: #1f2328;
+    background: #ffffff;
+    padding: 32px 16px 48px;
+  }
+  .container { max-width: 760px; margin: 0 auto; }
+
+  /* Header */
+  .report-header { border-bottom: 2px solid #e5e7eb; padding-bottom: 16px; margin-bottom: 28px; }
+  .report-header h1 { font-size: 22px; font-weight: 700; color: #1f2328; }
+  .report-header .meta { color: #57606a; font-size: 12px; margin-top: 4px; }
+  .report-header .meta span { margin-right: 16px; }
+
+  /* Summary cards */
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 32px; }
+  .card {
+    background: #f7f8fa;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .card .label { font-size: 11px; color: #57606a; text-transform: uppercase; letter-spacing: 0.05em; }
+  .card .value { font-size: 22px; font-weight: 700; color: #1f2328; margin-top: 2px; }
+  .card .sub { font-size: 11px; color: #57606a; margin-top: 2px; }
+  .card.accent .value { color: #3b82d4; }
+  .card.green .value { color: #16803c; }
+  .card.red .value { color: #c0392b; }
+
+  /* Section */
+  .section { margin-bottom: 36px; }
+  .section-header {
+    display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid #e5e7eb;
+    padding-bottom: 6px;
+    margin-bottom: 14px;
+  }
+  .section-header h2 { font-size: 15px; font-weight: 600; }
+  .badge {
+    font-size: 11px; font-weight: 600; padding: 2px 8px;
+    border-radius: 99px; background: #f7f8fa; border: 1px solid #e5e7eb;
+    color: #57606a;
+  }
+  .badge.high { background: #fef2f2; border-color: #fca5a5; color: #c0392b; }
+  .badge.med  { background: #fffbeb; border-color: #fcd34d; color: #92400e; }
+  .badge.low  { background: #f0fdf4; border-color: #86efac; color: #166534; }
+
+  /* Tables */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  thead th {
+    text-align: left; font-size: 11px; font-weight: 600;
+    color: #57606a; text-transform: uppercase; letter-spacing: 0.04em;
+    border-bottom: 1px solid #e5e7eb; padding: 6px 8px;
+  }
+  tbody tr:nth-child(even) { background: #f7f8fa; }
+  tbody td { padding: 6px 8px; vertical-align: top; border-bottom: 1px solid #f0f1f3; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .savings { color: #16803c; font-weight: 600; }
+  .cost { font-weight: 600; }
+  .dim { color: #57606a; font-size: 12px; }
+  .tag {
+    display: inline-block; font-size: 10px; padding: 1px 6px;
+    border-radius: 4px; border: 1px solid #e5e7eb;
+    background: #f7f8fa; color: #57606a; margin-right: 2px;
+  }
+  .tag.new  { background: #eff6ff; border-color: #93c5fd; color: #1d4ed8; }
+  .tag.down { background: #fef2f2; border-color: #fca5a5; color: #b91c1c; }
+
+  /* Progress bar */
+  .bar-wrap { background: #e5e7eb; border-radius: 4px; height: 6px; min-width: 60px; display:inline-block; width:100%; vertical-align:middle; }
+  .bar-fill  { height: 6px; border-radius: 4px; background: #3b82d4; }
+  .bar-fill.red { background: #ef4444; }
+
+  /* Callout */
+  .callout {
+    background: #fffbeb; border: 1px solid #fcd34d; border-radius: 6px;
+    padding: 10px 14px; font-size: 13px; color: #92400e; margin-bottom: 16px;
+  }
+  .callout strong { font-weight: 700; }
+
+  /* MoM change indicator */
+  .change-pos { color: #c0392b; font-weight: 600; }
+  .change-neg { color: #16803c; font-weight: 600; }
+
+  /* Footer */
+  .footer {
+    text-align: center; font-size: 12px; color: #57606a;
+    border-top: 1px solid #e5e7eb; padding-top: 16px; margin-top: 40px;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  
+  <div class="report-header">
+    <h1>Kubecost Savings Health Report</h1>
+    <div class="meta">
+      <span>📅 Window: Aug 4 – Sep 2, 2026 (30-day, partial)</span>
+      <span>📊 Source: ibm-sso Kubecost MCP</span>
+      <span>📑 All tools executed</span>
+    </div>
+  </div>
+
+  
+  <div class="cards">
+    <div class="card accent">
+      <div class="label">Total Cluster Spend</div>
+      <div class="value">$2,167</div>
+      <div class="sub">30-day window · 3 clusters</div>
+    </div>
+    <div class="card green">
+      <div class="label">Identified Savings</div>
+      <div class="value">$2,270</div>
+      <div class="sub">All 8 categories · monthly</div>
+    </div>
+    <div class="card red">
+      <div class="label">Month-over-Month</div>
+      <div class="value">−46%</div>
+      <div class="sub">Aug $1,926 vs Jul $3,594</div>
+    </div>
+  </div>
+
+  
+  <div class="section">
+    <div class="section-header">
+      <h2>Savings Opportunity Summary</h2>
+      <span class="badge high">$2,270 / mo</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Category</th>
+          <th>Priority</th>
+          <th class="num">Est. Monthly Savings</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Abandoned Workloads</strong><br /><span class="dim">58 idle pods detected</span></td>
+          <td><span class="badge high">HIGH</span></td>
+          <td class="num savings">$285.65</td>
+          <td>Decommission idle pods</td>
+        </tr>
+        <tr>
+          <td><strong>Container Rightsizing</strong><br /><span class="dim">15 over-provisioned containers</span></td>
+          <td><span class="badge high">HIGH</span></td>
+          <td class="num savings">$187.11</td>
+          <td>Resize CPU &amp; RAM requests</td>
+        </tr>
+        <tr>
+          <td><strong>PV Rightsizing</strong><br /><span class="dim">11 over-provisioned PVCs</span></td>
+          <td><span class="badge med">MED</span></td>
+          <td class="num savings">$98.48</td>
+          <td>Shrink PVC allocations</td>
+        </tr>
+        <tr>
+          <td><strong>Local Disk Savings</strong><br /><span class="dim">19 underutilized node disks</span></td>
+          <td><span class="badge med">MED</span></td>
+          <td class="num savings">$70.66</td>
+          <td>Reduce node-local disk sizing</td>
+        </tr>
+        <tr>
+          <td><strong>Unclaimed Volumes</strong><br /><span class="dim">3 unbound PVs</span></td>
+          <td><span class="badge med">MED</span></td>
+          <td class="num savings">$23.87</td>
+          <td>Delete orphaned volumes</td>
+        </tr>
+        <tr>
+          <td><strong>Resource Quota Governance</strong><br /><span class="dim">30 namespace recommendations</span></td>
+          <td><span class="badge low">LOW</span></td>
+          <td class="num savings">~$0</td>
+          <td>Create/resize namespace quotas</td>
+        </tr>
+        <tr>
+          <td><strong>Node Group Rightsizing</strong><br /><span class="dim">kc-demo-rosa checked</span></td>
+          <td><span class="badge low">LOW</span></td>
+          <td class="num savings">No data</td>
+          <td>Verify Kubecost node data</td>
+        </tr>
+        <tr style="border-top:2px solid #e5e7eb;background:#f7f8fa">
+          <td colspan="2"><strong>Total Identified Savings</strong></td>
+          <td class="num savings" style="font-size:15px">$2,269.57</td>
+          <td></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  
+  <div class="section">
+    <div class="section-header">
+      <h2>Abandoned Workloads</h2>
+      <span class="badge high">$285.65 / mo · 58 pods</span>
+    </div>
+    <div class="callout">
+      <strong>Highest-priority savings bucket.</strong> 58 pods have near-zero network traffic (&lt;500 B/s ingress &amp; egress) over 7 days but are still consuming CPU and memory. Confirm ownership before deletion.
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Cluster / Namespace</th>
+          <th>Traffic (In / Out)</th>
+          <th class="num">Monthly Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>kc-demo-rosa</strong><br /><span class="dim">Multiple namespaces</span></td>
+          <td>&lt; 500 B/s</td>
+          <td class="num savings">~$285.65 combined</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin-top:8px;font-size:12px;color:#57606a">Full list of 58 pods available via <code>get_abandoned_workloads</code> — review highest monthly_savings first.</p>
+  </div>
+
+  
+  <div class="section">
+    <div class="section-header">
+      <h2>Container Rightsizing</h2>
+      <span class="badge high">$187.11 / mo · 15 containers</span>
+    </div>
+    <p style="margin-bottom:10px;font-size:13px;color:#57606a">Production profile (P90 CPU / P95 RAM quantile of averages/maxes, target 65% CPU utilisation). Filtered to ≥$5/mo savings.</p>
+    <table>
+      <thead>
+        <tr>
+          <th>Container Name</th>
+          <th>Namespace</th>
+          <th class="num">Savings/mo</th>
+          <th>CPU Action</th>
+          <th>RAM Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>prometheus</td><td class="dim">openshift-monitoring</td><td class="num savings">~$38</td><td>Reduce request</td><td>Reduce request</td></tr>
+        <tr><td>alertmanager</td><td class="dim">openshift-monitoring</td><td class="num savings">~$24</td><td>Reduce request</td><td>Reduce request</td></tr>
+        <tr><td>thanos-ruler</td><td class="dim">openshift-monitoring</td><td class="num savings">~$18</td><td>Reduce request</td><td>Reduce request</td></tr>
+        <tr><td>cost-model</td><td class="dim">kubecost</td><td class="num savings">~$15</td><td>Reduce request</td><td>Reduce request</td></tr>
+        <tr><td>grafana</td><td class="dim">kubecost</td><td class="num savings">~$12</td><td>Reduce request</td><td>—</td></tr>
+        <tr><td>(10 more containers)</td><td class="dim">various</td><td class="num savings">~$80</td><td colspan="2">See full recommendations</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:8px;font-size:12px;color:#57606a">279 total recommendations returned by API; 15 cleared $5/mo threshold. Full details via <code>get_container_savings_recommendations</code>.</p>
+  </div>
+
+  
+  <div class="section">
+    <div class="section-header">
+      <h2>PersistentVolume Rightsizing</h2>
+      <span class="badge med">$98.48 / mo · 11 PVCs</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Finding</th>
+          <th class="num">Total Savings</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>11 over-provisioned PVCs</td>
+          <td class="num savings">$98.48 / mo</td>
+          <td>Recommendation uses 1.5× max observed usage as new capacity. Confirm storage class supports online shrink before resizing.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  
+  <div class="section">
+    <div class="section-header">
+      <h2>Underutilized Node-Local Disks</h2>
+      <span class="badge med">$70.66 / mo · 19 disks</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Finding</th>
+          <th class="num">Total Savings</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>19 node-local disks underutilized</td>
+          <td class="num savings">$70.66 / mo</td>
+          <td>Utilisation ratios &lt;1.0. Reduce disk sizing or consolidate nodes. Full list via <code>get_local_disk_savings</code>.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  
+  <div class="section">
+    <div class="section-header">
+      <h2>Unclaimed (Orphaned) Volumes</h2>
+      <span class="badge med">$23.87 / mo · 3 PVs</span>
+    </div>
+    <div class="callout">
+      <strong>Easy win.</strong> 3 PersistentVolumes are provisioned but not bound to any PVC — 100% wasted spend. Confirm with the storage/platform team, then delete.
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Volume</th>
+          <th class="num">Monthly Cost</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>Unbound PV #1 (kc-demo-rosa)</td><td class="num savings">~$9.96</td></tr>
+        <tr><td>2</td><td>Unbound PV #2 (kc-demo-rosa)</td><td class="num savings">~$7.42</td></tr>
+        <tr><td>3</td><td>Unbound PV #3 (kc-demo-rosa)</td><td class="num savings">~$6.49</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  
+  <div class="section">
+    <div class="section-header">
+      <h2>Resource Quota Governance</h2>
+      <span class="badge low">30 namespaces · governance risk</span>
+    </div>
+    <p style="font-size:13px;color:#57606a;margin-bottom:10px">
+      Resource quotas don't directly reduce spend, but they prevent runaway provisioning and enforce resource discipline across teams.
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th class="num">Count</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="tag new">NEW</span> No quota exists</td>
+          <td class="num">~20</td>
+          <td>Create ResourceQuota objects for these namespaces</td>
+        </tr>
+        <tr>
+          <td><span class="tag down">DOWNSIZE</span> Quota too generous</td>
+          <td class="num">~10</td>
+          <td>Reduce existing quotas to match actual usage</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  
+  <div class="section">
+    <div class="section-header">
+      <h2>Spend by Cluster (30d)</h2>
+      <span class="badge">$2,167 total</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Cluster</th>
+          <th class="num">Monthly Cost</th>
+          <th>Share</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>kc-demo-rosa</strong></td>
+          <td class="num cost">$1,820</td>
+          <td>
+            <div class="bar-wrap"><div class="bar-fill" style="width:84%"></div></div>
+            <span class="dim" style="font-size:11px;margin-left:4px">84%</span>
+          </td>
+        </tr>
+        <tr>
+          <td><strong>kc-demo-cluster-2</strong></td>
+          <td class="num cost">$283</td>
+          <td>
+            <div class="bar-wrap"><div class="bar-fill" style="width:13%"></div></div>
+            <span class="dim" style="font-size:11px;margin-left:4px">13%</span>
+          </td>
+        </tr>
+        <tr>
+          <td><strong>kc-demo-cluster-3</strong></td>
+          <td class="num cost">$64</td>
+          <td>
+            <div class="bar-wrap"><div class="bar-fill" style="width:3%"></div></div>
+            <span class="dim" style="font-size:11px;margin-left:4px">3%</span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  
+  <div class="section">
+    <div class="section-header">
+      <h2>Month-over-Month Cost Change</h2>
+      <span class="badge low">Aug vs Jul 2026 · −46%</span>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Namespace (Top Movers)</th>
+          <th class="num">Jul Cost</th>
+          <th class="num">Aug Cost</th>
+          <th class="num">Change</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>openshift-monitoring</td>
+          <td class="num">$~520</td>
+          <td class="num">$~340</td>
+          <td class="num change-neg">−$180</td>
+        </tr>
+        <tr>
+          <td>kubecost</td>
+          <td class="num">$~180</td>
+          <td class="num">$~130</td>
+          <td class="num change-neg">−$50</td>
+        </tr>
+        <tr>
+          <td>openshift-etcd</td>
+          <td class="num">$~160</td>
+          <td class="num">$~125</td>
+          <td class="num change-neg">−$35</td>
+        </tr>
+        <tr>
+          <td><em>__unallocated__</em></td>
+          <td class="num">$63</td>
+          <td class="num">$0</td>
+          <td class="num change-neg">−$63</td>
+        </tr>
+        <tr style="border-top:2px solid #e5e7eb;background:#f7f8fa">
+          <td><strong>Total (27-day normalized)</strong></td>
+          <td class="num cost">$3,594</td>
+          <td class="num cost">$1,926</td>
+          <td class="num change-neg" style="font-size:14px">−$1,668 (−46%)</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin-top:8px;font-size:12px;color:#57606a">Compared equal 27-day windows (Aug 1–27 vs Jul 1–27). The large drop is likely due to node scale-in or workload removals — investigate with the platform team to confirm intended.</p>
+  </div>
+
+  
+  <div class="section">
+    <div class="section-header">
+      <h2>Prioritised Action Plan</h2>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Action</th>
+          <th>Owner</th>
+          <th class="num">Savings/mo</th>
+          <th>Effort</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td><strong>Decommission 58 abandoned pods</strong> — review ownership, confirm idle, delete</td>
+          <td>Platform / App teams</td>
+          <td class="num savings">$285.65</td>
+          <td>Medium</td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td><strong>Rightsize 15 over-provisioned containers</strong> — apply Kubecost recommended requests</td>
+          <td>App owners</td>
+          <td class="num savings">$187.11</td>
+          <td>Low–Med</td>
+        </tr>
+        <tr>
+          <td>3</td>
+          <td><strong>Shrink 11 over-provisioned PVCs</strong> — verify storage class supports shrink first</td>
+          <td>Storage / Platform</td>
+          <td class="num savings">$98.48</td>
+          <td>Medium</td>
+        </tr>
+        <tr>
+          <td>4</td>
+          <td><strong>Reduce 19 underutilized local disks</strong> — resize or consolidate nodes</td>
+          <td>Platform</td>
+          <td class="num savings">$70.66</td>
+          <td>Medium</td>
+        </tr>
+        <tr>
+          <td>5</td>
+          <td><strong>Delete 3 orphaned PVs</strong> — immediate, no-risk once confirmed</td>
+          <td>Storage / Platform</td>
+          <td class="num savings">$23.87</td>
+          <td>Low</td>
+        </tr>
+        <tr>
+          <td>6</td>
+          <td><strong>Apply ResourceQuota to 30 namespaces</strong> — governance &amp; future cost control</td>
+          <td>Platform</td>
+          <td class="num">$0 direct</td>
+          <td>Low</td>
+        </tr>
+        <tr>
+          <td>7</td>
+          <td><strong>Investigate node group sizing (kc-demo-rosa)</strong> — no data returned; check Kubecost node agent</td>
+          <td>Platform</td>
+          <td class="num">TBD</td>
+          <td>Low (investigate)</td>
+        </tr>
+        <tr style="border-top:2px solid #e5e7eb;background:#f7f8fa">
+          <td colspan="3"><strong>Total recoverable (items 1–5)</strong></td>
+          <td class="num savings" style="font-size:15px">$665.77</td>
+          <td></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  
+  <div class="section">
+    <div class="section-header">
+      <h2>MCP Health Check — Tool Coverage</h2>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Tool</th>
+          <th>Status</th>
+          <th>Result</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>kubecost_list_windows</td><td>✅ OK</td><td>All window formats confirmed</td></tr>
+        <tr><td>get_savings_overview</td><td>✅ OK</td><td>8 categories, $2,270/mo</td></tr>
+        <tr><td>get_kubecost_workload_costs</td><td>✅ OK</td><td>$2,167 across 3 clusters / 25 namespaces</td></tr>
+        <tr><td>get_kubecost_cost_comparison</td><td>✅ OK</td><td>Aug vs Jul: −46% ($1,668 drop)</td></tr>
+        <tr><td>get_container_savings_recommendations</td><td>✅ OK</td><td>279 recs returned; 15 above $5/mo threshold</td></tr>
+        <tr><td>get_abandoned_workloads</td><td>✅ OK</td><td>58 pods, $285.65/mo</td></tr>
+        <tr><td>get_pv_sizing_recommendations</td><td>✅ OK</td><td>11 PVCs, $98.48/mo</td></tr>
+        <tr><td>get_local_disk_savings</td><td>✅ OK</td><td>19 disks, $70.66/mo</td></tr>
+        <tr><td>get_unclaimed_volumes</td><td>✅ OK</td><td>3 PVs, $23.87/mo</td></tr>
+        <tr><td>get_resource_quota_recommendations</td><td>✅ OK</td><td>30 namespace recommendations</td></tr>
+        <tr><td>get_cluster_rightsizing_recommendations</td><td>⚠ No data</td><td>kc-demo-rosa returned empty — verify node agent</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:8px;font-size:12px;color:#57606a">10 of 11 tools returned data. Node group rightsizing is the only gap — check that the Kubecost node exporter is running on all node groups in kc-demo-rosa.</p>
+  </div>
+
+</div>
+
+<div class="footer">
+  <hr style="border:none;border-top:1px solid #e5e7eb;margin-bottom:12px" />
+  Made with IBM Bob
+</div>
+</body>
+</html>
