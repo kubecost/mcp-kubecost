@@ -309,6 +309,7 @@ FASTMCP_LOG_LEVEL={{ .Values.config.logLevel | upper | quote }}
 FASTMCP_ENABLE_RICH_LOGGING="false"
 FASTMCP_SHOW_SERVER_BANNER="false"
 USE_CAC_VIEWS={{ .Values.config.useCacViews | quote }}
+MCP_LEGACY_TEXT_CONTENT={{ .Values.config.legacyTextContent | quote }}
 REQUIRE_CLIENT_API_KEY={{ (or .Values.config.requireClientApiKey (eq .Values.config.authMode "api_key")) | quote }}
 MCP_SERVER_NAME={{ .Values.config.mcpServerName | quote }}
 FASTMCP_TELEMETRY_MODE={{ .Values.config.telemetryMode | quote }}

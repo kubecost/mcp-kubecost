@@ -48,6 +48,7 @@ _SETTINGS: dict[str, Any] = dict(
     KUBECOST_API_KEY=None,
     require_client_api_key=False,
     use_cac_views=False,
+    legacy_text_content=False,
     ssl_verify=True,
     request_timeout_seconds=15.0,
     retry_count=2,

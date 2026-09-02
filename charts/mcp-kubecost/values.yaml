@@ -249,6 +249,10 @@ config:
   logLevel: INFO
   # config.useCacViews enables Kubecost CAC views.
   useCacViews: false
+  # config.legacyTextContent restores the full JSON payload in each tool
+  # result's text content, duplicating structuredContent. Leave false unless
+  # a client cannot read structuredContent; true roughly doubles token usage.
+  legacyTextContent: false
   # config.externalUrl is the public origin of this MCP server, with no path.
   # Required for OIDC unless the chart can infer it from exactly one enabled
   # Ingress or HTTPRoute containing exactly one non-wildcard hostname.

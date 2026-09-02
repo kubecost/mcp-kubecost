@@ -124,6 +124,19 @@ class TestRequestSettings:
         assert result.stdout.strip() == "30d"
 
 
+class TestLegacyTextContentSetting:
+    def test_defaults_to_false(self, monkeypatch):
+        assert _load_settings(monkeypatch).legacy_text_content is False
+
+    @pytest.mark.parametrize(("value", "expected"), [("true", True), ("yes", True), ("false", False), ("0", False)])
+    def test_parses_boolean_values(self, monkeypatch, value, expected):
+        assert _load_settings(monkeypatch, MCP_LEGACY_TEXT_CONTENT=value).legacy_text_content is expected
+
+    def test_rejects_invalid_value(self, monkeypatch):
+        with pytest.raises(ConfigError, match="Invalid boolean for MCP_LEGACY_TEXT_CONTENT"):
+            _load_settings(monkeypatch, MCP_LEGACY_TEXT_CONTENT="maybe")
+
+
 class TestRequestLimitSettings:
     def test_defaults(self, monkeypatch):
         settings = _load_settings(monkeypatch)

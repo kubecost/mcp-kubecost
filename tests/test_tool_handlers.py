@@ -12,10 +12,11 @@ import re
 from datetime import UTC
 
 import pytest
-from fastmcp import FastMCP
+from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError as FastMcpToolError
 from pytest_httpx import HTTPXMock
 
+from mcp_kubecost.middleware import TextContentSummaryMiddleware
 from mcp_kubecost.tools.kubecost_tools import (
     _default_wow_windows,
     _diff_allocation_rows,
@@ -60,6 +61,47 @@ def mcp_app() -> FastMCP:
     app = FastMCP("test-kubecost")
     register_kubecost_tools(app)
     return app
+
+
+# ── text content vs structuredContent (through middleware) ───────────────────
+
+
+class TestTextContentSummary:
+    """End-to-end shape of a tool call as a client sees it.
+
+    Every other test here calls ``tool.run()``, which bypasses middleware. These
+    go through a real client round-trip so ``TextContentSummaryMiddleware`` is in
+    the path. ``kubecost_list_windows`` needs no HTTP stub.
+    """
+
+    @staticmethod
+    def _app(legacy_text_content: bool) -> FastMCP:
+        app = FastMCP("test-kubecost-text")
+        register_kubecost_tools(app)
+        app.add_middleware(TextContentSummaryMiddleware(legacy_text_content))
+        return app
+
+    @pytest.mark.asyncio
+    async def test_text_is_a_summary_and_structured_content_is_complete(self):
+        async with Client(self._app(legacy_text_content=False)) as client:
+            result = await client.call_tool("kubecost_list_windows", {})
+
+        assert len(result.content) == 1
+        text = result.content[0].text
+        assert text.startswith("Here is a list of possible time window formats")
+        assert "structuredContent" in text
+        # The payload itself must not be duplicated into the text block.
+        assert "lastmonth" not in text
+        assert len(result.structured_content["windows"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_legacy_flag_restores_full_json_text(self):
+        async with Client(self._app(legacy_text_content=True)) as client:
+            result = await client.call_tool("kubecost_list_windows", {})
+
+        text = result.content[0].text
+        assert "lastmonth" in text
+        assert len(result.structured_content["windows"]) > 0
 
 
 # ── kubecost_list_windows (no HTTP) ──────────────────────────────────────────
