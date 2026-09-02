@@ -16,6 +16,8 @@ The recommended public layout keeps the protected resource stable and gives OAut
 | Protected-resource metadata | `https://kubecost.example.com/.well-known/oauth-protected-resource/mcp` |
 | Authorization-server metadata | `https://kubecost.example.com/.well-known/oauth-authorization-server/oauth/mcp` |
 
+The server also answers the three bare root paths — `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server`, and `/.well-known/openid-configuration` — with the same documents. These are not advertised anywhere. They exist for clients that never learn the path-aware URL, typically because the `WWW-Authenticate: Bearer resource_metadata=...` header on the 401 was dropped by an intermediary. Without them such a client probes the root, gets a 404, and falls back to the MCP SDK's default endpoints (`/authorize`, `/token`, `/register`) — paths this server does not mount, so the flow dead-ends on a 404 at `/authorize`.
+
 This follows the path-aware discovery forms in [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728.html) and [RFC 8414](https://www.rfc-editor.org/rfc/rfc8414.html), as required by the [MCP authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization).
 
 The corresponding setting is:
@@ -82,6 +84,27 @@ location = /.well-known/oauth-authorization-server/oauth/mcp {
 
 # OIDC-style discovery alias, same metadata.
 location = /.well-known/openid-configuration/oauth/mcp {
+    proxy_pass http://mcp-kubecost.mcp-kubecost.svc.cluster.local:3030;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+# Root-probe fallbacks for clients that lost the resource_metadata hint.
+# Optional on a shared hostname, and only safe while nothing else on that
+# hostname serves these paths — forwarding them would shadow it.
+location = /.well-known/oauth-protected-resource {
+    proxy_pass http://mcp-kubecost.mcp-kubecost.svc.cluster.local:3030;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location = /.well-known/oauth-authorization-server {
+    proxy_pass http://mcp-kubecost.mcp-kubecost.svc.cluster.local:3030;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+
+location = /.well-known/openid-configuration {
     proxy_pass http://mcp-kubecost.mcp-kubecost.svc.cluster.local:3030;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-Proto $scheme;

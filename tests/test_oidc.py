@@ -175,7 +175,10 @@ class TestFixedPublicRoutes:
         assert [route.path for route in routes] == [
             "/.well-known/oauth-authorization-server/oauth/mcp",
             "/.well-known/openid-configuration/oauth/mcp",
+            "/.well-known/oauth-authorization-server",
+            "/.well-known/openid-configuration",
             "/.well-known/oauth-protected-resource/mcp",
+            "/.well-known/oauth-protected-resource",
             "/oauth/mcp/authorize",
             "/oauth/mcp/token",
             "/oauth/mcp/register",
@@ -183,6 +186,25 @@ class TestFixedPublicRoutes:
             "/oauth/mcp/callback",
             "/oauth/mcp/consent",
         ]
+
+    def test_root_aliases_serve_the_same_documents(self):
+        """A root probe must get the real endpoints, not a 404 that sends the
+        client on to the MCP SDK's default `/authorize`, which is not mounted."""
+        parent_routes = [
+            Route("/.well-known/oauth-authorization-server", self._endpoint, methods=["GET"]),
+            Route("/.well-known/oauth-protected-resource/mcp", self._endpoint, methods=["GET"]),
+        ]
+        proxy = _uninitialized_proxy()
+
+        with patch.object(OIDCProxy, "get_routes", return_value=parent_routes):
+            by_path = {route.path: route for route in proxy.get_routes(MCP_PATH)}
+
+        for alias, advertised in (
+            ("/.well-known/oauth-authorization-server", "/.well-known/oauth-authorization-server/oauth/mcp"),
+            ("/.well-known/openid-configuration", "/.well-known/openid-configuration/oauth/mcp"),
+            ("/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp"),
+        ):
+            assert by_path[alias].endpoint is by_path[advertised].endpoint
 
     def test_rejects_a_different_mcp_path(self):
         proxy = _uninitialized_proxy()
