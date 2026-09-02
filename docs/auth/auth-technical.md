@@ -123,6 +123,7 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 | Environment variable | Helm value | Role |
 | --- | --- | --- |
 | `AUTH_MODE` | `config.authMode` | `none`, `open`, `oidc`, or `api_key` |
+| `KUBECOST_API_KEY` | `kubecostApiKey` | Outbound Kubecost API key (`value` or `existingSecret`) |
 | `OIDC_ISSUER_URL` | `config.oidc.issuerUrl` | Upstream provider discovery URL |
 | `OIDC_CLIENT_ID` | `config.oidc.clientID` or Secret | Upstream confidential client ID |
 | `OIDC_CLIENT_SECRET` | `config.oidc.clientSecret` or Secret | Upstream confidential client secret |

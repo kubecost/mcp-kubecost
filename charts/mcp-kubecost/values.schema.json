@@ -217,16 +217,6 @@
         "kubecostApiBaseUrl": { "type": "string", "pattern": "^https?://[^:/?#]+$" },
         "kubecostApiPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "kubecostApiBasePath": { "type": "string", "pattern": "^/" },
-        "kubecostApiKey": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "value": { "type": "string" },
-            "existingSecret": { "type": "string" },
-            "key": { "type": "string", "minLength": 1 }
-          },
-          "required": ["value", "existingSecret", "key"]
-        },
         "requestTimeoutSeconds": { "type": "number", "exclusiveMinimum": 0 },
         "requestRetryCount": { "type": "integer", "minimum": 0 },
         "rateLimitRequestsPerSecond": { "type": "number", "exclusiveMinimum": 0 },
@@ -281,7 +271,17 @@
           }
         }
       },
-      "required": ["authMode", "kubecostApiBaseUrl", "kubecostApiPort", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "rateLimitRequestsPerSecond", "rateLimitBurstCapacity", "maxConcurrentToolCalls", "defaultWindow", "logLevel", "useCacViews", "requireClientApiKey", "externalUrl", "fastmcpHttpHostOriginProtection", "fastmcpHttpAllowedHosts", "fastmcpHttpAllowedOrigins", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "ssl", "oidc"]
+      "required": ["authMode", "kubecostApiBaseUrl", "kubecostApiPort", "kubecostApiBasePath", "requestTimeoutSeconds", "requestRetryCount", "rateLimitRequestsPerSecond", "rateLimitBurstCapacity", "maxConcurrentToolCalls", "defaultWindow", "logLevel", "useCacViews", "requireClientApiKey", "externalUrl", "fastmcpHttpHostOriginProtection", "fastmcpHttpAllowedHosts", "fastmcpHttpAllowedOrigins", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "ssl", "oidc"]
+    },
+    "kubecostApiKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "value": { "type": "string" },
+        "existingSecret": { "type": "string" },
+        "key": { "type": "string", "minLength": 1 }
+      },
+      "required": ["value", "existingSecret", "key"]
     },
     "nodeSelector": { "type": "object" },
     "tolerations": { "type": "array" },
@@ -289,8 +289,8 @@
   },
   "allOf": [
     {
-      "if": { "properties": { "config": { "properties": { "kubecostApiKey": { "properties": { "existingSecret": { "minLength": 1 } } } } } } },
-      "then": { "properties": { "config": { "properties": { "kubecostApiKey": { "properties": { "value": { "maxLength": 0 } } } } } } }
+      "if": { "properties": { "kubecostApiKey": { "properties": { "existingSecret": { "minLength": 1 } } } } },
+      "then": { "properties": { "kubecostApiKey": { "properties": { "value": { "maxLength": 0 } } } } }
     }
   ]
 }

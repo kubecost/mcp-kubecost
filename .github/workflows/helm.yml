@@ -106,7 +106,7 @@ jobs:
           helm template mcp-kubecost "$CHART_DIR" \
             --namespace mcp-kubecost \
             --set ingress.enabled=true \
-            --set config.kubecostApiKey.existingSecret=kubecost-api-key \
+            --set kubecostApiKey.existingSecret=kubecost-api-key \
             --set config.ssl.caBundle.existingSecret=kubecost-ca \
             --set config.authMode=open \
             > .helm-render/mcp-kubecost-secure.yaml
@@ -125,7 +125,7 @@ jobs:
             --set httpRoute.enabled=true \
             --set 'httpRoute.parentRefs[0].name=mcp-gateway' \
             --set 'httpRoute.parentRefs[0].sectionName=https' \
-            --set config.kubecostApiKey.existingSecret=kubecost-api-key \
+            --set kubecostApiKey.existingSecret=kubecost-api-key \
             --set config.authMode=open \
             > .helm-render/mcp-kubecost-httproute.yaml
           grep -q 'kind: HTTPRoute' .helm-render/mcp-kubecost-httproute.yaml
@@ -175,7 +175,7 @@ jobs:
             --namespace mcp-kubecost \
             --set config.authMode=oidc \
             --set config.requireClientApiKey=true \
-            --set config.kubecostApiKey.value=dummy-key \
+            --set kubecostApiKey.value=dummy-key \
             --set config.externalUrl="https://kubecost.example.com" \
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
             --set config.oidc.clientID=x \

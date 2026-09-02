@@ -219,16 +219,6 @@ config:
   kubecostApiPort: 9090
   # config.kubecostApiBasePath is the path prefix used for Kubecost API calls.
   kubecostApiBasePath: /model
-  # config.kubecostApiKey is sent to Kubecost as an X-API-KEY request header.
-  # An MCP client may override it per request by sending its own X-API-KEY header.
-  # Use with authMode oidc, open, or none for a shared outbound key.
-  # config.kubecostApiKey.value optionally creates a Secret containing the API key; prefer existingSecret.
-  kubecostApiKey:
-    value: ""
-    # config.kubecostApiKey.existingSecret is the name of a pre-created Secret containing the API key.
-    existingSecret: ""
-    # config.kubecostApiKey.key is the key in the existing or generated API-key Secret.
-    key: KUBECOST_API_KEY
   # config.requireClientApiKey rejects HTTP requests that arrive without an X-API-KEY
   # header. When true, kubecostApiKey is never reached over HTTP.
   requireClientApiKey: false
@@ -312,6 +302,17 @@ config:
     storageEncryptionKey: ""
     # Pre-created Secret containing the four OIDC secret values above.
     existingSecret: ""
+
+# kubecostApiKey is sent to Kubecost as an X-API-KEY request header.
+# An MCP client may override it per request by sending its own X-API-KEY header.
+# Use with authMode oidc, open, or none for a shared outbound key.
+# kubecostApiKey.value optionally creates a Secret containing the API key; prefer existingSecret.
+kubecostApiKey:
+  value: ""
+  # kubecostApiKey.existingSecret is the name of a pre-created Secret containing the API key.
+  existingSecret: ""
+  # kubecostApiKey.key is the key in the existing or generated API-key Secret.
+  key: KUBECOST_API_KEY
 
 nodeSelector: {}
 tolerations: []
