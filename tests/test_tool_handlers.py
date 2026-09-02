@@ -14,6 +14,7 @@ from datetime import UTC
 import pytest
 from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError as FastMcpToolError
+from mcp.types import TextContent
 from pytest_httpx import HTTPXMock
 
 from mcp_kubecost.middleware import TextContentSummaryMiddleware
@@ -45,6 +46,13 @@ def _savings_url() -> re.Pattern:
 def _sc(result) -> dict:
     """Return structured_content from a ToolResult."""
     return result.structured_content
+
+
+def _text(result) -> str:
+    """Return the sole text block, narrowing the ContentBlock union for the type checker."""
+    block = result.content[0]
+    assert isinstance(block, TextContent)
+    return block.text
 
 
 def _stub_http_500(httpx_mock: HTTPXMock, url: re.Pattern) -> None:
@@ -87,21 +95,21 @@ class TestTextContentSummary:
             result = await client.call_tool("kubecost_list_windows", {})
 
         assert len(result.content) == 1
-        text = result.content[0].text
+        text = _text(result)
         assert text.startswith("Here is a list of possible time window formats")
         assert "structuredContent" in text
         # The payload itself must not be duplicated into the text block.
         assert "lastmonth" not in text
-        assert len(result.structured_content["windows"]) > 0
+        assert len(_sc(result)["windows"]) > 0
 
     @pytest.mark.asyncio
     async def test_legacy_flag_restores_full_json_text(self):
         async with Client(self._app(legacy_text_content=True)) as client:
             result = await client.call_tool("kubecost_list_windows", {})
 
-        text = result.content[0].text
+        text = _text(result)
         assert "lastmonth" in text
-        assert len(result.structured_content["windows"]) > 0
+        assert len(_sc(result)["windows"]) > 0
 
 
 # ── kubecost_list_windows (no HTTP) ──────────────────────────────────────────

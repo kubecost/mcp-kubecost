@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastmcp.server.middleware.middleware import MiddlewareContext
 from fastmcp.tools.base import ToolResult
-from mcp.types import CallToolRequestParams
+from mcp.types import CallToolRequestParams, TextContent
 
 from mcp_kubecost.middleware import TextContentSummaryMiddleware, ToolConcurrencyLimitMiddleware
 
@@ -62,6 +62,13 @@ _PAYLOAD = {
 }
 
 
+def _text(result: ToolResult) -> str:
+    """Return the sole text block, narrowing the ContentBlock union for the type checker."""
+    block = result.content[0]
+    assert isinstance(block, TextContent)
+    return block.text
+
+
 def _call_next_returning(result: ToolResult):
     async def call_next(context):
         del context
@@ -77,12 +84,12 @@ async def _run(middleware: TextContentSummaryMiddleware, result: ToolResult) -> 
 async def test_summary_replaces_text_and_keeps_structured_content():
     result = ToolResult(structured_content=_PAYLOAD)
     # FastMCP's default: the whole payload serialized into the text block too.
-    assert "nodeGroupSizing" in result.content[0].text
+    assert "nodeGroupSizing" in _text(result)
 
     out = await _run(TextContentSummaryMiddleware(legacy_text_content=False), result)
 
     assert len(out.content) == 1
-    text = out.content[0].text
+    text = _text(out)
     assert text.startswith("Found 8 savings categories totalling $25,997.73/month.")
     assert "Next: Drill into the highest-savings category first." in text
     assert "nodeGroupSizing" not in text
@@ -91,12 +98,12 @@ async def test_summary_replaces_text_and_keeps_structured_content():
 
 async def test_legacy_flag_leaves_full_json_text():
     result = ToolResult(structured_content=_PAYLOAD)
-    original = result.content[0].text
+    original = _text(result)
 
     out = await _run(TextContentSummaryMiddleware(legacy_text_content=True), result)
 
-    assert out.content[0].text == original
-    assert "nodeGroupSizing" in out.content[0].text
+    assert _text(out) == original
+    assert "nodeGroupSizing" in _text(out)
 
 
 async def test_error_result_keeps_its_text():
@@ -104,7 +111,7 @@ async def test_error_result_keeps_its_text():
 
     out = await _run(TextContentSummaryMiddleware(legacy_text_content=False), result)
 
-    assert out.content[0].text == "[UPSTREAM_ERROR] Kubecost returned 503"
+    assert _text(out) == "[UPSTREAM_ERROR] Kubecost returned 503"
 
 
 async def test_result_without_structured_content_passes_through():
@@ -112,5 +119,5 @@ async def test_result_without_structured_content_passes_through():
 
     out = await _run(TextContentSummaryMiddleware(legacy_text_content=False), result)
 
-    assert out.content[0].text == "plain text result"
+    assert _text(out) == "plain text result"
     assert out.structured_content is None
