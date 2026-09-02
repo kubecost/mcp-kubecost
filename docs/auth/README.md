@@ -63,8 +63,6 @@ The MCP supports both per MCP client keys or a shared key assigned to the MCP se
 
 Header wins when both are set. Neither is required; with no key the outbound request is unauthenticated.
 
-The process-wide fallback is Helm `kubecostApiKey` (`value` or `existingSecret`; `mcp.kubecostApiKey` in the Kubecost parent chart). Prefer `existingSecret` so the key is not stored in a values file. This option is intended for use with oauth such that the MCP can use a shared read-only key.
-
 `REQUIRE_CLIENT_API_KEY=true` (Helm: `config.requireClientApiKey`) rejects HTTP requests that arrive without the header. The check runs **before** the environment fallback, so a configured `KUBECOST_API_KEY` does not satisfy it. STDIO is never gated.
 
 ## STDIO vs HTTP

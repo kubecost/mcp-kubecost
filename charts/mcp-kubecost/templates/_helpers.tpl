@@ -117,8 +117,8 @@ are not gated by skipSanityChecks: that flag only skips live Secret lookups.
 {{- $ns := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- if $ns }}
 {{- $checks := list -}}
-{{- if .Values.kubecostApiKey.existingSecret }}
-{{- $checks = append $checks (dict "name" .Values.kubecostApiKey.existingSecret "ref" "kubecostApiKey.existingSecret") -}}
+{{- if .Values.config.kubecostApiKey.existingSecret }}
+{{- $checks = append $checks (dict "name" .Values.config.kubecostApiKey.existingSecret "ref" "config.kubecostApiKey.existingSecret") -}}
 {{- end }}
 {{- if .Values.config.oidc.existingSecret }}
 {{- $checks = append $checks (dict "name" .Values.config.oidc.existingSecret "ref" "config.oidc.existingSecret") -}}
@@ -351,8 +351,8 @@ Returns an empty string when the secret would not be created, so no annotation i
 Must stay in sync with the first Secret block in secret.yaml.
 */}}
 {{- define "mcp-kubecost.apikey-stringdata" -}}
-{{- if .Values.kubecostApiKey.value -}}
-{{ .Values.kubecostApiKey.key }}={{ .Values.kubecostApiKey.value }}
+{{- if .Values.config.kubecostApiKey.value -}}
+{{ .Values.config.kubecostApiKey.key }}={{ .Values.config.kubecostApiKey.value }}
 {{- end }}
 {{- end }}
 

@@ -68,7 +68,7 @@ spec:
           envFrom:
             - configMapRef:
                 name: {{ include "mcp-kubecost.configMapName" . }}
-          {{- $hasApiKey := or .Values.kubecostApiKey.value .Values.kubecostApiKey.existingSecret }}
+          {{- $hasApiKey := or .Values.config.kubecostApiKey.value .Values.config.kubecostApiKey.existingSecret }}
           {{- $hasOidc := or .Values.config.oidc.existingSecret (and .Values.config.oidc.clientID .Values.config.oidc.clientSecret) }}
           {{- if or $hasApiKey $hasOidc }}
           env:
@@ -76,8 +76,8 @@ spec:
             - name: KUBECOST_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ if .Values.kubecostApiKey.existingSecret }}{{ .Values.kubecostApiKey.existingSecret }}{{ else }}{{ include "mcp-kubecost.apiKeySecretName" . }}{{ end }}
-                  key: {{ .Values.kubecostApiKey.key }}
+                  name: {{ if .Values.config.kubecostApiKey.existingSecret }}{{ .Values.config.kubecostApiKey.existingSecret }}{{ else }}{{ include "mcp-kubecost.apiKeySecretName" . }}{{ end }}
+                  key: {{ .Values.config.kubecostApiKey.key }}
             {{- end }}
             {{- if $hasOidc }}
             {{- $oidcSecretName := ternary .Values.config.oidc.existingSecret (include "mcp-kubecost.oidcSecretName" .) (ne .Values.config.oidc.existingSecret "") }}
