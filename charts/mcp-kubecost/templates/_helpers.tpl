@@ -137,6 +137,29 @@ are not gated by skipSanityChecks: that flag only skips live Secret lookups.
 {{- end }}
 
 {{/*
+Value path to quote in error messages. Under the Kubecost parent chart the same
+value is set as `mcp.config.externalUrl`, so naming `config.externalUrl` there
+would send the operator to a key that does not exist in their values file.
+*/}}
+{{- define "mcp-kubecost.externalUrlRef" -}}
+{{- if .Chart.IsRoot -}}config.externalUrl{{- else -}}mcp.config.externalUrl{{- end -}}
+{{- end -}}
+
+{{/*
+Extra guidance for the subchart case. The Kubecost frontend proxies /mcp and
+/oauth/mcp on the Kubecost hostname, and the parent chart cannot compute this
+value for us: only `global` crosses the chart boundary and values.yaml is not
+templated. So say which host to use rather than leaving it to be guessed.
+*/}}
+{{- define "mcp-kubecost.externalUrlHint" -}}
+{{- if not .Chart.IsRoot }}
+When installed as a subchart of the Kubecost chart, MCP is proxied through the
+Kubecost frontend, so this must be the Kubecost hostname -- the same host as
+ingress.hosts or httpRoute.hostnames in the parent chart's values.
+{{ end -}}
+{{- end -}}
+
+{{/*
 Resolve the public MCP origin (MCP_EXTERNAL_URL): config.externalUrl if set
 (validated as an https:// origin with no path/query/fragment), otherwise
 inferred as https://<host> when exactly one of httpRoute/ingress is enabled
@@ -182,7 +205,7 @@ that don't need it (no OIDC, no route, or an ambiguous route left unset).
 {{- if eq (len $nonWildcard) 1 -}}
 {{- printf "https://%s" (first $nonWildcard) -}}
 {{- else if eq (.Values.config.authMode | default "none") "oidc" -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: config.externalUrl could not be inferred.\n\nSet config.externalUrl explicitly, or enable exactly one of httpRoute/ingress with exactly one non-wildcard hostname.\n\n  Example:\n    config.externalUrl: \"https://kubecost.example.com\"\n" -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %s could not be inferred.\n\nSet %s explicitly, or enable exactly one of httpRoute/ingress with exactly one non-wildcard hostname.\n%s\n  Example:\n    %s: \"https://kubecost.example.com\"\n" (include "mcp-kubecost.externalUrlRef" .) (include "mcp-kubecost.externalUrlRef" .) (include "mcp-kubecost.externalUrlHint" .) (include "mcp-kubecost.externalUrlRef" .)) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -388,7 +411,7 @@ behaviour from it.
 {{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.issuerUrl must be an https:// URL, or http:// on localhost / 127.0.0.1.\n\nThis mirrors the MCP SDK's own issuer rule (RFC 8414 requires HTTPS; the SDK carves out localhost for testing). A plaintext issuer on any other host is rejected by the SDK at startup, so the chart refuses it here rather than letting the pod crash-loop.\n\n  Example:\n    config.oidc.issuerUrl: \"https://kubecost.example.com/.well-known/openid-configuration\"\n" -}}
 {{- end -}}
 {{- if not (include "mcp-kubecost.externalUrl" .) -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: config.externalUrl could not be resolved.\n\nSet config.externalUrl explicitly, or enable exactly one of httpRoute/ingress with exactly one non-wildcard hostname.\n\n  Example:\n    config.externalUrl: \"https://kubecost.example.com\"\n" -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %s could not be resolved.\n\nSet %s explicitly, or enable exactly one of httpRoute/ingress with exactly one non-wildcard hostname.\n%s\n  Example:\n    %s: \"https://kubecost.example.com\"\n" (include "mcp-kubecost.externalUrlRef" .) (include "mcp-kubecost.externalUrlRef" .) (include "mcp-kubecost.externalUrlHint" .) (include "mcp-kubecost.externalUrlRef" .)) -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
