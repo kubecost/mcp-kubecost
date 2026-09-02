@@ -17,7 +17,7 @@ from starlette.routing import Route
 from mcp_kubecost.branding import FAVICON_PNG
 from mcp_kubecost.logging_fastmcp import HealthProbeLogFilter
 from mcp_kubecost.middleware import ToolConcurrencyLimitMiddleware
-from mcp_kubecost.server import favicon_endpoint, health_endpoint, mcp, version_endpoint
+from mcp_kubecost.server import KubecostMCP, favicon_endpoint, health_endpoint, mcp, version_endpoint
 
 
 def _custom_route_paths() -> set[str]:
@@ -160,3 +160,45 @@ class TestProbesStayUnauthenticatedWithAuthEnabled:
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post("/mcp", json={})
         assert response.status_code == 401
+
+
+class TestBrowserCors:
+    """A browser MCP client preflights /mcp before it may send Authorization.
+
+    The Streamable HTTP transport answers only GET/POST/DELETE, so without the
+    app-wide CORS middleware that preflight is a bare 405 and the client never
+    sends the real request.
+    """
+
+    def _app(self):
+        server = KubecostMCP("cors-test", auth=StaticTokenVerifier(tokens={"valid-token": {"client_id": "c"}}))
+        return server.http_app()
+
+    async def test_preflight_allows_the_headers_an_mcp_client_sends(self):
+        transport = httpx.ASGITransport(app=self._app())
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.options(
+                "/mcp",
+                headers={
+                    "Origin": "http://127.0.0.1:6274",
+                    "Access-Control-Request-Method": "POST",
+                    "Access-Control-Request-Headers": "authorization,content-type,mcp-session-id",
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == "*"
+        allowed = {h.strip().lower() for h in response.headers["access-control-allow-headers"].split(",")}
+        assert {"authorization", "mcp-session-id", "mcp-protocol-version"} <= allowed
+
+    async def test_401_exposes_the_discovery_hint_to_the_browser(self):
+        """`resource_metadata` on the 401 is where OAuth discovery starts; a
+        cross-origin caller cannot read that header unless it is exposed."""
+        transport = httpx.ASGITransport(app=self._app())
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/mcp", json={}, headers={"Origin": "http://127.0.0.1:6274"})
+
+        assert response.status_code == 401
+        assert response.headers["access-control-allow-origin"] == "*"
+        exposed = {h.strip().lower() for h in response.headers["access-control-expose-headers"].split(",")}
+        assert {"www-authenticate", "mcp-session-id"} <= exposed

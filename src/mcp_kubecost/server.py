@@ -15,6 +15,9 @@ os.environ["FASTMCP_SHOW_SERVER_BANNER"] = "false"
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
+from mcp.server.streamable_http import MCP_PROTOCOL_VERSION_HEADER, MCP_SESSION_ID_HEADER
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -44,6 +47,48 @@ _SERVER_INSTRUCTIONS = (
 )
 
 
+# Browser clients (MCP Inspector in direct mode, any in-page MCP client) send
+# `Authorization` and `mcp-session-id` on /mcp, which makes every request a
+# preflighted one. The Streamable HTTP transport answers only GET/POST/DELETE,
+# so an unhandled OPTIONS returns 405 with no CORS headers and the client never
+# gets to send the real request. The MCP SDK wraps the OAuth routes in its own
+# CORS middleware but allows only `mcp-protocol-version` there, so token
+# requests using HTTP Basic client auth are blocked the same way.
+#
+# Credentials stay off: MCP clients authenticate with a bearer token in the
+# header, never a cookie, so `*` origins carry no ambient-authority risk.
+# `www-authenticate` is exposed because that is where the client reads the
+# `resource_metadata` URL that starts OAuth discovery.
+_BROWSER_CORS = Middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+        "Last-Event-ID",
+        MCP_SESSION_ID_HEADER,
+        MCP_PROTOCOL_VERSION_HEADER,
+    ],
+    expose_headers=[MCP_SESSION_ID_HEADER, "WWW-Authenticate"],
+    max_age=600,
+)
+
+
+class KubecostMCP(FastMCP):
+    """FastMCP that applies ``_BROWSER_CORS`` to the whole HTTP app.
+
+    Overriding ``http_app`` rather than passing ``middleware=`` at startup is
+    what makes this reach the deployed server: the container runs ``fastmcp
+    run`` (see ``otel_entrypoint``), which builds the app itself and offers no
+    way to inject ASGI middleware.
+    """
+
+    def http_app(self, *args, middleware: list[Middleware] | None = None, **kwargs):
+        return super().http_app(*args, middleware=[_BROWSER_CORS, *(middleware or [])], **kwargs)
+
+
 def create_server(server_name) -> FastMCP:
     """Create and configure FastMCP with tools, prompts, and resources."""
 
@@ -52,7 +97,7 @@ def create_server(server_name) -> FastMCP:
     settings = get_settings()
 
     # Create the MCP server instance
-    mcp = FastMCP(
+    mcp = KubecostMCP(
         name=server_name,
         version=version,
         instructions=_SERVER_INSTRUCTIONS,
@@ -136,7 +181,7 @@ async def favicon_endpoint(_request: Request) -> Response:
     the request arrives before any OAuth flow completes.
 
     Content type is PNG despite the ``.ico`` path; browsers honour the header
-    rather than the extension. Not an MCP concern — clients read ``serverInfo.icons``.
+    rather than the extension. MCP clients do not use this route; they read ``serverInfo.icons``.
     """
     return Response(
         content=FAVICON_PNG,

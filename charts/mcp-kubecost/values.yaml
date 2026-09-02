@@ -230,7 +230,8 @@ config:
     # config.kubecostApiKey.key is the key in the existing or generated API-key Secret.
     key: KUBECOST_API_KEY
   # config.requireClientApiKey rejects HTTP requests that arrive without an X-API-KEY
-  # header. When true, kubecostApiKey is never reached over HTTP.
+  # header. When authMode is "api_key", this value is ignored and forced to true.
+  # Set it to true with authMode "oidc" to require both OIDC and an API key.
   requireClientApiKey: false
   # config.requestTimeoutSeconds is the Kubecost HTTP request timeout in seconds.
   requestTimeoutSeconds: 15

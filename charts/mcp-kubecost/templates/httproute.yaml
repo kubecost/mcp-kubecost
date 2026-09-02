@@ -33,6 +33,16 @@ spec:
         - path:
             type: Exact
             value: /.well-known/openid-configuration/oauth/mcp
+        # Root-probe fallbacks for clients that never read the advertised URL.
+        - path:
+            type: Exact
+            value: /.well-known/oauth-protected-resource
+        - path:
+            type: Exact
+            value: /.well-known/oauth-authorization-server
+        - path:
+            type: Exact
+            value: /.well-known/openid-configuration
       backendRefs:
         - name: {{ include "mcp-kubecost.fullname" . }}
           port: {{ .Values.service.port }}

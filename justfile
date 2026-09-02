@@ -135,3 +135,15 @@ update-dependencies:
     just setup-dev-environment
     ./scripts/update_dependencies.py
     uv sync --all-extras --active --upgrade
+
+
+## IBM internal SSO testing:
+test-demo:
+    npx @modelcontextprotocol/inspector \
+    --cli https://mcp.demo.kubecost.cloud/mcp \
+    --method tools/call --tool-name get_savings_overview
+
+test-sso:
+    npx @modelcontextprotocol/inspector \
+    --cli https://ibm-sso.demo.kubecost.cloud/mcp \
+    --method tools/call --tool-name get_savings_overview

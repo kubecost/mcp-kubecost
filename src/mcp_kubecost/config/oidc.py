@@ -49,6 +49,7 @@ OAUTH_PREFIX = "/oauth/mcp"
 OAUTH_CALLBACK_PATH = "/callback"
 _AUTHORIZATION_SERVER_METADATA_PATH = "/.well-known/oauth-authorization-server"
 _OIDC_METADATA_PATH = "/.well-known/openid-configuration"
+_PROTECTED_RESOURCE_METADATA_PATH = "/.well-known/oauth-protected-resource"
 
 # Per-request: True when the current verification token is the OIDC id_token.
 _verify_id_token: ContextVar[bool] = ContextVar("oidc_verify_id_token", default=False)
@@ -129,21 +130,47 @@ class AdaptiveOidcProxy(OIDCProxy):
         normally mounts the operational routes at the application root. Mount
         them at the same paths we advertise so Kubernetes routing never needs
         to rewrite requests. Discovery stays in the RFC-defined well-known
-        namespace.
+        namespace, plus root-level aliases for clients that never read the
+        advertised URL — see ``_metadata_routes``.
         """
         if mcp_path not in (None, MCP_PATH):
             raise ConfigError(f"The MCP endpoint is fixed at {MCP_PATH}; received {mcp_path!r}")
 
         mounted: list[Route] = []
         for route in super().get_routes(MCP_PATH):
-            if route.path == _AUTHORIZATION_SERVER_METADATA_PATH:
-                mounted.append(self._copy_route(route, f"{_AUTHORIZATION_SERVER_METADATA_PATH}{OAUTH_PREFIX}"))
-                mounted.append(self._copy_route(route, f"{_OIDC_METADATA_PATH}{OAUTH_PREFIX}"))
-            elif route.path.startswith("/.well-known/"):
-                mounted.append(route)
+            if route.path.startswith("/.well-known/"):
+                mounted.extend(self._metadata_routes(route))
             else:
                 mounted.append(self._copy_route(route, f"{OAUTH_PREFIX}{route.path}"))
         return mounted
+
+    def _metadata_routes(self, route: Route) -> list[Route]:
+        """Return every path one discovery document is served from.
+
+        The path-suffixed URLs are the spec-correct ones and the only ones this
+        server advertises: RFC 8414 §3.1 for the authorization server (issuer
+        ``/oauth/mcp``) and RFC 9728 §3.1 for the protected resource (``/mcp``).
+
+        The bare root paths are aliases for a client that never learns those
+        URLs — one that drops the ``WWW-Authenticate: resource_metadata=...``
+        hint from the 401, for instance a browser reading a cross-origin
+        response, or an MCP proxy that does not relay the header. Such a client
+        probes the origin root, and on a 404 the MCP SDKs fall back to *default*
+        endpoints (``/authorize``, ``/token``, ``/register``) that this server
+        does not mount, so the flow dead-ends on a 404 at ``/authorize`` with no
+        hint of the real prefix. Answering at the root ends that chain one step
+        earlier, with the correct endpoints.
+        """
+        if route.path == _AUTHORIZATION_SERVER_METADATA_PATH:
+            return [
+                self._copy_route(route, f"{_AUTHORIZATION_SERVER_METADATA_PATH}{OAUTH_PREFIX}"),
+                self._copy_route(route, f"{_OIDC_METADATA_PATH}{OAUTH_PREFIX}"),
+                route,
+                self._copy_route(route, _OIDC_METADATA_PATH),
+            ]
+        if route.path == f"{_PROTECTED_RESOURCE_METADATA_PATH}{MCP_PATH}":
+            return [route, self._copy_route(route, _PROTECTED_RESOURCE_METADATA_PATH)]
+        return [route]
 
     @staticmethod
     def _copy_route(route: Route, path: str) -> Route:

@@ -27,7 +27,9 @@ spec:
                 port:
                   name: http
           {{- end }}
-          {{- range $path := list "/.well-known/oauth-protected-resource/mcp" "/.well-known/oauth-authorization-server/oauth/mcp" "/.well-known/openid-configuration/oauth/mcp" }}
+          {{- /* The suffixed paths are the ones the server advertises; the bare ones are
+               root-probe fallbacks for clients that never read the advertised URL. */}}
+          {{- range $path := list "/.well-known/oauth-protected-resource/mcp" "/.well-known/oauth-authorization-server/oauth/mcp" "/.well-known/openid-configuration/oauth/mcp" "/.well-known/oauth-protected-resource" "/.well-known/oauth-authorization-server" "/.well-known/openid-configuration" }}
           - path: {{ $path }}
             pathType: Exact
             backend:

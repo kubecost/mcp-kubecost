@@ -169,6 +169,16 @@ jobs:
             exit 1
           }
 
+      - name: Force requireClientApiKey with authMode api_key
+        run: |
+          helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.authMode=api_key \
+            --set config.requireClientApiKey=false \
+            > .helm-render/mcp-kubecost-api-key.yaml
+          grep -q 'AUTH_MODE: "api_key"' .helm-render/mcp-kubecost-api-key.yaml
+          grep -q 'REQUIRE_CLIENT_API_KEY: "true"' .helm-render/mcp-kubecost-api-key.yaml
+
       - name: Render authMode oidc with requireClientApiKey and shared kubecostApiKey
         run: |
           helm template mcp-kubecost "$CHART_DIR" \
@@ -248,6 +258,7 @@ jobs:
           /work/.helm-render/mcp-kubecost-ha.yaml
           /work/.helm-render/mcp-kubecost-global.yaml
           /work/.helm-render/mcp-kubecost-secure.yaml
+          /work/.helm-render/mcp-kubecost-api-key.yaml
           /work/.helm-render/mcp-kubecost-oidc-apikey.yaml
           /work/.helm-render/mcp-kubecost-oidc-subpath.yaml
 

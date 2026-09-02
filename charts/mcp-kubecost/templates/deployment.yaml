@@ -97,6 +97,9 @@ spec:
                 secretKeyRef:
                   name: {{ $oidcSecretName }}
                   key: OIDC_JWT_SIGNING_KEY
+                  {{- if .Values.config.oidc.existingSecret }}
+                  optional: true
+                  {{- end }}
             {{- end }}
             {{- if or .Values.config.oidc.storageEncryptionKey .Values.config.oidc.existingSecret }}
             - name: OIDC_STORAGE_ENCRYPTION_KEY
@@ -104,6 +107,9 @@ spec:
                 secretKeyRef:
                   name: {{ $oidcSecretName }}
                   key: OIDC_STORAGE_ENCRYPTION_KEY
+                  {{- if .Values.config.oidc.existingSecret }}
+                  optional: true
+                  {{- end }}
             {{- end }}
             {{- end }}
           {{- end }}
