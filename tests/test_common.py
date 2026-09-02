@@ -19,6 +19,7 @@ from mcp_kubecost.tools._common import (
     resolved_window_from_api,
     safe_path_segment,
     summarize_exception,
+    summarize_tool_response,
 )
 
 # ---------------------------------------------------------------------------
@@ -410,3 +411,66 @@ class TestToApiWindow:
         self._freeze(monkeypatch, datetime(2026, 8, 6, tzinfo=UTC))
         result = _common.to_api_window("LastMonth")
         assert result == "2026-07-01T00:00:00Z,2026-08-01T00:00:00Z"
+
+
+# ---------------------------------------------------------------------------
+# summarize_tool_response
+# ---------------------------------------------------------------------------
+
+
+class TestSummarizeToolResponse:
+    def test_message_only(self):
+        summary = summarize_tool_response({"status": "ok", "message": "Found 8 categories."})
+        assert summary.startswith("Found 8 categories.")
+        assert "structuredContent" in summary
+
+    def test_includes_recommended_action(self):
+        summary = summarize_tool_response(
+            {
+                "status": "ok",
+                "message": "Found 8 categories.",
+                "recommended_action": "Drill into the highest-savings category first.",
+            }
+        )
+        assert "Next: Drill into the highest-savings category first." in summary
+
+    def test_includes_warnings_and_notes(self):
+        summary = summarize_tool_response(
+            {
+                "status": "partial",
+                "message": "Two of three clusters returned data.",
+                "warnings": ["cluster-c timed out.", ""],
+                "notes": ["Idle costs excluded."],
+            }
+        )
+        assert "Warnings: cluster-c timed out." in summary
+        assert "Notes: Idle costs excluded." in summary
+
+    def test_truncation_hint_without_offset(self):
+        summary = summarize_tool_response({"status": "ok", "message": "87 rows.", "truncated": True})
+        assert "Results are truncated." in summary
+        assert "offset=" not in summary
+
+    def test_truncation_hint_with_next_offset(self):
+        summary = summarize_tool_response({"status": "ok", "message": "87 rows.", "truncated": True, "next_offset": 50})
+        assert "Pass offset=50 to fetch the next page." in summary
+
+    def test_not_truncated_omits_hint(self):
+        summary = summarize_tool_response({"status": "ok", "message": "87 rows.", "truncated": False})
+        assert "truncated" not in summary
+
+    def test_blank_message_falls_back_to_status(self):
+        summary = summarize_tool_response({"status": "empty", "message": ""})
+        assert summary.startswith("Query status: empty.")
+
+    def test_missing_keys_do_not_raise(self):
+        assert summarize_tool_response({}).startswith("Query status: unknown.")
+
+    def test_oversized_summary_is_capped(self):
+        summary = summarize_tool_response({"status": "ok", "message": "x" * 5000})
+        assert len(summary) == _common._MAX_SUMMARY_CHARS
+        assert summary.endswith("...")
+
+    def test_non_list_warnings_ignored(self):
+        summary = summarize_tool_response({"status": "ok", "message": "ok.", "warnings": "boom"})
+        assert "Warnings" not in summary

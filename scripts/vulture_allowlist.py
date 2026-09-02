@@ -9,6 +9,10 @@ _get_verification_token  # unused method (src/mcp_kubecost/config/oidc.py:90)
 _uses_alternate_verification  # unused method (src/mcp_kubecost/config/oidc.py:106)
 on_call_tool  # unused method (src/mcp_kubecost/middleware.py:21)
 
+# ToolResult.content is a Pydantic field FastMCP serializes onto the wire;
+# TextContentSummaryMiddleware writes it and nothing in this repo reads it back.
+content  # unused attribute (src/mcp_kubecost/middleware.py:58)
+
 # Enum members are constructed dynamically from their serialized values.
 NONE  # unused variable (src/mcp_kubecost/config/settings.py:20)
 OPEN  # unused variable (src/mcp_kubecost/config/settings.py:21)

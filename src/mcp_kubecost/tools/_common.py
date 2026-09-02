@@ -68,6 +68,10 @@ MIN_QUANTILE_WINDOW: str = "15d"
 # Cap message size so a misbehaving upstream cannot blow up token usage.
 _MAX_ERROR_MESSAGE_CHARS = 500
 
+# Cap the text-content summary for the same reason. Roomier than an error line
+# because a summary may carry warnings and a next step alongside ``message``.
+_MAX_SUMMARY_CHARS = 1500
+
 # Named windows with a fixed, unambiguous day count.
 _NAMED_WINDOW_DAYS: dict[str, int] = {
     "1d": 1,
@@ -356,6 +360,57 @@ class BaseToolResponse(BaseModel):
         description="Suggested next step for the caller, when one applies "
         "(e.g. which tool to call next, or how to broaden the query).",
     )
+
+
+_STRUCTURED_CONTENT_POINTER = "(Full results are in this tool call's structuredContent.)"
+
+
+def summarize_tool_response(payload: dict[str, Any]) -> str:
+    """Render a :class:`BaseToolResponse` payload as a short text-content summary.
+
+    FastMCP serializes a tool's whole return value into ``content[0].text`` *and*
+    ``structuredContent``, which duplicates every row for no added information.
+    ``TextContentSummaryMiddleware`` replaces the text half with this summary and
+    leaves the full payload in ``structuredContent``.
+
+    Built from the envelope alone, so it works for every tool without per-tool
+    code: ``message`` is already authored as a human-readable summary, and
+    ``recommended_action`` already carries the next step. Payload shapes differ
+    between tools (and ``AllocationRow`` allows extra keys), so every field is
+    read defensively.
+    """
+    parts: list[str] = []
+
+    message = str(payload.get("message") or "").strip()
+    if not message:
+        # An empty message would leave a text-only client with nothing at all.
+        message = f"Query status: {payload.get('status', 'unknown')}."
+    parts.append(message)
+
+    for key, label in (("warnings", "Warnings"), ("notes", "Notes")):
+        values = payload.get(key)
+        if isinstance(values, list):
+            joined = " ".join(str(v).strip() for v in values if str(v).strip())
+            if joined:
+                parts.append(f"{label}: {joined}")
+
+    if payload.get("truncated"):
+        hint = "Results are truncated."
+        next_offset = payload.get("next_offset")
+        if next_offset is not None:
+            hint += f" Pass offset={next_offset} to fetch the next page."
+        parts.append(hint)
+
+    action = str(payload.get("recommended_action") or "").strip()
+    if action:
+        parts.append(f"Next: {action}")
+
+    parts.append(_STRUCTURED_CONTENT_POINTER)
+
+    summary = "\n\n".join(parts)
+    if len(summary) > _MAX_SUMMARY_CHARS:
+        summary = summary[: _MAX_SUMMARY_CHARS - 3] + "..."
+    return summary
 
 
 # ---------------------------------------------------------------------------
