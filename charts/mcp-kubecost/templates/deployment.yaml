@@ -69,7 +69,7 @@ spec:
             - configMapRef:
                 name: {{ include "mcp-kubecost.configMapName" . }}
           {{- $hasApiKey := or .Values.config.kubecostApiKey.value .Values.config.kubecostApiKey.existingSecret }}
-          {{- $hasOidc := or .Values.config.oidc.existingSecret (and .Values.config.oidc.clientId .Values.config.oidc.clientSecret) }}
+          {{- $hasOidc := or .Values.config.oidc.existingSecret (and .Values.config.oidc.clientID .Values.config.oidc.clientSecret) }}
           {{- if or $hasApiKey $hasOidc }}
           env:
             {{- if $hasApiKey }}

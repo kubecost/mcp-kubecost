@@ -124,7 +124,7 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 | --- | --- | --- |
 | `AUTH_MODE` | `config.authMode` | `none`, `open`, `oidc`, or `api_key` |
 | `OIDC_ISSUER_URL` | `config.oidc.issuerUrl` | Upstream provider discovery URL |
-| `OIDC_CLIENT_ID` | `config.oidc.clientId` or Secret | Upstream confidential client ID |
+| `OIDC_CLIENT_ID` | `config.oidc.clientID` or Secret | Upstream confidential client ID |
 | `OIDC_CLIENT_SECRET` | `config.oidc.clientSecret` or Secret | Upstream confidential client secret |
 | `MCP_EXTERNAL_URL` | `config.externalUrl` | Public origin, no path; e.g. `https://host`. Derives the fixed `/mcp` and `/oauth/mcp` URLs |
 | `OIDC_REQUIRED_SCOPES` | `config.oidc.requiredScopes` | Provider scopes; default `openid,profile` |

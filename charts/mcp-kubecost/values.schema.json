@@ -273,7 +273,7 @@
             "audience": { "type": "string" },
             "requiredScopes": { "type": "string" },
             "allowedClientRedirectUris": { "type": "string" },
-            "clientId": { "type": "string" },
+            "clientID": { "type": "string" },
             "clientSecret": { "type": "string" },
             "jwtSigningKey": { "type": "string" },
             "storageEncryptionKey": { "type": "string" },

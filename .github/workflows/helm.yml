@@ -61,7 +61,7 @@ jobs:
             --set deployment.replicas=2 \
             --set config.authMode=oidc \
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
-            --set config.oidc.clientId=x \
+            --set config.oidc.clientID=x \
             --set config.oidc.clientSecret=y 2>&1); then
             echo "expected helm template to fail with replicas>1 and authMode=oidc" >&2
             echo "$out" >&2
@@ -178,7 +178,7 @@ jobs:
             --set config.kubecostApiKey.value=dummy-key \
             --set config.externalUrl="https://kubecost.example.com" \
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
-            --set config.oidc.clientId=x \
+            --set config.oidc.clientID=x \
             --set config.oidc.clientSecret=y \
             --set-string 'config.oidc.allowedClientRedirectUris=["http://localhost:*"\,"https://client.example/callback"]' \
             > .helm-render/mcp-kubecost-oidc-apikey.yaml
@@ -196,7 +196,7 @@ jobs:
             --set config.authMode=oidc \
             --set config.externalUrl=https://kubecost.example.com \
             --set config.oidc.issuerUrl=https://idp.example.com/.well-known/openid-configuration \
-            --set config.oidc.clientId=x \
+            --set config.oidc.clientID=x \
             --set config.oidc.clientSecret=y \
             > .helm-render/mcp-kubecost-oidc-subpath.yaml
           grep -q 'MCP_EXTERNAL_URL: "https://kubecost.example.com"' .helm-render/mcp-kubecost-oidc-subpath.yaml
@@ -214,7 +214,7 @@ jobs:
             --set config.authMode=oidc \
             --set config.externalUrl="https://kubecost.example.com" \
             --set config.oidc.issuerUrl=http://localhost:8080/realms/x/.well-known/openid-configuration \
-            --set config.oidc.clientId=x \
+            --set config.oidc.clientID=x \
             --set config.oidc.clientSecret=y \
             > /dev/null
 
@@ -225,7 +225,7 @@ jobs:
             --set config.authMode=oidc \
             --set config.externalUrl="https://kubecost.example.com" \
             --set config.oidc.issuerUrl=http://keycloak.keycloak.svc/realms/x/.well-known/openid-configuration \
-            --set config.oidc.clientId=x \
+            --set config.oidc.clientID=x \
             --set config.oidc.clientSecret=y 2>&1); then
             echo "expected helm template to fail with a plaintext non-localhost issuerUrl" >&2
             echo "$out" >&2
