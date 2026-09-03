@@ -10,7 +10,7 @@ concurrency:
 
 jobs:
   spellcheck: # run the action
-    runs-on: Kubecost-Linux-Small-x86
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
@@ -55,4 +55,3 @@ jobs:
             charts/mcp-kubecost/Chart.yaml
             charts/mcp-kubecost/values.yaml
             charts/mcp-kubecost/values.schema.json
-            charts/mcp-kubecost/templates/**

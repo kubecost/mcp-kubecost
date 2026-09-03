@@ -3,6 +3,25 @@
 from __future__ import annotations
 
 import os
+import warnings
+
+# Authlib (transitive, via fastmcp's client/server extras) prefers the httpx2
+# distribution and warns on every run when it falls back to httpx. A pytest
+# filterwarnings entry cannot suppress it: authlib/deprecate.py calls
+# warnings.simplefilter("always", AuthlibDeprecationWarning) at import time,
+# which prepends a filter that outranks anything installed earlier. So import
+# the offending module here with the warning suppressed -- later imports hit
+# the sys.modules cache and stay quiet -- and let catch_warnings drop authlib's
+# global "always" override on the way out.
+#
+# Not fixed by installing httpx2: fastmcp, mcp, pytest-httpx, and mcp_kubecost
+# itself all pin httpx<1.0, so that would add a second HTTP stack for authlib
+# alone. Delete this block once fastmcp moves to httpx2.
+with warnings.catch_warnings():
+    import authlib.deprecate  # noqa: F401  -- installs its "always" filter first
+
+    warnings.filterwarnings("ignore", message="The httpx module is deprecated", category=DeprecationWarning)
+    import authlib.integrations.httpx_client  # noqa: F401
 
 import pytest
 
@@ -274,7 +293,12 @@ def pv_sizing_api_response() -> dict:
 
 @pytest.fixture
 def local_disks_api_response() -> dict:
-    """Minimal localLowDisks API response with two disks."""
+    """Minimal localLowDisks API response with two disks.
+
+    utilizationPercent is already on a 0-100 scale in the real API (confirmed against
+    Kubecost 2.9 and 3.2) and agrees with the usage/capacity bytes in each row here.
+    An earlier version of this fixture used 0-1 ratios, which hid a 100x scaling bug.
+    """
     return {
         "unutilizedDisks": [
             {
@@ -290,7 +314,7 @@ def local_disks_api_response() -> dict:
             {
                 "diskName": "ip-10-0-5-12.us-west-2.compute.internal",
                 "clusterId": "kc-demo-rosa",
-                "utilizationPercent": 0.05,
+                "utilizationPercent": 5.0,
                 "currentUsageBytes": 18760229478,
                 "currentCapacityBytes": 375204589568,
                 "recommendedCapacityBytes": 0,

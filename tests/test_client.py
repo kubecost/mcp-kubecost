@@ -61,6 +61,35 @@ class TestKubecostClientErrorToToolError:
         te = self._make(400).to_tool_error()
         assert te.code == ErrorCode.DATA_UNAVAILABLE
         assert te.retryable is False
+        assert "err" in te.message
+        assert te.context["raw_message"] == "err"
+
+    def test_402_includes_kubecost_payload(self):
+        body = "Enterprise feature: requested window of 16d is greater than maximum of 360h0m0s"
+        exc = KubecostClientError(
+            status_code=402,
+            message=body,
+            url="http://x/model/allocation",
+            path="/model/allocation",
+        )
+        te = exc.to_tool_error()
+        assert te.code == ErrorCode.INVALID_INPUT
+        assert te.retryable is False
+        assert body in te.message
+        assert "Enterprise license" in te.message
+        assert te.context["raw_message"] == body
+        assert "shorter window" in te.suggested_action
+
+    def test_html_error_page_is_not_included(self):
+        exc = KubecostClientError(
+            status_code=400,
+            message="<!DOCTYPE html><html><body>nginx error</body></html>",
+            url="http://x/model/allocation",
+            path="/model/allocation",
+        )
+        te = exc.to_tool_error()
+        assert "nginx error" not in te.message
+        assert te.context["raw_message"] == ""
 
     def test_str_contains_status_and_url(self):
         exc = self._make(404)

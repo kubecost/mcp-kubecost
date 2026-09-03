@@ -47,9 +47,13 @@ setup-dev-environment:
 # ── Testing ────────────────────────────────────────────────────────────────────
 test:
     uv run pytest
-
+# Integration tests
 test-all:
     uv run pytest -m ""
+
+# Integration tests on http
+test-all-http:
+    MCP_KUBECOST_TARGET=http://localhost:3030/mcp uv run pytest -m ""
 
 # ── Development Server ─────────────────────────────────────────────────────────
 
@@ -71,9 +75,12 @@ inspect:
 list:
     fastmcp list {{MCP_CONFIG}} --prompts
 
-# Regenerate README tools + prompts tables from live FastMCP list
+# Regenerate README tools + prompts tables from live FastMCP list.
+# Uses tests/mcp-demo.json (committed MCPConfig) so this does not depend on
+# gitignored ./.bob/mcp.json. Server logs go to stderr; hide them so only JSON
+# is piped to the generator.
 readme-tools:
-    uv run fastmcp list {{MCP_CONFIG}} --prompts --json 2>/dev/null \
+    uv run fastmcp list tests/mcp-demo.json --prompts --json 2>/dev/null \
       | uv run scripts/generate_tools_readme.py
 
 # Call a tool with no parameters (e.g.: just call kubecost_get_infra_costs)

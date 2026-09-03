@@ -253,6 +253,22 @@ class TestGetKubecostWorkloadCosts:
         assert _sc(result)["status"] == "error"
 
     @pytest.mark.asyncio
+    async def test_http_402_includes_kubecost_payload(self, httpx_mock: HTTPXMock, mcp_app):
+        body = "Enterprise feature: requested window of 30d is greater than maximum of 360h0m0s"
+        httpx_mock.add_response(
+            method="GET",
+            url=_allocation_url(),
+            status_code=402,
+            text=body,
+        )
+        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        result = await tool.run({"window": "30d"})
+        sc = _sc(result)
+        assert sc["status"] == "error"
+        assert body in sc["message"]
+        assert "shorter window" in sc["recommended_action"]
+
+    @pytest.mark.asyncio
     async def test_top_n_truncation(self, httpx_mock: HTTPXMock, mcp_app, allocation_response_multi_ns):
         httpx_mock.add_response(
             method="GET",
@@ -827,6 +843,20 @@ class TestGetLocalDiskSavings:
         assert sc["row_count"] == 2
         assert sc["total_monthly_savings"] == pytest.approx(18.98)
         assert [row["utilization_percent"] for row in sc["rows"]] == [0.0, 5.0]
+
+    @pytest.mark.asyncio
+    async def test_utilization_percent_is_not_rescaled(self, httpx_mock: HTTPXMock, mcp_app, local_disks_api_response):
+        """Kubecost already returns utilizationPercent on a 0-100 scale — don't scale it again.
+
+        Asserted against the fixture's own bytes rather than a literal, so the fixture
+        cannot drift back to the 0-1 ratios that hid this bug.
+        """
+        httpx_mock.add_response(method="GET", url=_local_disks_url(), json=local_disks_api_response)
+        tool = await mcp_app.get_tool("get_local_disk_savings")
+        result = await tool.run({})
+        for row in _sc(result)["rows"]:
+            expected = row["current_usage_bytes"] / row["current_capacity_bytes"] * 100
+            assert row["utilization_percent"] == pytest.approx(expected, abs=1e-6)
 
     @pytest.mark.asyncio
     async def test_rows_sorted_desc(self, httpx_mock: HTTPXMock, mcp_app, local_disks_api_response):

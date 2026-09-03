@@ -14,6 +14,7 @@ from mcp_kubecost.tools._common import (
     ResolvedWindow,
     extract_list,
     format_tool_error,
+    mcp_error_response_fields,
     parse_api_timestamp,
     resolve_window,
     resolved_window_from_api,
@@ -62,6 +63,25 @@ class TestFormatToolError:
             output = format_tool_error(err)
             expected = "true" if retryable else "false"
             assert f"retryable={expected}" in output
+
+
+class TestMcpErrorResponseFields:
+    def test_splits_action_from_formatted_error(self):
+        err = ToolError(
+            code=ErrorCode.INVALID_INPUT,
+            message="Kubecost response: Enterprise feature: requested window of 30d",
+            retryable=False,
+            suggested_action="Retry with a shorter window.",
+        )
+        message, action = mcp_error_response_fields(McpToolError(format_tool_error(err)))
+        assert "Enterprise feature" in message
+        assert "Action:" not in message
+        assert action == "Retry with a shorter window."
+
+    def test_fallback_when_action_missing(self):
+        message, action = mcp_error_response_fields(RuntimeError("boom"))
+        assert message == "boom"
+        assert "connectivity" in action
 
 
 # ---------------------------------------------------------------------------
