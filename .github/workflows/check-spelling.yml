@@ -55,4 +55,3 @@ jobs:
             charts/mcp-kubecost/Chart.yaml
             charts/mcp-kubecost/values.yaml
             charts/mcp-kubecost/values.schema.json
-            charts/mcp-kubecost/templates/**
