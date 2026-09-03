@@ -83,11 +83,11 @@ This repo may have newer versions of the MCP available for users looking for the
 
 `get_container_savings_recommendations` accepts a `profile` that bundles the sizing knobs, so you can ask for "production sizing" instead of picking quantiles by hand:
 
-| Profile                | Best for                                  | Window | Quantiles         | Target utilization |
-| ---------------------- | ----------------------------------------- | ------ | ----------------- | ------------------ |
-| `high-availability`    | Latency-sensitive APIs, stateful services | 30d    | P95 CPU / P99 RAM | 0.50               |
-| `production` (default) | General workloads, first pass             | 15d    | P80 CPU / P95 RAM | 0.65               |
-| `development`          | Dev/test, batch, cost-reduction sprints   | 15d    | P80 CPU / P95 RAM | 0.80               |
+| Profile                | Best for                                  | Window | Quantiles         | Target utilization (CPU / RAM) |
+| ---------------------- | ----------------------------------------- | ------ | ----------------- | ------------------------------ |
+| `production` (default) | General workloads, first pass             | 15d    | P80 CPU / P95 RAM | 0.65 / 0.65                    |
+| `high-availability`    | Latency-sensitive APIs, stateful services | 30d    | P95 CPU / P99 RAM | 0.50 / 0.50                    |
+| `development`          | Dev/test, batch, cost-reduction sprints   | 15d    | P80 CPU / P95 RAM | 0.80 / 0.80                    |
 
 Target utilization is the utilization the new request should run at — Kubecost computes `recommended = usage / target`. **Lower means a bigger request and more headroom**, so `high-availability` at 0.50 is the safest and `development` at 0.80 the most aggressive. Memory is not compressible, so an undersized memory request causes OOM kills rather than throttling — don't run `development` against production workloads.
 

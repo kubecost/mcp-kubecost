@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 import mcp_kubecost.domain.kubecost.sizing_guidance as sg
@@ -193,3 +196,54 @@ class TestFormatProfilesResource:
     def test_contains_explicit_params_label(self):
         output = format_profiles_resource()
         assert "Explicit parameters" in output
+
+
+# ---------------------------------------------------------------------------
+# README table
+# ---------------------------------------------------------------------------
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# `| `name` | best for | 15d | P80 CPU / P95 RAM | 0.65 / 0.65 |`
+README_ROW_RE = re.compile(
+    r"^\|\s*`(?P<name>[a-z-]+)`[^|]*\|[^|]*\|"
+    r"\s*(?P<window>\S+)\s*\|"
+    r"\s*P(?P<q_cpu>\d+)\s+CPU\s*/\s*P(?P<q_ram>\d+)\s+RAM\s*\|"
+    r"\s*(?P<target_cpu>[\d.]+)\s*/\s*(?P<target_ram>[\d.]+)\s*\|",
+    re.MULTILINE,
+)
+
+
+def _readme_profile_rows() -> list[re.Match[str]]:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("### Container sizing profiles", 1)[1]
+    return list(README_ROW_RE.finditer(section.split("\n##", 1)[0]))
+
+
+class TestReadmeProfileTable:
+    """The README table is the one hand-maintained copy of the profile values.
+
+    Everything else (tool descriptions, the profiles resource, the explore menu) is
+    generated from SIZING_PROFILES, so this is the only place that can drift.
+    """
+
+    def test_rows_match_shipped_profiles(self):
+        rows = _readme_profile_rows()
+        documented = {
+            row["name"]: {
+                "window": row["window"],
+                "q_cpu": int(row["q_cpu"]) / 100,
+                "q_ram": int(row["q_ram"]) / 100,
+                "target_cpu_utilization": float(row["target_cpu"]),
+                "target_ram_utilization": float(row["target_ram"]),
+            }
+            for row in rows
+        }
+        assert documented.keys() == set(SIZING_PROFILES)
+        for name, values in documented.items():
+            for key, val in values.items():
+                assert val == SIZING_PROFILES[name][key], f"README {name}.{key} does not match SIZING_PROFILES"
+
+    def test_row_order_matches_menu_order(self):
+        """README order must match the menu users actually see in the explore prompt."""
+        assert [row["name"] for row in _readme_profile_rows()] == list(PROFILE_DESCRIPTIONS)
