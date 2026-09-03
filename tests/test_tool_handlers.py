@@ -195,6 +195,18 @@ class TestGetKubecostWorkloadCosts:
         sc = _sc(result)
         assert sc["status"] == "ok"
         assert sc["total_cost"] > 0
+        row = sc["rows"][0]
+        assert row["cpuCostIdle"] + row["ramCostIdle"] > 0
+        assert row["totalCost"] == pytest.approx(
+            row["cpuCost"]
+            + row["ramCost"]
+            + row["networkCost"]
+            + row["pvCost"]
+            + row["gpuCost"]
+            + row["loadBalancerCost"]
+            + row["sharedCost"]
+        )
+        assert any("already included" in note and "do not add them again" in note for note in sc["notes"])
 
     @pytest.mark.asyncio
     async def test_reversed_window_is_normalized_in_request_and_response(self, httpx_mock: HTTPXMock, mcp_app):
