@@ -16,7 +16,7 @@ spec:
     requests:
       storage: {{ .Values.persistence.size }}
   volumeMode: Filesystem
-  {{- with .Values.persistence.storageClass }}
+  {{- with include "mcp-kubecost.storageClass" . }}
   storageClassName: {{ . | quote }}
   {{- end }}
 {{- end }}

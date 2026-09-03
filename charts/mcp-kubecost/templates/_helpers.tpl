@@ -15,6 +15,16 @@ false
 {{- end }}
 
 {{/*
+StorageClass for the OAuth state PVC: `persistence.storageClass`, falling back to
+the parent chart's `global.defaultStorageClass`, and finally to "" so the cluster's
+default StorageClass claims the volume. Matches the parent chart, where every
+component's storageClass defers to global.defaultStorageClass when unset.
+*/}}
+{{- define "mcp-kubecost.storageClass" -}}
+{{- .Values.persistence.storageClass | default ((.Values.global).defaultStorageClass) | default "" -}}
+{{- end }}
+
+{{/*
 Fully qualified container image. `global.imageRegistry` overrides `image.registry`
 when this chart is a Kubecost subchart (IBM sets this to icr.io for ICR-distributed images).
 */}}
@@ -104,27 +114,42 @@ with no kube API). The routing + authMode=none check and the replicas HA check
 are not gated by skipSanityChecks: that flag only skips live Secret lookups.
 */}}
 {{- define "mcp-kubecost.sanityChecks" -}}
+{{- $p := include "mcp-kubecost.valuePrefix" . }}
 {{- $mode := .Values.config.authMode | default "none" }}
 {{- $routeEnabled := or .Values.httpRoute.enabled .Values.ingress.enabled }}
 {{- if and $routeEnabled (eq $mode "none") }}
-{{- fail "ERROR: \n\n authMode must be configured before enabling httproute or ingress.\n Please set authMode to a valid option.\n If anonymous access is required (for example if the ingress is behind a VPN), set  (e.g., \"authMode=open\").\n authMode = \"none\" with an exposed route is not permitted." }}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sconfig.authMode must be configured before enabling %shttpRoute or %singress.\n\n%sconfig.authMode \"none\" with an exposed route is not permitted. Set it to \"oidc\" or \"api_key\" to enforce authentication, or to \"open\" to acknowledge intentional unauthenticated exposure (for example an ingress behind a VPN).\n" $p $p $p $p) }}
+{{- end }}
+{{- /* An enabled route must carry its own hostnames. The chart ships these empty
+     so a placeholder host is never published, and so config.externalUrl is never
+     inferred from an example value. */}}
+{{- if and .Values.ingress.enabled (empty .Values.ingress.hosts) }}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %singress.enabled is true but %singress.hosts is empty.\n\n  Example:\n    %singress.hosts:\n      - host: mcp.example.com\n" $p $p $p) }}
+{{- end }}
+{{- if .Values.httpRoute.enabled }}
+{{- if empty .Values.httpRoute.parentRefs }}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %shttpRoute.enabled is true but %shttpRoute.parentRefs is empty.\n\nReference the Gateway this route attaches to.\n\n  Example:\n    %shttpRoute.parentRefs:\n      - name: mcp-gateway\n        sectionName: https\n" $p $p $p) }}
+{{- end }}
+{{- if empty .Values.httpRoute.hostnames }}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %shttpRoute.enabled is true but %shttpRoute.hostnames is empty.\n\n  Example:\n    %shttpRoute.hostnames:\n      - mcp.example.com\n" $p $p $p) }}
+{{- end }}
 {{- end }}
 {{- $replicas := ((.Values.deployment).replicas) | default 1 | int }}
 {{- if and (gt $replicas 1) (or (include "mcp-kubecost.persistenceEnabled" .) (eq $mode "oidc")) }}
-{{- fail "\n\nFAILURE [mcp-kubecost]: deployment.replicas is greater than 1, but this chart cannot share OAuth storage across pods.\n\nFileTreeStore is single-writer and the OAuth PVC is ReadWriteOnce. Multiple replicas would Multi-Attach the volume or split client registrations across pods.\n\nTo run more than one replica, put an MCP gateway or OAuth proxy in front of this chart, set config.authMode to none/open/api_key, and set persistence.enabled: false. Until shared OAuth storage exists, keep deployment.replicas: 1 when using OIDC.\n" }}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sdeployment.replicas is greater than 1, but this chart cannot share OAuth storage across pods.\n\nFileTreeStore is single-writer and the OAuth PVC is ReadWriteOnce. Multiple replicas would Multi-Attach the volume or split client registrations across pods.\n\nTo run more than one replica, put an MCP gateway or OAuth proxy in front of this chart, set %sconfig.authMode to none/open/api_key, and set %spersistence.enabled: false. Until shared OAuth storage exists, keep %sdeployment.replicas: 1 when using OIDC.\n" $p $p $p $p) }}
 {{- end }}
 {{- if ne (include "mcp-kubecost.skipSanityChecks" .) "true" }}
 {{- $ns := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- if $ns }}
 {{- $checks := list -}}
 {{- if .Values.config.kubecostApiKey.existingSecret }}
-{{- $checks = append $checks (dict "name" .Values.config.kubecostApiKey.existingSecret "ref" "config.kubecostApiKey.existingSecret") -}}
+{{- $checks = append $checks (dict "name" .Values.config.kubecostApiKey.existingSecret "ref" (printf "%sconfig.kubecostApiKey.existingSecret" $p)) -}}
 {{- end }}
 {{- if .Values.config.oidc.existingSecret }}
-{{- $checks = append $checks (dict "name" .Values.config.oidc.existingSecret "ref" "config.oidc.existingSecret") -}}
+{{- $checks = append $checks (dict "name" .Values.config.oidc.existingSecret "ref" (printf "%sconfig.oidc.existingSecret" $p)) -}}
 {{- end }}
 {{- if .Values.config.ssl.caBundle.existingSecret }}
-{{- $checks = append $checks (dict "name" .Values.config.ssl.caBundle.existingSecret "ref" "config.ssl.caBundle.existingSecret") -}}
+{{- $checks = append $checks (dict "name" .Values.config.ssl.caBundle.existingSecret "ref" (printf "%sconfig.ssl.caBundle.existingSecret" $p)) -}}
 {{- end }}
 {{- range $checks }}
 {{- $secret := lookup "v1" "Secret" $.Release.Namespace .name }}
@@ -137,12 +162,18 @@ are not gated by skipSanityChecks: that flag only skips live Secret lookups.
 {{- end }}
 
 {{/*
-Value path to quote in error messages. Under the Kubecost parent chart the same
-value is set as `mcp.config.externalUrl`, so naming `config.externalUrl` there
-would send the operator to a key that does not exist in their values file.
+Prefix for value paths quoted in error messages. Under the Kubecost parent chart
+every value of this chart is set beneath the `mcp` alias, so naming a bare
+`config.externalUrl` there would send the operator to a key that does not exist
+in their values file. Standalone installs get no prefix.
 */}}
+{{- define "mcp-kubecost.valuePrefix" -}}
+{{- if .Chart.IsRoot -}}{{- else -}}mcp.{{- end -}}
+{{- end -}}
+
+{{/* Fully-qualified path of config.externalUrl for the current install shape. */}}
 {{- define "mcp-kubecost.externalUrlRef" -}}
-{{- if .Chart.IsRoot -}}config.externalUrl{{- else -}}mcp.config.externalUrl{{- end -}}
+{{- printf "%sconfig.externalUrl" (include "mcp-kubecost.valuePrefix" .) -}}
 {{- end -}}
 
 {{/*
@@ -172,10 +203,11 @@ host is not in the enabled route's hostnames, or when config.authMode is
 that don't need it (no OIDC, no route, or an ambiguous route left unset).
 */}}
 {{- define "mcp-kubecost.externalUrl" -}}
+{{- $p := include "mcp-kubecost.valuePrefix" . -}}
 {{- $httpRouteOn := .Values.httpRoute.enabled -}}
 {{- $ingressOn := .Values.ingress.enabled -}}
 {{- if and $httpRouteOn $ingressOn -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: httpRoute.enabled and ingress.enabled cannot both be true. Choose one chart-managed route.\n" -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %shttpRoute.enabled and %singress.enabled cannot both be true. Choose one chart-managed route.\n" $p $p) -}}
 {{- end -}}
 {{- $routeHosts := list -}}
 {{- if $httpRouteOn -}}
@@ -188,11 +220,11 @@ that don't need it (no OIDC, no route, or an ambiguous route left unset).
 {{- $explicit := .Values.config.externalUrl | default "" | trim | trimSuffix "/" -}}
 {{- if $explicit -}}
 {{- if not (hasPrefix "https://" $explicit) -}}
-{{- fail (printf "\n\nFAILURE [mcp-kubecost]: config.externalUrl must be an https:// origin with no path: %s\n" $explicit) -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sconfig.externalUrl must be an https:// origin with no path: %s\n" $p $explicit) -}}
 {{- end -}}
 {{- $explicitHost := trimPrefix "https://" $explicit -}}
 {{- if and (gt (len $routeHosts) 0) (not (has $explicitHost $routeHosts)) -}}
-{{- fail (printf "\n\nFAILURE [mcp-kubecost]: config.externalUrl host %q is not one of the enabled route's hostnames %v.\n" $explicitHost $routeHosts) -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sconfig.externalUrl host %q is not one of the enabled route's hostnames %v.\n" $p $explicitHost $routeHosts) -}}
 {{- end -}}
 {{- $explicit -}}
 {{- else -}}
@@ -389,6 +421,7 @@ mcp-kubecost.externalUrl). FastMCP derives secure-cookie and redirect
 behaviour from it.
 */}}
 {{- define "mcp-kubecost.validateOIDC" -}}
+{{- $p := include "mcp-kubecost.valuePrefix" . -}}
 {{- if eq (.Values.config.authMode | default "none") "oidc" -}}
 {{- $clientID := trim (.Values.config.oidc.clientID | default "") -}}
 {{- $clientSecret := trim (.Values.config.oidc.clientSecret | default "") -}}
@@ -396,26 +429,26 @@ behaviour from it.
 {{- $hasInline := and (not (empty $clientID)) (not (empty $clientSecret)) -}}
 {{- $hasExisting := not (empty (trim (.Values.config.oidc.existingSecret | default ""))) -}}
 {{- if not (or $hasInline $hasExisting) -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: config.authMode is \"oidc\" but its durable OAuth secrets are incomplete.\n\nTo fix, choose one of:\n  Option A — set clientID and clientSecret (jwtSigningKey and storageEncryptionKey are optional; ephemeral keys are auto-generated when omitted).\n\n  Option B — reference a pre-existing Secret with keys OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, and optionally OIDC_JWT_SIGNING_KEY and OIDC_STORAGE_ENCRYPTION_KEY:\n    config.oidc.existingSecret: \"<secret-name>\"\n" -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sconfig.authMode is \"oidc\" but its durable OAuth secrets are incomplete.\n\nTo fix, choose one of:\n  Option A — set %sconfig.oidc.clientID and %sconfig.oidc.clientSecret (jwtSigningKey and storageEncryptionKey are optional; ephemeral keys are auto-generated when omitted).\n\n  Option B — reference a pre-existing Secret with keys OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, and optionally OIDC_JWT_SIGNING_KEY and OIDC_STORAGE_ENCRYPTION_KEY:\n    %sconfig.oidc.existingSecret: \"<secret-name>\"\n" $p $p $p $p) -}}
 {{- end -}}
 {{- if and $hasAnyInline $hasExisting -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.existingSecret cannot be combined with inline clientID or clientSecret values. Supply exactly one credential source so the active credentials are unambiguous.\n" -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sconfig.oidc.existingSecret cannot be combined with inline clientID or clientSecret values. Supply exactly one credential source so the active credentials are unambiguous.\n" $p) -}}
 {{- end -}}
 {{- if and $hasInline .Values.config.oidc.jwtSigningKey -}}
 {{- if lt (len .Values.config.oidc.jwtSigningKey) 32 -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.jwtSigningKey must be at least 32 characters.\n" -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sconfig.oidc.jwtSigningKey must be at least 32 characters.\n" $p) -}}
 {{- end -}}
 {{- end -}}
 {{- if and $hasInline .Values.config.oidc.storageEncryptionKey -}}
 {{- if ne (len .Values.config.oidc.storageEncryptionKey) 44 -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.storageEncryptionKey must be a 44-character URL-safe base64 Fernet key.\n" -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sconfig.oidc.storageEncryptionKey must be a 44-character URL-safe base64 Fernet key.\n" $p) -}}
 {{- end -}}
 {{- end -}}
 {{- $issuer := .Values.config.oidc.issuerUrl | default "" -}}
 {{- $issuerHost := (urlParse $issuer).host | default "" | splitList ":" | first -}}
 {{- $issuerLocal := and (hasPrefix "http://" $issuer) (or (eq $issuerHost "localhost") (hasPrefix "127.0.0.1" $issuerHost)) -}}
 {{- if not (or (hasPrefix "https://" $issuer) $issuerLocal) -}}
-{{- fail "\n\nFAILURE [mcp-kubecost]: config.oidc.issuerUrl must be an https:// URL, or http:// on localhost / 127.0.0.1.\n\nThis mirrors the MCP SDK's own issuer rule (RFC 8414 requires HTTPS; the SDK carves out localhost for testing). A plaintext issuer on any other host is rejected by the SDK at startup, so the chart refuses it here rather than letting the pod crash-loop.\n\n  Example:\n    config.oidc.issuerUrl: \"https://kubecost.example.com/.well-known/openid-configuration\"\n" -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sconfig.oidc.issuerUrl must be an https:// URL, or http:// on localhost / 127.0.0.1.\n\nThis mirrors the MCP SDK's own issuer rule (RFC 8414 requires HTTPS; the SDK carves out localhost for testing). A plaintext issuer on any other host is rejected by the SDK at startup, so the chart refuses it here rather than letting the pod crash-loop.\n\n  Example:\n    %sconfig.oidc.issuerUrl: \"https://kubecost.example.com/.well-known/openid-configuration\"\n" $p $p) -}}
 {{- end -}}
 {{- if not (include "mcp-kubecost.externalUrl" .) -}}
 {{- fail (printf "\n\nFAILURE [mcp-kubecost]: %s could not be resolved.\n\nSet %s explicitly, or enable exactly one of httpRoute/ingress with exactly one non-wildcard hostname.\n%s\n  Example:\n    %s: \"https://kubecost.example.com\"\n" (include "mcp-kubecost.externalUrlRef" .) (include "mcp-kubecost.externalUrlRef" .) (include "mcp-kubecost.externalUrlHint" .) (include "mcp-kubecost.externalUrlRef" .)) -}}

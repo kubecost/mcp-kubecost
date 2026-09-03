@@ -108,37 +108,48 @@ service:
 
 httpRoute:
   # httpRoute.enabled controls whether a Gateway API HTTPRoute is rendered.
+  # Enabling it requires parentRefs and hostnames below; the chart fails otherwise
+  # rather than attaching to a placeholder Gateway.
   enabled: false
   # httpRoute.annotations are annotations added to the HTTPRoute.
   annotations: {}
-  # httpRoute.parentRefs identifies the existing Gateway and optional listener to attach to.
-  parentRefs:
-    - name: mcp-gateway
-      sectionName: https
+  # httpRoute.parentRefs identifies the existing Gateway and optional listener to
+  # attach to. Required when httpRoute.enabled is true.
+  parentRefs: []
+    # - name: mcp-gateway
+    #   sectionName: https
   # httpRoute.hostnames are the hostnames matched by the Gateway listener.
-  hostnames:
-    - mcp.example.com
+  # Required when httpRoute.enabled is true. A single non-wildcard hostname here
+  # is also what config.externalUrl is inferred from.
+  hostnames: []
+    # - mcp.example.com
   # The chart generates matches for /mcp, /oauth/mcp, and the required
   # well-known discovery paths. Requests are forwarded without path rewrites.
 
 ingress:
   # ingress.enabled controls whether the legacy Kubernetes Ingress is rendered.
   # Prefer httpRoute.enabled when the cluster has Gateway API support.
+  # Enabling it requires hosts below; the chart fails otherwise rather than
+  # publishing a placeholder hostname.
   enabled: false
-  # ingress.className is the IngressClass name.
-  className: nginx
-  # ingress.annotations are annotations added to the Ingress.
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-http
+  # ingress.className is the IngressClass name. Empty leaves the cluster's
+  # default IngressClass to claim the Ingress.
+  className: ""
+  # ingress.annotations are annotations added to the Ingress. Certificate
+  # issuance is left to the operator, e.g.:
+  #   cert-manager.io/cluster-issuer: letsencrypt-http
+  annotations: {}
   # ingress.hosts configures hostnames routed to the MCP server. The chart
-  # generates the same fixed paths as the HTTPRoute.
-  hosts:
-    - host: mcp.example.com
+  # generates the same fixed paths as the HTTPRoute. Required when
+  # ingress.enabled is true. A single non-wildcard host here is also what
+  # config.externalUrl is inferred from.
+  hosts: []
+    # - host: mcp.example.com
   # ingress.tls configures TLS secrets and their hostnames.
-  tls:
-    - secretName: kubecost-mcp-server-tls
-      hosts:
-        - mcp.example.com
+  tls: []
+    # - secretName: kubecost-mcp-server-tls
+    #   hosts:
+    #     - mcp.example.com
 
 resources:
   # resources.requests and resources.limits define the pod's CPU and memory budget.
@@ -158,7 +169,8 @@ persistence:
   #   true           — always create the PVC regardless of authMode.
   #   false          — never create the PVC (clients re-register on every pod restart).
   enabled: null
-  # Empty uses the cluster's default StorageClass.
+  # Empty falls back to the parent chart's global.defaultStorageClass, and then
+  # to the cluster's default StorageClass.
   storageClass: ""
   accessModes:
     - ReadWriteOnce
