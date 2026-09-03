@@ -3,6 +3,25 @@
 from __future__ import annotations
 
 import os
+import warnings
+
+# Authlib (transitive, via fastmcp's client/server extras) prefers the httpx2
+# distribution and warns on every run when it falls back to httpx. A pytest
+# filterwarnings entry cannot suppress it: authlib/deprecate.py calls
+# warnings.simplefilter("always", AuthlibDeprecationWarning) at import time,
+# which prepends a filter that outranks anything installed earlier. So import
+# the offending module here with the warning suppressed -- later imports hit
+# the sys.modules cache and stay quiet -- and let catch_warnings drop authlib's
+# global "always" override on the way out.
+#
+# Not fixed by installing httpx2: fastmcp, mcp, pytest-httpx, and mcp_kubecost
+# itself all pin httpx<1.0, so that would add a second HTTP stack for authlib
+# alone. Delete this block once fastmcp moves to httpx2.
+with warnings.catch_warnings():
+    import authlib.deprecate  # noqa: F401  -- installs its "always" filter first
+
+    warnings.filterwarnings("ignore", message="The httpx module is deprecated", category=DeprecationWarning)
+    import authlib.integrations.httpx_client  # noqa: F401
 
 import pytest
 
