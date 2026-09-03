@@ -1876,10 +1876,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 limit=limit,
             )
         except McpToolError as exc:
+            _err_msg, _err_action = mcp_error_response_fields(exc)
             return KubecostAllocationResponse(
                 status=QueryStatus.ERROR,
-                message=mcp_error_response_fields(exc)[0],
-                recommended_action=mcp_error_response_fields(exc)[1],
+                message=_err_msg,
+                recommended_action=_err_action,
                 window=window,
                 resolved_window=resolved_window,
                 aggregate=aggregate,
@@ -2079,10 +2080,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 limit=100000,
             )
         except McpToolError as exc:
+            _err_msg, _err_action = mcp_error_response_fields(exc)
             return CostComparisonResponse(
                 status=QueryStatus.ERROR,
-                message=mcp_error_response_fields(exc)[0],
-                recommended_action=mcp_error_response_fields(exc)[1],
+                message=_err_msg,
+                recommended_action=_err_action,
                 current_window=current_window,
                 baseline_window=baseline_window,
                 resolved_current_window=resolved_current_window,
@@ -2329,10 +2331,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 limit=_SAVINGS_API_FETCH_LIMIT,
             )
         except McpToolError as exc:
+            _err_msg, _err_action = mcp_error_response_fields(exc)
             return ContainerSavingsResponse(
                 status=QueryStatus.ERROR,
-                message=mcp_error_response_fields(exc)[0],
-                recommended_action=mcp_error_response_fields(exc)[1],
+                message=_err_msg,
+                recommended_action=_err_action,
                 window=resolved_window,
                 total_monthly_savings=0.0,
                 container_count=0,
@@ -2512,10 +2515,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 limit=limit,
             )
         except McpToolError as exc:
+            _err_msg, _err_action = mcp_error_response_fields(exc)
             return AbandonedWorkloadsResponse(
                 status=QueryStatus.ERROR,
-                message=mcp_error_response_fields(exc)[0],
-                recommended_action=mcp_error_response_fields(exc)[1],
+                message=_err_msg,
+                recommended_action=_err_action,
                 days=days,
                 threshold_bytes_per_second=threshold,
                 cluster_filter=cluster,
@@ -2587,10 +2591,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         try:
             raw = await _fetch_savings_overview()
         except McpToolError as exc:
+            _err_msg, _err_action = mcp_error_response_fields(exc)
             return SavingsOverviewResponse(
                 status=QueryStatus.ERROR,
-                message=mcp_error_response_fields(exc)[0],
-                recommended_action=mcp_error_response_fields(exc)[1],
+                message=_err_msg,
+                recommended_action=_err_action,
             )
 
         data = raw if isinstance(raw, dict) else {}
@@ -2696,10 +2701,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         try:
             raw = await _fetch_pv_sizing(window=window, overhead_percent=overhead_percent)
         except McpToolError as exc:
+            _err_msg, _err_action = mcp_error_response_fields(exc)
             return PVSizingResponse(
                 status=QueryStatus.ERROR,
-                message=mcp_error_response_fields(exc)[0],
-                recommended_action=mcp_error_response_fields(exc)[1],
+                message=_err_msg,
+                recommended_action=_err_action,
             )
 
         recs: list[dict[str, Any]] = raw if isinstance(raw, list) else raw.get("recommendations", [])
@@ -2796,10 +2802,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         try:
             raw = await _fetch_local_disks(window=window, overhead_percent=overhead_percent)
         except McpToolError as exc:
+            _err_msg, _err_action = mcp_error_response_fields(exc)
             return LocalDiskSavingsResponse(
                 status=QueryStatus.ERROR,
-                message=mcp_error_response_fields(exc)[0],
-                recommended_action=mcp_error_response_fields(exc)[1],
+                message=_err_msg,
+                recommended_action=_err_action,
             )
 
         disks: list[dict[str, Any]] = raw if isinstance(raw, list) else raw.get("unutilizedDisks", [])
@@ -2908,10 +2915,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         try:
             raw = await _fetch_node_group_sizing(cluster=cluster, window=window, profile=profile)
         except McpToolError as exc:
+            _err_msg, _err_action = mcp_error_response_fields(exc)
             return ClusterRightsizingResponse(
                 status=QueryStatus.ERROR,
-                message=mcp_error_response_fields(exc)[0],
-                recommended_action=mcp_error_response_fields(exc)[1],
+                message=_err_msg,
+                recommended_action=_err_action,
                 cluster=cluster,
                 profile=profile,
                 window=window,
@@ -3057,10 +3065,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         try:
             raw = await _fetch_unclaimed_volumes(window=window)
         except McpToolError as exc:
+            _err_msg, _err_action = mcp_error_response_fields(exc)
             return UnclaimedVolumesResponse(
                 status=QueryStatus.ERROR,
-                message=mcp_error_response_fields(exc)[0],
-                recommended_action=mcp_error_response_fields(exc)[1],
+                message=_err_msg,
+                recommended_action=_err_action,
             )
 
         data = raw if isinstance(raw, dict) else {}
@@ -3179,10 +3188,11 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 window=window, profile=profile, limit=limit, offset=offset
             )
         except McpToolError as exc:
+            _err_msg, _err_action = mcp_error_response_fields(exc)
             return ResourceQuotaResponse(
                 status=QueryStatus.ERROR,
-                message=mcp_error_response_fields(exc)[0],
-                recommended_action=mcp_error_response_fields(exc)[1],
+                message=_err_msg,
+                recommended_action=_err_action,
             )
 
         # This endpoint echoes the range it actually queried; prefer it over the prediction.

@@ -1,6 +1,6 @@
 # mcp-kubecost Helm chart
 
-This chart deploys the read-only Kubecost FinOps MCP server
+This chart deploys the read-only Kubecost FinOps MCP server.
 
 ## Installation Options
 
@@ -44,7 +44,7 @@ The MCP, by default, is bundled with the Kubecost helm installation in v3.3+. Th
 
 [Kubecost Helm Chart](https://github.com/kubecost/kubecost)
 
-When this chart is a subchart- and the parent `global` values are merged in and take precedence over the defaults in this chart's `values.yaml`:
+When this chart is a subchart, the parent `global` values are merged in and take precedence over the defaults in this chart's `values.yaml`:
 
 | Parent key                                                                 | Effect in this chart                                                                                                                                                   |
 | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
