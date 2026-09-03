@@ -253,6 +253,22 @@ class TestGetKubecostWorkloadCosts:
         assert _sc(result)["status"] == "error"
 
     @pytest.mark.asyncio
+    async def test_http_402_includes_kubecost_payload(self, httpx_mock: HTTPXMock, mcp_app):
+        body = "Enterprise feature: requested window of 30d is greater than maximum of 360h0m0s"
+        httpx_mock.add_response(
+            method="GET",
+            url=_allocation_url(),
+            status_code=402,
+            text=body,
+        )
+        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        result = await tool.run({"window": "30d"})
+        sc = _sc(result)
+        assert sc["status"] == "error"
+        assert body in sc["message"]
+        assert "shorter window" in sc["recommended_action"]
+
+    @pytest.mark.asyncio
     async def test_top_n_truncation(self, httpx_mock: HTTPXMock, mcp_app, allocation_response_multi_ns):
         httpx_mock.add_response(
             method="GET",

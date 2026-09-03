@@ -8,7 +8,8 @@ best practices:
 * Rule #6  — typed, structured output via :class:`BaseToolResponse`.
 * Rule #10 — :func:`safe_path_segment` keeps untrusted input out of URL paths.
 * Rule #12 — :func:`raise_tool_error` / :func:`call_get_api` produce structured,
-  actionable errors and never leak raw upstream bodies.
+  actionable errors. Truncated Kubecost product messages are included for 4xx
+  responses; HTML error pages are not.
 * Rule #13 — :func:`summarize_exception` yields a low-PII error summary suitable
   for logging and for ``skipped`` entries in fan-out tools.
 * Rule #16 — :class:`QueryStatus` lets a tool distinguish "no results" from
@@ -47,6 +48,7 @@ __all__ = [
     "call_post_api",
     "extract_list",
     "format_tool_error",
+    "mcp_error_response_fields",
     "normalize_window_order",
     "parse_api_timestamp",
     "parse_window_days",
@@ -438,6 +440,10 @@ def summarize_tool_response(payload: dict[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
+_DEFAULT_API_FAILURE_ACTION = "Check Kubecost connectivity and credentials, then retry."
+_ACTION_MARKER = " Action: "
+
+
 def format_tool_error(err: ToolError) -> str:
     """Render a structured :class:`ToolError` as a single LLM-readable line.
 
@@ -452,6 +458,20 @@ def format_tool_error(err: ToolError) -> str:
     if len(msg) > _MAX_ERROR_MESSAGE_CHARS:
         msg = msg[: _MAX_ERROR_MESSAGE_CHARS - 3] + "..."
     return msg
+
+
+def mcp_error_response_fields(exc: BaseException) -> tuple[str, str]:
+    """Split a formatted FastMCP ToolError into ``(message, recommended_action)``.
+
+    Tools that catch ``McpToolError`` and return a typed error envelope should use
+    this so the Kubecost-suggested next step lands in ``recommended_action``
+    instead of being buried only in the formatted line.
+    """
+    text = str(exc)
+    idx = text.rfind(_ACTION_MARKER)
+    if idx == -1:
+        return text, _DEFAULT_API_FAILURE_ACTION
+    return text[:idx], text[idx + len(_ACTION_MARKER) :]
 
 
 def raise_tool_error(

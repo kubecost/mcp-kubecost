@@ -42,6 +42,7 @@ from mcp_kubecost.tools._common import (
     QueryStatus,
     ResolvedWindow,
     call_get_api,
+    mcp_error_response_fields,
     normalize_window_order,
     parse_api_timestamp,
     parse_window_days,
@@ -1876,8 +1877,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         except McpToolError as exc:
             return KubecostAllocationResponse(
                 status=QueryStatus.ERROR,
-                message=str(exc),
-                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                message=mcp_error_response_fields(exc)[0],
+                recommended_action=mcp_error_response_fields(exc)[1],
                 window=window,
                 resolved_window=resolved_window,
                 aggregate=aggregate,
@@ -2079,8 +2080,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         except McpToolError as exc:
             return CostComparisonResponse(
                 status=QueryStatus.ERROR,
-                message=str(exc),
-                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                message=mcp_error_response_fields(exc)[0],
+                recommended_action=mcp_error_response_fields(exc)[1],
                 current_window=current_window,
                 baseline_window=baseline_window,
                 resolved_current_window=resolved_current_window,
@@ -2329,8 +2330,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         except McpToolError as exc:
             return ContainerSavingsResponse(
                 status=QueryStatus.ERROR,
-                message=str(exc),
-                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                message=mcp_error_response_fields(exc)[0],
+                recommended_action=mcp_error_response_fields(exc)[1],
                 window=resolved_window,
                 total_monthly_savings=0.0,
                 container_count=0,
@@ -2512,8 +2513,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         except McpToolError as exc:
             return AbandonedWorkloadsResponse(
                 status=QueryStatus.ERROR,
-                message=str(exc),
-                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                message=mcp_error_response_fields(exc)[0],
+                recommended_action=mcp_error_response_fields(exc)[1],
                 days=days,
                 threshold_bytes_per_second=threshold,
                 cluster_filter=cluster,
@@ -2587,8 +2588,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         except McpToolError as exc:
             return SavingsOverviewResponse(
                 status=QueryStatus.ERROR,
-                message=str(exc),
-                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                message=mcp_error_response_fields(exc)[0],
+                recommended_action=mcp_error_response_fields(exc)[1],
             )
 
         data = raw if isinstance(raw, dict) else {}
@@ -2696,8 +2697,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         except McpToolError as exc:
             return PVSizingResponse(
                 status=QueryStatus.ERROR,
-                message=str(exc),
-                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                message=mcp_error_response_fields(exc)[0],
+                recommended_action=mcp_error_response_fields(exc)[1],
             )
 
         recs: list[dict[str, Any]] = raw if isinstance(raw, list) else raw.get("recommendations", [])
@@ -2796,8 +2797,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         except McpToolError as exc:
             return LocalDiskSavingsResponse(
                 status=QueryStatus.ERROR,
-                message=str(exc),
-                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                message=mcp_error_response_fields(exc)[0],
+                recommended_action=mcp_error_response_fields(exc)[1],
             )
 
         disks: list[dict[str, Any]] = raw if isinstance(raw, list) else raw.get("unutilizedDisks", [])
@@ -2908,8 +2909,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         except McpToolError as exc:
             return ClusterRightsizingResponse(
                 status=QueryStatus.ERROR,
-                message=str(exc),
-                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                message=mcp_error_response_fields(exc)[0],
+                recommended_action=mcp_error_response_fields(exc)[1],
                 cluster=cluster,
                 profile=profile,
                 window=window,
@@ -3057,8 +3058,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         except McpToolError as exc:
             return UnclaimedVolumesResponse(
                 status=QueryStatus.ERROR,
-                message=str(exc),
-                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                message=mcp_error_response_fields(exc)[0],
+                recommended_action=mcp_error_response_fields(exc)[1],
             )
 
         data = raw if isinstance(raw, dict) else {}
@@ -3179,8 +3180,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         except McpToolError as exc:
             return ResourceQuotaResponse(
                 status=QueryStatus.ERROR,
-                message=str(exc),
-                recommended_action="Check Kubecost connectivity and credentials, then retry.",
+                message=mcp_error_response_fields(exc)[0],
+                recommended_action=mcp_error_response_fields(exc)[1],
             )
 
         # This endpoint echoes the range it actually queried; prefer it over the prediction.

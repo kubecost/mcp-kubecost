@@ -80,6 +80,10 @@ async def kubecost_client_lifespan(_server: object) -> AsyncIterator[dict[str, h
         await close_http_client()
 
 
+# Cap so a verbose upstream page cannot blow up the MCP error line.
+_MAX_UPSTREAM_BODY_CHARS = 300
+
+
 class KubecostClientError(Exception):
     """Raised when the Kubecost API returns an error."""
 
@@ -95,8 +99,26 @@ class KubecostClientError(Exception):
         """URL with the configured base URL replaced by a placeholder, for user-facing messages."""
         return f"https://YOUR_KUBECOST_URL{self.path}"
 
+    def safe_upstream_message(self) -> str:
+        """Return a truncated, single-line copy of the Kubecost response body.
+
+        HTML error pages are dropped so a reverse-proxy splash page does not
+        become the MCP error text. Product messages (plain text or JSON) are kept.
+        """
+        text = (self.message or "").strip()
+        if not text:
+            return ""
+        lowered = text[:80].lower()
+        if lowered.startswith("<!") or lowered.startswith("<html"):
+            return ""
+        text = " ".join(text.split())
+        if len(text) > _MAX_UPSTREAM_BODY_CHARS:
+            return text[: _MAX_UPSTREAM_BODY_CHARS - 3] + "..."
+        return text
+
     def to_tool_error(self) -> ToolError:
         """Convert to a structured ToolError for LLM consumption."""
+        detail = self.safe_upstream_message()
         if self.status_code == 401:
             return ToolError(
                 code=ErrorCode.AUTHENTICATION_FAILED,
@@ -124,6 +146,23 @@ class KubecostClientError(Exception):
                 suggested_action="Verify the resource ID or path is correct. Use a list tool to find valid IDs.",
                 context={"status_code": self.status_code, "url": self.redacted_url},
             )
+        elif self.status_code == 402:
+            message = (
+                "Kubecost rejected this query because it requires an Enterprise license "
+                "or exceeds the allowed time window for this installation."
+            )
+            if detail:
+                message = f"{message} Kubecost response: {detail}"
+            return ToolError(
+                code=ErrorCode.INVALID_INPUT,
+                message=message,
+                retryable=False,
+                suggested_action=(
+                    "Retry with a shorter window matching the maximum Kubecost reported, "
+                    "or upgrade to Kubecost Enterprise for longer history."
+                ),
+                context={"status_code": self.status_code, "raw_message": detail},
+            )
         elif self.status_code == 429:
             return ToolError(
                 code=ErrorCode.RATE_LIMITED,
@@ -141,12 +180,15 @@ class KubecostClientError(Exception):
                 context={"status_code": self.status_code, "retry_after_seconds": 10},
             )
         else:
+            message = f"Unexpected error from Kubecost API: HTTP {self.status_code}"
+            if detail:
+                message = f"{message}. Kubecost response: {detail}"
             return ToolError(
                 code=ErrorCode.DATA_UNAVAILABLE,
-                message=f"Unexpected error from Kubecost API: HTTP {self.status_code}",
+                message=message,
                 retryable=False,
                 suggested_action="Review the error details and adjust the request parameters.",
-                context={"status_code": self.status_code, "raw_message": self.message[:200]},
+                context={"status_code": self.status_code, "raw_message": detail},
             )
 
 
