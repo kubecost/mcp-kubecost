@@ -4,24 +4,33 @@ These tests are NOT run by default. To run them:
 
     uv run pytest -m integration
 
-They call the real MCP server tools via the fastmcp CLI, matching the commands:
+They call the real MCP server tools via the fastmcp CLI, matching commands like:
 
-    fastmcp call ./.bob/mcp.json get_container_savings_recommendations --input-json '{"window": "15d"}'
-    fastmcp call ./.bob/mcp.json get_kubecost_workload_costs --input-json '{"window": "15d"}'
+    fastmcp call tests/mcp-demo.json get_kubecost_workload_costs --input-json '{"window": "15d"}'
+    fastmcp call http://localhost:3030/mcp get_local_disk_savings
 
-Which instance is queried comes from the MCP config file, since the fastmcp CLI
-starts the server with the env block declared there — not from the ambient
-environment. By default that is the developer's own ``.bob/mcp.json`` (gitignored);
-set ``MCP_KUBECOST_CONFIG`` to point somewhere else. To run against the public demo,
-the same target CI uses:
+``MCP_KUBECOST_TARGET`` selects what to test, and takes either form the fastmcp
+CLI accepts:
 
-    MCP_KUBECOST_CONFIG=tests/mcp-demo.json uv run pytest -m integration
+  - **An MCPConfig file.** fastmcp starts the server itself from local source,
+    using the env block declared in the file — so this exercises your working
+    tree. Against the public demo, the same target CI uses::
 
-Every test skips when the config file is missing, so a checkout without one is not
-a failure.
+        MCP_KUBECOST_TARGET=tests/mcp-demo.json uv run pytest -m integration
+
+  - **A URL of an already-running server.** No config file needed. Note this
+    tests whatever code that server is running, which for a deployed pod is the
+    shipped image, not your local changes::
+
+        MCP_KUBECOST_TARGET=http://localhost:3030/mcp uv run pytest -m integration
+
+The default target is the developer's own ``.bob/mcp.json`` (gitignored), and
+``MCP_KUBECOST_CONFIG`` is still honoured as the old name for this setting.
+Tests skip when a file target is missing, so a checkout without one is not a
+failure; a URL target is not probed in advance, so an unreachable one fails.
 
 Prerequisites:
-  - The config's KUBECOST_BASE_URL must point to a live instance.
+  - The target's KUBECOST_BASE_URL must point to a live instance.
   - Optionally set KUBECOST_API_KEY there for authenticated endpoints.
 """
 
@@ -33,11 +42,12 @@ import re
 import subprocess
 from datetime import date, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
 
-DEFAULT_MCP_CONFIG = os.path.join(os.path.dirname(__file__), "..", ".bob", "mcp.json")
-MCP_CONFIG = os.environ.get("MCP_KUBECOST_CONFIG") or DEFAULT_MCP_CONFIG
+DEFAULT_MCP_TARGET = os.path.join(os.path.dirname(__file__), "..", ".bob", "mcp.json")
+MCP_TARGET = os.environ.get("MCP_KUBECOST_TARGET") or os.environ.get("MCP_KUBECOST_CONFIG") or DEFAULT_MCP_TARGET
 
 pytestmark = pytest.mark.integration
 
@@ -52,12 +62,12 @@ def _fastmcp(*args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _call_tool(config_path: str, tool: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _call_tool(target: str, tool: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Call a tool and return its parsed structured response.
 
     The CLI writes its logging to stderr, so stdout is the response body alone.
     """
-    result = _fastmcp("call", config_path, tool, "--input-json", json.dumps(payload))
+    result = _fastmcp("call", target, tool, "--input-json", json.dumps(payload))
     assert result.returncode == 0, f"fastmcp exited {result.returncode} for {tool} {payload}:\n{result.stderr}"
     try:
         return json.loads(result.stdout)
@@ -66,26 +76,33 @@ def _call_tool(config_path: str, tool: str, payload: dict[str, Any]) -> dict[str
 
 
 @pytest.fixture(scope="module")
-def mcp_config_path() -> str:
-    path = os.path.abspath(MCP_CONFIG)
+def mcp_target() -> str:
+    """The fastmcp target: a URL of a running server, or a local MCPConfig file.
+
+    A URL is passed through untouched — fastmcp connects to it directly, so no
+    config file has to exist. A file target is resolved and must be present.
+    """
+    if urlsplit(MCP_TARGET).scheme in ("http", "https"):
+        return MCP_TARGET
+    path = os.path.abspath(MCP_TARGET)
     if not os.path.isfile(path):
-        pytest.skip(f"MCP config not found at {path} (set MCP_KUBECOST_CONFIG to choose another)")
+        pytest.skip(f"MCP target not found at {path} (set MCP_KUBECOST_TARGET to a config file or a server URL)")
     return path
 
 
 class TestIntegrationGetKubecostWorkloadCosts:
-    def test_returns_status_ok_or_empty(self, mcp_config_path):
-        result = _fastmcp("call", mcp_config_path, "get_kubecost_workload_costs", "--input-json", '{"window": "15d"}')
+    def test_returns_status_ok_or_empty(self, mcp_target):
+        result = _fastmcp("call", mcp_target, "get_kubecost_workload_costs", "--input-json", '{"window": "15d"}')
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
         output = result.stdout
         assert '"status"' in output or "status" in output
         # Must not return an error status for a live cluster
         assert '"error"' not in output or '"ok"' in output or '"empty"' in output
 
-    def test_response_includes_rows_or_empty(self, mcp_config_path):
+    def test_response_includes_rows_or_empty(self, mcp_target):
         result = _fastmcp(
             "call",
-            mcp_config_path,
+            mcp_target,
             "get_kubecost_workload_costs",
             "--input-json",
             '{"window": "15d", "aggregate": "namespace"}',
@@ -106,7 +123,7 @@ _WINDOW_CASES = [("3d", 3), ("7d", 7)]
 
 
 @pytest.fixture(scope="module")
-def allocation_call(mcp_config_path):
+def allocation_call(mcp_target):
     """Return a memoized caller for get_kubecost_workload_costs.
 
     Each (window, accumulate) pair costs a subprocess round-trip, so results are
@@ -118,7 +135,7 @@ def allocation_call(mcp_config_path):
         key = (window, accumulate)
         if key not in cache:
             response = _call_tool(
-                mcp_config_path,
+                mcp_target,
                 "get_kubecost_workload_costs",
                 {
                     "window": window,
@@ -271,7 +288,7 @@ def _cpu_savings(row: dict[str, Any]) -> float:
 
 
 @pytest.fixture(scope="module")
-def savings_by_profile(mcp_config_path) -> dict[str, dict[str, Any]]:
+def savings_by_profile(mcp_target) -> dict[str, dict[str, Any]]:
     """Fetch all three profiles with window/quantiles/filters pinned.
 
     Only target utilization differs, so recommendation and savings order can be
@@ -280,7 +297,7 @@ def savings_by_profile(mcp_config_path) -> dict[str, dict[str, Any]]:
     results: dict[str, dict[str, Any]] = {}
     for profile in _PROFILES:
         response = _call_tool(
-            mcp_config_path,
+            mcp_target,
             "get_container_savings_recommendations",
             {
                 "profile": profile,
@@ -299,28 +316,28 @@ def savings_by_profile(mcp_config_path) -> dict[str, dict[str, Any]]:
 
 
 class TestIntegrationGetContainerSavingsRecommendations:
-    def test_returns_status_ok_or_empty(self, mcp_config_path):
+    def test_returns_status_ok_or_empty(self, mcp_target):
         result = _fastmcp(
-            "call", mcp_config_path, "get_container_savings_recommendations", "--input-json", '{"window": "15d"}'
+            "call", mcp_target, "get_container_savings_recommendations", "--input-json", '{"window": "15d"}'
         )
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
         output = result.stdout
         assert '"status"' in output or "status" in output
 
-    def test_high_availability_profile(self, mcp_config_path):
+    def test_high_availability_profile(self, mcp_target):
         result = _fastmcp(
             "call",
-            mcp_config_path,
+            mcp_target,
             "get_container_savings_recommendations",
             "--input-json",
             '{"profile": "high-availability"}',
         )
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
 
-    def test_development_profile(self, mcp_config_path):
+    def test_development_profile(self, mcp_target):
         result = _fastmcp(
             "call",
-            mcp_config_path,
+            mcp_target,
             "get_container_savings_recommendations",
             "--input-json",
             '{"profile": "development"}',
@@ -386,15 +403,15 @@ class TestIntegrationGetContainerSavingsRecommendations:
 
 
 class TestIntegrationGetAbandonedWorkloads:
-    def test_returns_status_ok_or_empty(self, mcp_config_path):
-        result = _fastmcp("call", mcp_config_path, "get_abandoned_workloads", "--input-json", "{}")
+    def test_returns_status_ok_or_empty(self, mcp_target):
+        result = _fastmcp("call", mcp_target, "get_abandoned_workloads", "--input-json", "{}")
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
         output = result.stdout
         assert '"status"' in output or "status" in output
         assert '"error"' not in output or '"ok"' in output or '"empty"' in output
 
-    def test_default_limit_returns_20(self, mcp_config_path):
-        result = _fastmcp("call", mcp_config_path, "get_abandoned_workloads", "--input-json", "{}")
+    def test_default_limit_returns_20(self, mcp_target):
+        result = _fastmcp("call", mcp_target, "get_abandoned_workloads", "--input-json", "{}")
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
         output = result.stdout
         # Default limit is 20 — message should reflect a bounded workload count
@@ -406,9 +423,9 @@ _RFC3339_RANGE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T00:00:00Z,\d{4}-\d{2}-\d{2}T
 
 
 class TestIntegrationGetKubecostCostComparison:
-    def test_defaults_to_week_over_week(self, mcp_config_path):
+    def test_defaults_to_week_over_week(self, mcp_target):
         """Calling with no args should compute RFC3339 week-over-week defaults and return ok or empty."""
-        result = _fastmcp("call", mcp_config_path, "get_kubecost_cost_comparison", "--input-json", "{}")
+        result = _fastmcp("call", mcp_target, "get_kubecost_cost_comparison", "--input-json", "{}")
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
         response = json.loads(result.stdout)
         assert response.get("status") in {"ok", "empty"}, f"Unexpected status: {response.get('status')}"
@@ -428,9 +445,9 @@ class TestIntegrationGetKubecostCostComparison:
         assert cur_days == 7, f"current_window should span 7 days, got {cur_days}"
         assert base_days == 7, f"baseline_window should span 7 days, got {base_days}"
 
-    def test_response_shape(self, mcp_config_path):
+    def test_response_shape(self, mcp_target):
         """Response must include rows, row_count, and window echo fields."""
-        result = _fastmcp("call", mcp_config_path, "get_kubecost_cost_comparison", "--input-json", "{}")
+        result = _fastmcp("call", mcp_target, "get_kubecost_cost_comparison", "--input-json", "{}")
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
         response = json.loads(result.stdout)
         if response.get("status") == "empty":
@@ -440,3 +457,118 @@ class TestIntegrationGetKubecostCostComparison:
         assert response["row_count"] >= len(response["rows"])
         assert len(response["rows"]) <= 20
         assert response["truncated"] is (response["row_count"] > len(response["rows"]))
+
+
+# ---------------------------------------------------------------------------
+# Derived-field consistency
+#
+# Unit tests cannot catch a scaling or formula error in a field the server
+# derives from an upstream API value: the fixture gets authored from the same
+# wrong assumption as the code, and then agrees with it. A 100x error in
+# utilization_percent shipped exactly that way.
+#
+# These tests instead cross-check each derived field against the other fields
+# in the same live response, so the data itself is the oracle.
+# ---------------------------------------------------------------------------
+
+# utilization_percent is rounded to 6 decimals, which is lossy for near-empty
+# disks (a 4 KiB disk on 80 GiB is ~0.0000048%), hence the absolute floor.
+_PERCENT_TOLERANCE = {"rel": 1e-3, "abs": 1e-6}
+
+
+def _rows_or_skip(response: dict[str, Any], tool: str) -> list[dict[str, Any]]:
+    status = response.get("status")
+    if status == "empty":
+        pytest.skip(f"No {tool} data on this cluster.")
+    assert status == "ok", f"Expected ok from {tool}: {response.get('message')}"
+    rows = response.get("rows") or []
+    if not rows:
+        pytest.skip(f"{tool} returned ok with no rows.")
+    return rows
+
+
+@pytest.fixture(scope="module")
+def local_disks(mcp_target) -> list[dict[str, Any]]:
+    response = _call_tool(mcp_target, "get_local_disk_savings", {"window": "15d", "top_n": 100})
+    return _rows_or_skip(response, "get_local_disk_savings")
+
+
+class TestIntegrationGetLocalDiskSavings:
+    def test_utilization_percent_matches_byte_ratio(self, local_disks):
+        """utilization_percent must equal usage/capacity as a percentage.
+
+        Kubecost already returns this field on a 0-100 scale; multiplying it by
+        100 again reported disks at 1031% that were at 10.3%.
+        """
+        mismatched = []
+        for row in local_disks:
+            capacity = row.get("current_capacity_bytes") or 0
+            if not capacity:
+                continue
+            reported = float(row.get("utilization_percent") or 0.0)
+            expected = float(row.get("current_usage_bytes") or 0) / capacity * 100
+            if reported != pytest.approx(expected, **_PERCENT_TOLERANCE):
+                ratio = f"{reported / expected:.1f}x" if expected else "n/a"
+                mismatched.append(f"{row.get('disk_name')}: reported={reported:g} expected={expected:g} ({ratio})")
+        assert not mismatched, (
+            "utilization_percent disagrees with current_usage_bytes/current_capacity_bytes:\n  "
+            + "\n  ".join(mismatched[:10])
+        )
+
+    def test_disk_using_less_than_capacity_is_never_over_100_percent(self, local_disks):
+        """Scale check that holds even if the byte fields are absent or zero.
+
+        Deliberately independent of the arithmetic above: a disk whose usage is
+        below its capacity cannot be over 100% utilized, whatever the rounding.
+        """
+        impossible = [
+            f"{row.get('disk_name')}: {row.get('utilization_percent')}% "
+            f"({row.get('current_usage_bytes')} of {row.get('current_capacity_bytes')} bytes)"
+            for row in local_disks
+            if (row.get("current_usage_bytes") or 0) < (row.get("current_capacity_bytes") or 0)
+            and float(row.get("utilization_percent") or 0.0) > 100.0
+        ]
+        assert not impossible, (
+            "Disks reported above 100% utilization while using less than capacity:\n  " + "\n  ".join(impossible[:10])
+        )
+
+    def test_recommended_capacity_never_exceeds_current(self, local_disks):
+        """This tool only ever recommends shrinking or decommissioning a disk."""
+        grown = [
+            f"{row.get('disk_name')}: {row.get('current_capacity_bytes')} -> {row.get('recommended_capacity_bytes')}"
+            for row in local_disks
+            if (row.get("recommended_capacity_bytes") or 0) > (row.get("current_capacity_bytes") or 0)
+        ]
+        assert not grown, "Recommended capacity exceeds current capacity:\n  " + "\n  ".join(grown[:10])
+
+
+@pytest.fixture(scope="module")
+def pv_rows(mcp_target) -> list[dict[str, Any]]:
+    response = _call_tool(mcp_target, "get_pv_sizing_recommendations", {"window": "15d", "top_n": 100})
+    return _rows_or_skip(response, "get_pv_sizing_recommendations")
+
+
+class TestIntegrationGetPvSizingRecommendations:
+    def test_savings_equals_current_minus_recommended_cost(self, pv_rows):
+        """savings_monthly is derived from the two cost fields and must agree with them."""
+        mismatched = []
+        for row in pv_rows:
+            current = float(row.get("current_cost_monthly") or 0.0)
+            recommended = float(row.get("recommended_cost_monthly") or 0.0)
+            savings = float(row.get("savings_monthly") or 0.0)
+            if savings != pytest.approx(current - recommended, rel=1e-3, abs=0.01):
+                mismatched.append(
+                    f"{row.get('volume_name')}: savings={savings:.4f} "
+                    f"but current={current:.4f} - recommended={recommended:.4f} = {current - recommended:.4f}"
+                )
+        assert not mismatched, "savings_monthly disagrees with the cost fields:\n  " + "\n  ".join(mismatched[:10])
+
+    def test_recommended_capacity_covers_observed_max_usage(self, pv_rows):
+        """Shrinking a PV below its observed peak would guarantee it fills up."""
+        undersized = [
+            f"{row.get('volume_name')}: recommended={row.get('recommended_capacity_bytes')} "
+            f"< max_usage={row.get('max_usage_bytes')}"
+            for row in pv_rows
+            if 0 < (row.get("recommended_capacity_bytes") or 0) < (row.get("max_usage_bytes") or 0)
+        ]
+        assert not undersized, "Recommended PV capacity is below observed max usage:\n  " + "\n  ".join(undersized[:10])
