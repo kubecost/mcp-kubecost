@@ -242,7 +242,7 @@ class TestReadmeProfileTable:
         assert documented.keys() == set(SIZING_PROFILES)
         for name, values in documented.items():
             for key, val in values.items():
-                assert val == SIZING_PROFILES[name][key], f"README {name}.{key} does not match SIZING_PROFILES"
+                assert val == SIZING_PROFILES[name][key], f"README {name}.{key} does not match SIZING_PROFILES"  # type: ignore[literal-required]
 
     def test_row_order_matches_menu_order(self):
         """README order must match the menu users actually see in the explore prompt."""
