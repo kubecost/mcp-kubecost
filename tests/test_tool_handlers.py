@@ -197,6 +197,19 @@ class TestGetKubecostWorkloadCosts:
         assert sc["total_cost"] > 0
 
     @pytest.mark.asyncio
+    async def test_reversed_window_is_normalized_in_request_and_response(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        result = await tool.run({"window": "2026-06-01T00:00:00Z,2026-05-01T00:00:00Z"})
+
+        expected = "2026-05-01T00:00:00Z,2026-06-01T00:00:00Z"
+        assert _sc(result)["window"] == expected
+        assert _sc(result)["resolved_window"]["source_expression"] == expected
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert request.url.params["window"] == expected
+
+    @pytest.mark.asyncio
     async def test_dimensions_in_response(self, httpx_mock: HTTPXMock, mcp_app, allocation_response_one_ns):
         httpx_mock.add_response(
             method="GET",
@@ -1033,6 +1046,14 @@ class TestComparisonWindowValidation:
         assert current_days == 7
         assert baseline_days == 7
 
+    def test_reversed_rfc3339_ranges_are_accepted(self):
+        current_days, baseline_days = _validate_comparison_windows(
+            "2020-01-15T00:00:00Z,2020-01-08T00:00:00Z",
+            "2020-01-08T00:00:00Z,2020-01-01T00:00:00Z",
+        )
+        assert current_days == 7
+        assert baseline_days == 7
+
     def test_rfc3339_range_including_today_rejected(self):
         from datetime import datetime, timedelta
 
@@ -1245,6 +1266,26 @@ class TestGetKubecostCostComparison:
         assert sc["status"] == "ok"
         assert sc["row_count"] == 1
         assert sc["rows"][0]["change"] == pytest.approx(150.0)
+
+    @pytest.mark.asyncio
+    async def test_reversed_windows_are_silently_normalized(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        result = await tool.run(
+            {
+                "current_window": "2020-01-15T00:00:00Z,2020-01-08T00:00:00Z",
+                "baseline_window": "2020-01-08T00:00:00Z,2020-01-01T00:00:00Z",
+            }
+        )
+
+        sc = _sc(result)
+        assert sc["current_window"] == "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z"
+        assert sc["baseline_window"] == "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z"
+        assert sc.get("warnings", []) == []
+        requests = httpx_mock.get_requests()
+        assert requests[0].url.params["window"] == sc["current_window"]
+        assert requests[1].url.params["window"] == sc["baseline_window"]
 
     @pytest.mark.asyncio
     async def test_empty_both_windows(self, httpx_mock: HTTPXMock, mcp_app):

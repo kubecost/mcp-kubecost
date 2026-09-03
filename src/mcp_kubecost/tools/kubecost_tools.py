@@ -42,6 +42,7 @@ from mcp_kubecost.tools._common import (
     QueryStatus,
     ResolvedWindow,
     call_get_api,
+    normalize_window_order,
     parse_api_timestamp,
     parse_window_days,
     raise_tool_error,
@@ -440,7 +441,7 @@ def _classify_comparison_window(window: str, field_name: str) -> tuple[str, Any]
     Raises a structured ToolError for any window that is unsuitable for a
     period-over-period comparison — only explicit RFC3339 ranges are accepted.
     """
-    raw = (window or "").strip()
+    raw = normalize_window_order((window or "").strip())
     lower = raw.lower()
 
     if _BARE_RELATIVE_WINDOW.match(lower):
@@ -1671,8 +1672,8 @@ class CostComparisonRow(BaseModel):
 class CostComparisonResponse(BaseToolResponse):
     """Response from get_kubecost_cost_comparison."""
 
-    current_window: str = Field(description="Current-period window as passed by the caller.")
-    baseline_window: str = Field(description="Baseline-period window as passed by the caller.")
+    current_window: str = Field(description="Normalized current-period window used for the query.")
+    baseline_window: str = Field(description="Normalized baseline-period window used for the query.")
     resolved_current_window: ResolvedWindow | None = Field(
         default=None,
         description="Resolved UTC boundaries and display string for the current window. Null if resolution failed.",
@@ -1854,6 +1855,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 aggregate=aggregate,
             )
 
+        window = normalize_window_order(window)
         resolved_window = _resolve_window_defensively(window)
         window_display = resolved_window.display if resolved_window else window
 
@@ -2045,8 +2047,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
         """
         default_current_window, default_baseline_window = _default_wow_windows()
-        current_window = current_window or default_current_window
-        baseline_window = baseline_window or default_baseline_window
+        current_window = normalize_window_order(current_window or default_current_window)
+        baseline_window = normalize_window_order(baseline_window or default_baseline_window)
         current_days, baseline_days = _validate_comparison_windows(current_window, baseline_window)
         resolved_current_window = _resolve_window_defensively(current_window)
         resolved_baseline_window = _resolve_window_defensively(baseline_window)
@@ -2268,7 +2270,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             target_ram_utilization=target_ram_utilization,
             min_monthly_savings=min_monthly_savings,
         )
-        resolved_window: str = sizing["window"]
+        resolved_window: str = normalize_window_order(sizing["window"])
+        sizing["window"] = resolved_window
         resolved_window_display = _resolve_window_defensively(resolved_window)
         window_display = resolved_window_display.display if resolved_window_display else resolved_window
         resolved_algorithm_cpu: str = sizing["algorithm_cpu"]
@@ -2677,6 +2680,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN NOT TO USE: For unclaimed (unbound) volumes, use get_unclaimed_volumes.
         For node-level local disk savings, use get_local_disk_savings.
         """
+        window = normalize_window_order(window)
         resolved_window = _resolve_window_defensively(window)
         window_display = resolved_window.display if resolved_window else window
         try:
@@ -2778,6 +2782,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         use get_pv_sizing_recommendations.
         For unclaimed volumes, use get_unclaimed_volumes.
         """
+        window = normalize_window_order(window)
         resolved_window = _resolve_window_defensively(window)
         window_display = resolved_window.display if resolved_window else window
         try:
@@ -2879,6 +2884,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN NOT TO USE: For container CPU/memory rightsizing, use get_container_savings_recommendations.
         For abandoned pods, use get_abandoned_workloads.
         """
+        window = normalize_window_order(window)
         resolved_window = _resolve_window_defensively(window)
         window_display = resolved_window.display if resolved_window else window
         try:
@@ -3027,6 +3033,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN NOT TO USE: For over-provisioned PVCs that ARE in use, use
         get_pv_sizing_recommendations. For node-local disk savings, use get_local_disk_savings.
         """
+        window = normalize_window_order(window)
         resolved_window = _resolve_window_defensively(window)
         window_display = resolved_window.display if resolved_window else window
         try:
@@ -3146,6 +3153,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         get_container_savings_recommendations. For node-level savings, use
         get_cluster_rightsizing_recommendations.
         """
+        window = normalize_window_order(window)
         resolved_window = _resolve_window_defensively(window)
         window_display = resolved_window.display if resolved_window else window
         try:

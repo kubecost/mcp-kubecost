@@ -196,12 +196,18 @@ class TestResolveWindow:
         assert result.end_utc.isoformat() == "2026-07-08T00:00:00+00:00"
         assert result.display == "2026-07-01 to 2026-07-07 (7 days)"
 
+    def test_reversed_rfc3339_range_is_normalized(self):
+        result = resolve_window("2026-06-01T00:00:00Z,2026-05-01T00:00:00Z")
+        assert result.start_utc.isoformat() == "2026-05-01T00:00:00+00:00"
+        assert result.end_utc.isoformat() == "2026-06-01T00:00:00+00:00"
+        assert result.source_expression == "2026-05-01T00:00:00Z,2026-06-01T00:00:00Z"
+
     @pytest.mark.parametrize(
         "expression",
         [
             "not-a-window",
             "2026-07-01T00:00:00Z,not-a-date",
-            "2026-07-08T00:00:00Z,2026-07-01T00:00:00Z",
+            "2026-07-01T00:00:00Z,2026-07-01T00:00:00Z",
         ],
     )
     def test_invalid_window_raises_tool_error(self, expression):
@@ -405,6 +411,25 @@ class TestToApiWindow:
 
     def test_explicit_rfc3339_range_passthrough(self):
         expr = "2026-07-01T00:00:00Z,2026-08-01T00:00:00Z"
+        assert _common.to_api_window(expr) == expr
+
+    def test_reversed_rfc3339_range_normalized(self):
+        result = _common.to_api_window("2026-06-01T00:00:00Z,2026-05-01T00:00:00Z")
+        assert result == "2026-05-01T00:00:00Z,2026-06-01T00:00:00Z"
+
+    def test_reversed_offset_range_normalized_by_instant(self):
+        result = _common.to_api_window("2026-05-01T02:00:00+01:00,2026-05-01T00:00:00Z")
+        assert result == "2026-05-01T00:00:00Z,2026-05-01T02:00:00+01:00"
+
+    @pytest.mark.parametrize(
+        "expr",
+        [
+            "not-a-window",
+            "2026-06-01T00:00:00Z,not-a-date",
+            "2026-06-01T00:00:00Z,2026-06-01T00:00:00Z",
+        ],
+    )
+    def test_non_reorderable_values_pass_through(self, expr):
         assert _common.to_api_window(expr) == expr
 
     def test_mixed_case_lastmonth_normalized(self, monkeypatch):
