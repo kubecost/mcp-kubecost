@@ -1,6 +1,12 @@
 # Kubecost FinOps MCP Server<!-- omit in toc -->
 
-A read-only MCP server that connects your AI assistant to [Kubecost](https://www.kubecost.com/) so you can ask natural-language questions about Kubernetes cloud costs and savings — no dashboards, no SQL.
+A read-only MCP server that connects your AI assistant to [Kubecost](https://www.kubecost.com/) so you can ask natural-language questions about Kubernetes cloud costs and potential savings.
+
+For most, the preferred method for installing the MCP is to use the Kubecost Helm Chart. It is included by default in Kubecost v3.3+.
+
+This repo may have newer versions of the MCP available for users looking for the latest improvements. The MCP should be compatible with any version of Kubecost 3.x, though be sure to read the release notes for any dependencies. Additional detail can be found in the [helm chart readme](charts/mcp-kubecost/README.md).
+
+[Kubecost Helm Chart](https://github.com/kubecost/kubecost)
 
 - [Who This Is For](#who-this-is-for)
 - [Examples of What You Can Ask](#examples-of-what-you-can-ask)
@@ -21,7 +27,7 @@ A read-only MCP server that connects your AI assistant to [Kubecost](https://www
 - **Platform engineers** who want cost visibility in their IDE or AI chats without switching to the Kubecost UI.
 
 > [!NOTE]
-> As of version 1.x, the server is read-only. It never modifies your cluster or Kubecost configuration.
+> The MCP server is read-only. It never modifies your cluster or Kubecost configuration.
 
 ## Examples of What You Can Ask
 
@@ -100,7 +106,6 @@ This repo may have newer versions of the MCP available for users looking for the
 ### Authentication Options
 
 Authentication, OIDC, API keys, and pod hardening are in [docs/auth/README.md](docs/auth/README.md).
-
 
 ## Development
 

@@ -65,7 +65,7 @@ just readme-tools
 ```
 
 > [!WARNING]
-> This rewrites **everything** in README.md between `## Tools` and `## Quick Start`, not just the tables. Any hand-written section in that range is deleted. Review the diff before keeping it.
+> This rewrites **everything** in README.md between `## Tools` and `### Container sizing profiles`, not just the tables. Any hand-written section in that range is deleted. Review the diff before keeping it.
 
 ## Testing and Quality
 
