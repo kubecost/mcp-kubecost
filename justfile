@@ -47,9 +47,13 @@ setup-dev-environment:
 # ── Testing ────────────────────────────────────────────────────────────────────
 test:
     uv run pytest
-
+# Integration tests
 test-all:
     uv run pytest -m ""
+
+# Integration tests on http
+test-all-http:
+    MCP_KUBECOST_TARGET=http://localhost:3030/mcp uv run pytest -m integration
 
 # ── Development Server ─────────────────────────────────────────────────────────
 
