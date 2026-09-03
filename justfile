@@ -136,13 +136,13 @@ update-dependencies:
     ./scripts/update_dependencies.py
     uv sync --all-extras --active --upgrade
 
-
-## IBM internal SSO testing:
+# public demo test, just to help with inspector cli syntax
 test-demo:
     npx @modelcontextprotocol/inspector \
     --cli https://mcp.demo.kubecost.cloud/mcp \
     --method tools/call --tool-name get_savings_overview
 
+## IBM internal SSO testing:
 test-sso:
     npx @modelcontextprotocol/inspector \
     --cli https://ibm-sso.demo.kubecost.cloud/mcp \
