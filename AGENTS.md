@@ -281,7 +281,7 @@ A newly added power is not visible to an in-flight agent session — the client 
 - Never commit `.env`, tokens, or secrets
 - Do not reintroduce removed tools (`kubecost_get_cluster_cost_by_workload`, `kubecost_get_infra_costs`, `list_container_clusters`, `kubecost_get_request_sizing`)
 - Only create git commits when explicitly asked
-- **`just readme-tools` is destructive.** `scripts/generate_tools_readme.py` rewrites *everything* in README.md between `## Tools` and `## Quick Start`, not just the tables — it will delete hand-written sections in that range. Review its diff before keeping it, or edit the tables by hand.
+- **`just readme-tools` is destructive.** `scripts/generate_tools_readme.py` rewrites *everything* in README.md between `## Tools` and `### Container sizing profiles`, not just the tables — it will delete hand-written sections in that range. Review its diff before keeping it, or edit the tables by hand.
 
 ## Related Docs
 

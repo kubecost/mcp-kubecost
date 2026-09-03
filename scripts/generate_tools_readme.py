@@ -3,14 +3,14 @@
 
 Reads the JSON output of ``fastmcp list --prompts --json`` (stdin or --input),
 extracts each tool/prompt name and the first line of its description, then
-rewrites everything after ``## Tools`` up to ``## Container sizing profiles`` in README.md.
+rewrites everything after ``## Tools`` up to ``### Container sizing profiles`` in README.md.
 
 Skills in this repo are registered as MCP prompts, so they appear in the
 prompts table — there is no separate skills list from FastMCP.
 
 Usage:
 
-    uv run fastmcp list .bob/mcp.json --prompts --json 2>/dev/null \\
+    uv run fastmcp list tests/mcp-demo.json --prompts --json 2>/dev/null \\
       | uv run scripts/generate_tools_readme.py
 
     uv run scripts/generate_tools_readme.py --input temp.json
@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 TOOLS_HEADING = "## Tools"
-QUICK_START_HEADING = "## Container sizing profiles"
+QUICK_START_HEADING = "### Container sizing profiles"
 
 
 def parse_args() -> argparse.Namespace:
@@ -123,7 +123,7 @@ def replace_tools_section(readme: str, section_block: str) -> str:
     replacement = rf"\1\n{section_block}\3"
     updated, n = pattern.subn(replacement, readme, count=1)
     if n != 1:
-        raise SystemExit("Failed to locate section between ## Tools and ## Container sizing profiles")
+        raise SystemExit("Failed to locate section between ## Tools and ### Container sizing profiles")
     return updated
 
 
