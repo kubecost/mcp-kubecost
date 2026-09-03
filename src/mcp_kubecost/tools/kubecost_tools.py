@@ -1289,8 +1289,9 @@ class LocalDiskRow(BaseModel):
     utilization_percent: float = Field(
         default=0.0,
         description=(
-            "Disk utilization percentage on a 0–100 scale. Converted from the 0–1 ratio returned "
-            "by Kubecost. Values may exceed 100 in burst or overcommit scenarios."
+            "Disk utilization percentage on a 0–100 scale, passed through from Kubecost as-is "
+            "(the API already scales it; verified against Kubecost 2.9 and 3.2). Values may "
+            "exceed 100 when a disk is overcommitted."
         ),
     )
     current_usage_bytes: int = Field(default=0, description="Current used bytes.")
@@ -2829,7 +2830,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 LocalDiskRow(
                     disk_name=d.get("diskName", ""),
                     cluster_id=d.get("clusterId", ""),
-                    utilization_percent=round(float(d.get("utilizationPercent", 0.0) or 0.0) * 100, 6),
+                    utilization_percent=round(float(d.get("utilizationPercent", 0.0) or 0.0), 6),
                     current_usage_bytes=int(d.get("currentUsageBytes", 0) or 0),
                     current_capacity_bytes=int(d.get("currentCapacityBytes", 0) or 0),
                     recommended_capacity_bytes=int(d.get("recommendedCapacityBytes", 0) or 0),

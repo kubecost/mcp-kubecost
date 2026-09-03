@@ -274,7 +274,12 @@ def pv_sizing_api_response() -> dict:
 
 @pytest.fixture
 def local_disks_api_response() -> dict:
-    """Minimal localLowDisks API response with two disks."""
+    """Minimal localLowDisks API response with two disks.
+
+    utilizationPercent is already on a 0-100 scale in the real API (confirmed against
+    Kubecost 2.9 and 3.2) and agrees with the usage/capacity bytes in each row here.
+    An earlier version of this fixture used 0-1 ratios, which hid a 100x scaling bug.
+    """
     return {
         "unutilizedDisks": [
             {
@@ -290,7 +295,7 @@ def local_disks_api_response() -> dict:
             {
                 "diskName": "ip-10-0-5-12.us-west-2.compute.internal",
                 "clusterId": "kc-demo-rosa",
-                "utilizationPercent": 0.05,
+                "utilizationPercent": 5.0,
                 "currentUsageBytes": 18760229478,
                 "currentCapacityBytes": 375204589568,
                 "recommendedCapacityBytes": 0,
