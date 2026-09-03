@@ -34,7 +34,7 @@ or diagnosing why costs changed (spikes, drops, anomalies).
 ### Storage & disk savings (Kubecost)
 - `get_pv_sizing_recommendations` — Right-sizes over-provisioned PersistentVolumeClaims. Returns top recommendations
   sorted by monthly savings with current vs recommended capacity and cost.
-- `get_local_disk_savings` — Surfaces underutilized node-local disks. utilization_percent is a 0-1 ratio;
+- `get_local_disk_savings` — Surfaces underutilized node-local disks. utilization_percent is on a 0-100 scale;
   recommended_capacity_bytes=0 means full decommission is recommended.
 - `get_unclaimed_volumes` — Lists PersistentVolumes with no PVC binding (pure waste). Deletion saves the full
   monthly_cost — confirm with storage team before removing.

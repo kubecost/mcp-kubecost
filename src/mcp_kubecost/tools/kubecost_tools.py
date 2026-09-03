@@ -1280,9 +1280,8 @@ class LocalDiskRow(BaseModel):
     utilization_percent: float = Field(
         default=0.0,
         description=(
-            "Disk utilization as a 0–1 ratio (NOT 0–100). "
-            "May theoretically exceed 1.0 in burst or overcommit scenarios — values above 1.0 "
-            "are passed through as-is from the upstream Kubecost API and are not an error."
+            "Disk utilization percentage on a 0–100 scale. Converted from the 0–1 ratio returned "
+            "by Kubecost. Values may exceed 100 in burst or overcommit scenarios."
         ),
     )
     current_usage_bytes: int = Field(default=0, description="Current used bytes.")
@@ -2769,11 +2768,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
         WHAT: Returns disks that are attached to nodes that are underutilized.
         Each row includes:
-        disk name, cluster, utilization ratio (0–1 scale),
+        disk name, cluster, utilization percentage (0–100 scale),
         current and recommended capacity in bytes, and estimated
         monthly savings.
-
-        Note: utilization_percent is a 0–1 ratio, NOT a 0–100 percentage.
 
         WHEN TO USE: When investigating node-level local storage waste, or when the
         savings overview shows underutilizedLocalDisks has significant savings.
@@ -2822,7 +2819,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 LocalDiskRow(
                     disk_name=d.get("diskName", ""),
                     cluster_id=d.get("clusterId", ""),
-                    utilization_percent=round(float(d.get("utilizationPercent", 0.0) or 0.0), 6),
+                    utilization_percent=round(float(d.get("utilizationPercent", 0.0) or 0.0) * 100, 6),
                     current_usage_bytes=int(d.get("currentUsageBytes", 0) or 0),
                     current_capacity_bytes=int(d.get("currentCapacityBytes", 0) or 0),
                     recommended_capacity_bytes=int(d.get("recommendedCapacityBytes", 0) or 0),

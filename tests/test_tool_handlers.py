@@ -814,6 +814,7 @@ class TestGetLocalDiskSavings:
         assert sc["status"] == "ok"
         assert sc["row_count"] == 2
         assert sc["total_monthly_savings"] == pytest.approx(18.98)
+        assert [row["utilization_percent"] for row in sc["rows"]] == [0.0, 5.0]
 
     @pytest.mark.asyncio
     async def test_rows_sorted_desc(self, httpx_mock: HTTPXMock, mcp_app, local_disks_api_response):
