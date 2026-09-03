@@ -195,6 +195,31 @@ class TestGetKubecostWorkloadCosts:
         sc = _sc(result)
         assert sc["status"] == "ok"
         assert sc["total_cost"] > 0
+        row = sc["rows"][0]
+        assert row["cpuCostIdle"] + row["ramCostIdle"] > 0
+        assert row["totalCost"] == pytest.approx(
+            row["cpuCost"]
+            + row["ramCost"]
+            + row["networkCost"]
+            + row["pvCost"]
+            + row["gpuCost"]
+            + row["loadBalancerCost"]
+            + row["sharedCost"]
+        )
+        assert any("already included" in note and "do not add them again" in note for note in sc["notes"])
+
+    @pytest.mark.asyncio
+    async def test_reversed_window_is_normalized_in_request_and_response(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        result = await tool.run({"window": "2026-06-01T00:00:00Z,2026-05-01T00:00:00Z"})
+
+        expected = "2026-05-01T00:00:00Z,2026-06-01T00:00:00Z"
+        assert _sc(result)["window"] == expected
+        assert _sc(result)["resolved_window"]["source_expression"] == expected
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert request.url.params["window"] == expected
 
     @pytest.mark.asyncio
     async def test_dimensions_in_response(self, httpx_mock: HTTPXMock, mcp_app, allocation_response_one_ns):
@@ -801,6 +826,7 @@ class TestGetLocalDiskSavings:
         assert sc["status"] == "ok"
         assert sc["row_count"] == 2
         assert sc["total_monthly_savings"] == pytest.approx(18.98)
+        assert [row["utilization_percent"] for row in sc["rows"]] == [0.0, 5.0]
 
     @pytest.mark.asyncio
     async def test_rows_sorted_desc(self, httpx_mock: HTTPXMock, mcp_app, local_disks_api_response):
@@ -826,6 +852,13 @@ class TestGetLocalDiskSavings:
 
 
 class TestGetClusterRightsizingRecommendations:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cluster", ["", "   "])
+    async def test_blank_cluster_is_rejected_before_api_call(self, mcp_app, cluster):
+        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        with pytest.raises(FastMcpToolError, match="cluster ID is required"):
+            await tool.run({"cluster": cluster})
+
     @pytest.mark.asyncio
     async def test_success_response(self, httpx_mock: HTTPXMock, mcp_app, node_group_sizing_api_response):
         httpx_mock.add_response(method="GET", url=_node_group_url(), json=node_group_sizing_api_response)
@@ -1029,6 +1062,14 @@ class TestComparisonWindowValidation:
         current_days, baseline_days = _validate_comparison_windows(
             "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
             "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z",
+        )
+        assert current_days == 7
+        assert baseline_days == 7
+
+    def test_reversed_rfc3339_ranges_are_accepted(self):
+        current_days, baseline_days = _validate_comparison_windows(
+            "2020-01-15T00:00:00Z,2020-01-08T00:00:00Z",
+            "2020-01-08T00:00:00Z,2020-01-01T00:00:00Z",
         )
         assert current_days == 7
         assert baseline_days == 7
@@ -1245,6 +1286,26 @@ class TestGetKubecostCostComparison:
         assert sc["status"] == "ok"
         assert sc["row_count"] == 1
         assert sc["rows"][0]["change"] == pytest.approx(150.0)
+
+    @pytest.mark.asyncio
+    async def test_reversed_windows_are_silently_normalized(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        result = await tool.run(
+            {
+                "current_window": "2020-01-15T00:00:00Z,2020-01-08T00:00:00Z",
+                "baseline_window": "2020-01-08T00:00:00Z,2020-01-01T00:00:00Z",
+            }
+        )
+
+        sc = _sc(result)
+        assert sc["current_window"] == "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z"
+        assert sc["baseline_window"] == "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z"
+        assert sc.get("warnings", []) == []
+        requests = httpx_mock.get_requests()
+        assert requests[0].url.params["window"] == sc["current_window"]
+        assert requests[1].url.params["window"] == sc["baseline_window"]
 
     @pytest.mark.asyncio
     async def test_empty_both_windows(self, httpx_mock: HTTPXMock, mcp_app):

@@ -47,6 +47,7 @@ __all__ = [
     "call_post_api",
     "extract_list",
     "format_tool_error",
+    "normalize_window_order",
     "parse_api_timestamp",
     "parse_window_days",
     "raise_tool_error",
@@ -187,6 +188,24 @@ def parse_api_timestamp(value: Any) -> datetime | None:
     return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed
 
 
+def normalize_window_order(window: str) -> str:
+    """Return an explicit two-timestamp window in chronological order.
+
+    Only otherwise-parseable ``start,end`` expressions are changed. Named
+    windows, malformed ranges, and equal boundaries pass through so their
+    existing resolution or validation paths retain responsibility for them.
+    """
+    parts = [part.strip() for part in window.split(",")]
+    if len(parts) != 2 or not all(parts):
+        return window
+
+    first = parse_api_timestamp(parts[0])
+    second = parse_api_timestamp(parts[1])
+    if first is None or second is None or first <= second:
+        return window
+    return f"{parts[1]},{parts[0]}"
+
+
 def resolved_window_from_api(window: Any, source_expression: str) -> ResolvedWindow | None:
     """Build a ``ResolvedWindow`` from the window Kubecost echoed in its response.
 
@@ -219,7 +238,7 @@ def resolve_window(window: str) -> ResolvedWindow:
     Use :func:`resolved_window_from_api` instead whenever a response is already
     in hand — this function can only approximate what the server will do.
     """
-    source_expression = (window or "").strip()
+    source_expression = normalize_window_order((window or "").strip())
     lower = source_expression.lower()
     if not source_expression:
         raise_tool_error(
@@ -296,16 +315,17 @@ _CALENDAR_ALIASES: frozenset[str] = frozenset({"lastmonth", "lastweek", "month",
 def to_api_window(window: str) -> str:
     """Return a Kubecost-safe window string for use in API call parameters.
 
-    Calendar aliases (``"lastmonth"``, ``"lastweek"``, ``"month"``, ``"week"``) are
-    pre-resolved to explicit RFC3339 date pairs because Kubecost's own server-side
-    resolution of these aliases is broken (e.g. ``"lastmonth"`` becomes a single day).
-    All other values — rolling windows like ``"7d"`` and already-explicit RFC3339 ranges
-    — are returned unchanged.
+    Explicit RFC3339 ranges are put in chronological order. Calendar aliases
+    (``"lastmonth"``, ``"lastweek"``, ``"month"``, ``"week"``) are pre-resolved
+    to explicit RFC3339 date pairs because Kubecost's own server-side resolution
+    of these aliases is broken (e.g. ``"lastmonth"`` becomes a single day).
+    Other values, including rolling windows like ``"7d"``, are returned unchanged.
     """
-    normalized = window.strip().lower()
+    ordered_window = normalize_window_order(window)
+    normalized = ordered_window.strip().lower()
     if normalized not in _CALENDAR_ALIASES:
-        return window
-    resolved = resolve_window(window)
+        return ordered_window
+    resolved = resolve_window(ordered_window)
     fmt = "%Y-%m-%dT%H:%M:%SZ"
     return f"{resolved.start_utc.strftime(fmt)},{resolved.end_utc.strftime(fmt)}"
 

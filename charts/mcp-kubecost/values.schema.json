@@ -9,6 +9,7 @@
       "additionalProperties": true,
       "properties": {
         "imageRegistry": { "type": "string" },
+        "defaultStorageClass": { "type": "string" },
         "imagePullSecrets": {
           "type": "array",
           "items": {
@@ -115,7 +116,7 @@
         "annotations": { "type": "object" },
         "parentRefs": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "items": {
             "type": "object",
             "additionalProperties": false,

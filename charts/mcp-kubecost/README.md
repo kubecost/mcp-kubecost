@@ -12,7 +12,8 @@ The MCP, by default, is bundled with the Kubecost helm installation. This repo m
 
 ## Standalone Install
 
-Create a file with the values that differ from the defaults, example `helmValues-mcp-kubecost.yaml. Then install with:
+Create a file with the values that differ from the defaults, for example
+`helmValues-mcp-kubecost.yaml`. Then install with:
 
 ```bash
 helm upgrade --install kubecost-mcp mcp-kubecost \
@@ -54,10 +55,11 @@ FileTreeStore writes beneath that mount.
 | `true`           | PVC is always created regardless of `authMode`.                                                                                                                                                                  |
 | `false`          | PVC is never created. The pod uses an `emptyDir` instead, and clients must re-register every time the pod restarts. A post-install warning is shown when `authMode=oidc` and persistence is explicitly disabled. |
 
-When a PVC is created it defaults to `1Gi` on the cluster's default
-StorageClass. Set `persistence.storageClass`, `persistence.accessModes`,
-`persistence.size`, or `persistence.annotations` when the cluster requires
-different provisioning.
+When a PVC is created it defaults to `1Gi`. The StorageClass is
+`persistence.storageClass`, falling back to the parent chart's
+`global.defaultStorageClass` and then to the cluster's default StorageClass.
+Set `persistence.storageClass`, `persistence.accessModes`, `persistence.size`,
+or `persistence.annotations` when the cluster requires different provisioning.
 
 ## Gateway API HTTPRoute (preferred)
 
@@ -70,10 +72,18 @@ Enable the route and point it at an existing Gateway listener:
 ```bash
 helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
   --namespace mcp-kubecost --create-namespace \
+  --set config.authMode=api_key \
   --set httpRoute.enabled=true \
   --set 'httpRoute.parentRefs[0].name=mcp-gateway' \
-  --set 'httpRoute.parentRefs[0].sectionName=https'
+  --set 'httpRoute.parentRefs[0].sectionName=https' \
+  --set 'httpRoute.hostnames[0]=mcp.example.com'
 ```
+
+`httpRoute.parentRefs` and `httpRoute.hostnames` ship empty and are required
+once `httpRoute.enabled` is true; the chart fails rather than attaching to a
+placeholder Gateway or publishing a placeholder hostname. `ingress.hosts` is
+required the same way when `ingress.enabled` is true. The example uses
+`authMode=api_key`, so callers must supply an `X-API-KEY` header.
 
 `httpRoute.rules` accepts Gateway API rule fields such as `matches`,
 `filters`, `timeouts`, and `backendRefs`. If a rule omits `backendRefs`, the
@@ -83,8 +93,8 @@ chart routes it to the Service created by this release.
 
 Ingress is retained for clusters that do not yet provide Gateway API. Set
 `ingress.enabled=true`, then provide the host, path, annotations, and TLS
-Secret appropriate for the cluster. Do not enable both exposure resources
-unless you intentionally want both routes.
+Secret appropriate for the cluster. The chart rejects enabling both Ingress
+and HTTPRoute; choose exactly one chart-managed exposure resource.
 
 For a custom Kubecost CA, put the certificate in an existing Secret and set
 `config.ssl.caBundle.existingSecret` and `config.ssl.caBundle.key`. The chart

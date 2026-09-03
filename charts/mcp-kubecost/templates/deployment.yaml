@@ -60,7 +60,9 @@ spec:
       enableServiceLinks: false
       securityContext:
         {{- include "mcp-kubecost.podSecurityContext" . | nindent 8 }}
-      {{- include "mcp-kubecost.imagePullSecrets" . | nindent 6 }}
+      {{- with include "mcp-kubecost.imagePullSecrets" . }}
+      {{- . | nindent 6 }}
+      {{- end }}
       containers:
         - name: mcp-kubecost
           image: {{ include "mcp-kubecost.image" . | quote }}

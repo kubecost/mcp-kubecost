@@ -42,6 +42,7 @@ from mcp_kubecost.tools._common import (
     QueryStatus,
     ResolvedWindow,
     call_get_api,
+    normalize_window_order,
     parse_api_timestamp,
     parse_window_days,
     raise_tool_error,
@@ -440,7 +441,7 @@ def _classify_comparison_window(window: str, field_name: str) -> tuple[str, Any]
     Raises a structured ToolError for any window that is unsuitable for a
     period-over-period comparison — only explicit RFC3339 ranges are accepted.
     """
-    raw = (window or "").strip()
+    raw = normalize_window_order((window or "").strip())
     lower = raw.lower()
 
     if _BARE_RELATIVE_WINDOW.match(lower):
@@ -585,8 +586,9 @@ _UNALLOCATED = "__unallocated__"
 
 # Idle capacity is shared into every row (see _fetch_allocation), which the caller cannot infer.
 _IDLE_SHARED_NOTE = (
-    "Idle (unused but provisioned) capacity is distributed proportionally into each row's cost, "
-    "so the rows will not sum to a separate idle line."
+    "Idle (unused but provisioned) capacity is distributed proportionally into each row. "
+    "cpuCostIdle, ramCostIdle, and gpuCostIdle are portions already included in the corresponding "
+    "resource costs and totalCost; do not add them again. No separate idle row is returned."
 )
 
 
@@ -919,22 +921,22 @@ class AllocationRow(BaseModel):
     cpu_cost: float = Field(
         default=0.0,
         alias="cpuCost",
-        description="CPU request cost (USD).",
+        description="CPU request cost including the cpuCostIdle portion (USD).",
     )
     cpu_cost_idle: float = Field(
         default=0.0,
         alias="cpuCostIdle",
-        description="CPU idle cost — unused capacity billed (USD).",
+        description="Idle portion already included in cpuCost and totalCost; do not add it again (USD).",
     )
     ram_cost: float = Field(
         default=0.0,
         alias="ramCost",
-        description="RAM request cost (USD).",
+        description="RAM request cost including the ramCostIdle portion (USD).",
     )
     ram_cost_idle: float = Field(
         default=0.0,
         alias="ramCostIdle",
-        description="RAM idle cost — unused capacity billed (USD).",
+        description="Idle portion already included in ramCost and totalCost; do not add it again (USD).",
     )
     network_cost: float = Field(
         default=0.0,
@@ -949,12 +951,12 @@ class AllocationRow(BaseModel):
     gpu_cost: float = Field(
         default=0.0,
         alias="gpuCost",
-        description="GPU cost (USD).",
+        description="GPU cost including the gpuCostIdle portion (USD).",
     )
     gpu_cost_idle: float = Field(
         default=0.0,
         alias="gpuCostIdle",
-        description="GPU idle cost (USD).",
+        description="Idle portion already included in gpuCost and totalCost; do not add it again (USD).",
     )
     load_balancer_cost: float = Field(
         default=0.0,
@@ -969,7 +971,7 @@ class AllocationRow(BaseModel):
     total_cost: float = Field(
         default=0.0,
         alias="totalCost",
-        description="Sum of all cost components (USD).",
+        description="Sum of all cost components, including their idle portions (USD).",
     )
     # --- computed idle percentages ---
     cpu_idle_pct: str = Field(
@@ -1007,7 +1009,10 @@ class KubecostAllocationResponse(BaseToolResponse):
         default_factory=list,
         description="Resolved dimension columns present in each result row.",
     )
-    total_cost: float = Field(default=0.0, description="Sum of totalCost across all rows (USD).")
+    total_cost: float = Field(
+        default=0.0,
+        description="Sum of totalCost across all rows, including proportionally distributed idle cost (USD).",
+    )
     row_count: int = Field(default=0, description="Total number of rows returned.")
     rows: list[AllocationRow] = Field(
         default_factory=list,
@@ -1028,6 +1033,10 @@ class KubecostAllocationResponse(BaseToolResponse):
             "only the top_n entries. Use a larger top_n or narrow the window/aggregate "
             "to retrieve the full set."
         ),
+    )
+    notes: list[str] = Field(
+        default_factory=list,
+        description="How to interpret allocation costs, including idle-cost handling.",
     )
 
 
@@ -1279,9 +1288,8 @@ class LocalDiskRow(BaseModel):
     utilization_percent: float = Field(
         default=0.0,
         description=(
-            "Disk utilization as a 0–1 ratio (NOT 0–100). "
-            "May theoretically exceed 1.0 in burst or overcommit scenarios — values above 1.0 "
-            "are passed through as-is from the upstream Kubecost API and are not an error."
+            "Disk utilization percentage on a 0–100 scale. Converted from the 0–1 ratio returned "
+            "by Kubecost. Values may exceed 100 in burst or overcommit scenarios."
         ),
     )
     current_usage_bytes: int = Field(default=0, description="Current used bytes.")
@@ -1671,8 +1679,8 @@ class CostComparisonRow(BaseModel):
 class CostComparisonResponse(BaseToolResponse):
     """Response from get_kubecost_cost_comparison."""
 
-    current_window: str = Field(description="Current-period window as passed by the caller.")
-    baseline_window: str = Field(description="Baseline-period window as passed by the caller.")
+    current_window: str = Field(description="Normalized current-period window used for the query.")
+    baseline_window: str = Field(description="Normalized baseline-period window used for the query.")
     resolved_current_window: ResolvedWindow | None = Field(
         default=None,
         description="Resolved UTC boundaries and display string for the current window. Null if resolution failed.",
@@ -1854,6 +1862,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 aggregate=aggregate,
             )
 
+        window = normalize_window_order(window)
         resolved_window = _resolve_window_defensively(window)
         window_display = resolved_window.display if resolved_window else window
 
@@ -1956,6 +1965,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             row_count=len(filtered),
             rows=[AllocationRow.model_validate(r) for r in filtered[:top_n]],
             truncated=truncated,
+            notes=[_IDLE_SHARED_NOTE],
         )
 
     @mcp.tool(
@@ -2045,8 +2055,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
         """
         default_current_window, default_baseline_window = _default_wow_windows()
-        current_window = current_window or default_current_window
-        baseline_window = baseline_window or default_baseline_window
+        current_window = normalize_window_order(current_window or default_current_window)
+        baseline_window = normalize_window_order(baseline_window or default_baseline_window)
         current_days, baseline_days = _validate_comparison_windows(current_window, baseline_window)
         resolved_current_window = _resolve_window_defensively(current_window)
         resolved_baseline_window = _resolve_window_defensively(baseline_window)
@@ -2268,7 +2278,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             target_ram_utilization=target_ram_utilization,
             min_monthly_savings=min_monthly_savings,
         )
-        resolved_window: str = sizing["window"]
+        resolved_window: str = normalize_window_order(sizing["window"])
+        sizing["window"] = resolved_window
         resolved_window_display = _resolve_window_defensively(resolved_window)
         window_display = resolved_window_display.display if resolved_window_display else resolved_window
         resolved_algorithm_cpu: str = sizing["algorithm_cpu"]
@@ -2677,6 +2688,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN NOT TO USE: For unclaimed (unbound) volumes, use get_unclaimed_volumes.
         For node-level local disk savings, use get_local_disk_savings.
         """
+        window = normalize_window_order(window)
         resolved_window = _resolve_window_defensively(window)
         window_display = resolved_window.display if resolved_window else window
         try:
@@ -2765,11 +2777,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
         WHAT: Returns disks that are attached to nodes that are underutilized.
         Each row includes:
-        disk name, cluster, utilization ratio (0–1 scale),
+        disk name, cluster, utilization percentage (0–100 scale),
         current and recommended capacity in bytes, and estimated
         monthly savings.
-
-        Note: utilization_percent is a 0–1 ratio, NOT a 0–100 percentage.
 
         WHEN TO USE: When investigating node-level local storage waste, or when the
         savings overview shows underutilizedLocalDisks has significant savings.
@@ -2778,6 +2788,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         use get_pv_sizing_recommendations.
         For unclaimed volumes, use get_unclaimed_volumes.
         """
+        window = normalize_window_order(window)
         resolved_window = _resolve_window_defensively(window)
         window_display = resolved_window.display if resolved_window else window
         try:
@@ -2817,7 +2828,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 LocalDiskRow(
                     disk_name=d.get("diskName", ""),
                     cluster_id=d.get("clusterId", ""),
-                    utilization_percent=round(float(d.get("utilizationPercent", 0.0) or 0.0), 6),
+                    utilization_percent=round(float(d.get("utilizationPercent", 0.0) or 0.0) * 100, 6),
                     current_usage_bytes=int(d.get("currentUsageBytes", 0) or 0),
                     current_capacity_bytes=int(d.get("currentCapacityBytes", 0) or 0),
                     recommended_capacity_bytes=int(d.get("recommendedCapacityBytes", 0) or 0),
@@ -2841,8 +2852,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             str,
             Field(
                 description=(
-                    "Kubecost cluster ID to fetch node group sizing recommendations for. "
-                    "Omitting cluster returns an empty recommendations list (not an API error). "
+                    "Required, non-empty Kubecost cluster ID to fetch node group sizing recommendations for. "
                     "If you don't know the cluster name, call get_kubecost_workload_costs "
                     "with aggregate='cluster' first to discover available cluster IDs."
                 )
@@ -2870,8 +2880,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         instance type). Each recommendation includes before/after node count, instance type,
         monthly price, CPU/RAM utilization, and estimated monthly savings.
 
-        Note: omitting cluster does NOT return an API error — it returns 200 with an empty
-        recommendations list. Provide a cluster ID to get useful results.
+        A non-empty cluster ID is required. Missing arguments are rejected by FastMCP;
+        blank or whitespace-only values are rejected here before calling Kubecost.
 
         WHEN TO USE: When investigating node-level infrastructure savings, or when the savings
         overview shows nodeGroupSizing has significant savings.
@@ -2879,6 +2889,18 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN NOT TO USE: For container CPU/memory rightsizing, use get_container_savings_recommendations.
         For abandoned pods, use get_abandoned_workloads.
         """
+        cluster = cluster.strip()
+        if not cluster:
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message="cluster ID is required for node group sizing recommendations.",
+                retryable=False,
+                suggested_action=(
+                    "Call get_kubecost_workload_costs with aggregate='cluster' first to discover available cluster IDs."
+                ),
+            )
+
+        window = normalize_window_order(window)
         resolved_window = _resolve_window_defensively(window)
         window_display = resolved_window.display if resolved_window else window
         try:
@@ -3027,6 +3049,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN NOT TO USE: For over-provisioned PVCs that ARE in use, use
         get_pv_sizing_recommendations. For node-local disk savings, use get_local_disk_savings.
         """
+        window = normalize_window_order(window)
         resolved_window = _resolve_window_defensively(window)
         window_display = resolved_window.display if resolved_window else window
         try:
@@ -3146,6 +3169,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         get_container_savings_recommendations. For node-level savings, use
         get_cluster_rightsizing_recommendations.
         """
+        window = normalize_window_order(window)
         resolved_window = _resolve_window_defensively(window)
         window_display = resolved_window.display if resolved_window else window
         try:
@@ -3281,17 +3305,17 @@ accumulate:
     def cost_fields_schema() -> str:
         """Definitions of cost columns returned by get_kubecost_workload_costs."""
         return """\
-cpuCost          — CPU request cost
-cpuCostIdle      — CPU idle cost (unused capacity)
-ramCost          — RAM request cost
-ramCostIdle      — RAM idle cost
+cpuCost          — CPU request cost, including cpuCostIdle
+cpuCostIdle      — idle portion already included in cpuCost and totalCost
+ramCost          — RAM request cost, including ramCostIdle
+ramCostIdle      — idle portion already included in ramCost and totalCost
 networkCost      — egress/ingress network cost
 pvCost           — persistent volume storage cost
-gpuCost          — GPU cost
-gpuCostIdle      — GPU idle cost
+gpuCost          — GPU cost, including gpuCostIdle
+gpuCostIdle      — idle portion already included in gpuCost and totalCost
 loadBalancerCost — load balancer cost
 sharedCost       — shared namespace overhead allocation
-totalCost        — sum of all cost components
+totalCost        — sum of all cost components, including idle portions
 totalEfficiency  — utilization ratio 0–1 (request vs actual use)
 """
 

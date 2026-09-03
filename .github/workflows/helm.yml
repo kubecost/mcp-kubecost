@@ -106,11 +106,13 @@ jobs:
           helm template mcp-kubecost "$CHART_DIR" \
             --namespace mcp-kubecost \
             --set ingress.enabled=true \
+            --set 'ingress.hosts[0].host=mcp.example.com' \
             --set config.kubecostApiKey.existingSecret=kubecost-api-key \
             --set config.ssl.caBundle.existingSecret=kubecost-ca \
             --set config.authMode=open \
             > .helm-render/mcp-kubecost-secure.yaml
           grep -q 'kind: Ingress' .helm-render/mcp-kubecost-secure.yaml
+          grep -q 'host: "mcp.example.com"' .helm-render/mcp-kubecost-secure.yaml
           grep -q 'AUTH_MODE: "open"' .helm-render/mcp-kubecost-secure.yaml
           grep -q 'name: KUBECOST_API_KEY' .helm-render/mcp-kubecost-secure.yaml
           grep -q 'name: kubecost-api-key' .helm-render/mcp-kubecost-secure.yaml
@@ -125,12 +127,14 @@ jobs:
             --set httpRoute.enabled=true \
             --set 'httpRoute.parentRefs[0].name=mcp-gateway' \
             --set 'httpRoute.parentRefs[0].sectionName=https' \
+            --set 'httpRoute.hostnames[0]=mcp.example.com' \
             --set config.kubecostApiKey.existingSecret=kubecost-api-key \
             --set config.authMode=open \
             > .helm-render/mcp-kubecost-httproute.yaml
           grep -q 'kind: HTTPRoute' .helm-render/mcp-kubecost-httproute.yaml
           grep -q 'name: mcp-gateway' .helm-render/mcp-kubecost-httproute.yaml
           grep -q 'sectionName: https' .helm-render/mcp-kubecost-httproute.yaml
+          grep -q 'mcp.example.com' .helm-render/mcp-kubecost-httproute.yaml
           grep -q 'AUTH_MODE: "open"' .helm-render/mcp-kubecost-httproute.yaml
           grep -q 'name: KUBECOST_API_KEY' .helm-render/mcp-kubecost-httproute.yaml
           grep -q 'name: kubecost-api-key' .helm-render/mcp-kubecost-httproute.yaml
@@ -163,11 +167,66 @@ jobs:
             exit 1
           fi
           echo "$out"
-          echo "$out" | grep -F -q 'authMode = "none" with an exposed route is not permitted' || {
+          echo "$out" | grep -F -q 'config.authMode "none" with an exposed route is not permitted' || {
             echo "helm failed, but not because authMode=none was combined with an exposed route:" >&2
             echo "$out" >&2
             exit 1
           }
+
+      - name: Reject enabled routes without hostnames (expect failure)
+        run: |
+          for case in \
+            "ingress.enabled=true|ingress.hosts is empty" \
+            "httpRoute.enabled=true|httpRoute.parentRefs is empty"; do
+            set_arg="${case%%|*}"
+            expect="${case##*|}"
+            if out=$(helm template mcp-kubecost "$CHART_DIR" \
+              --namespace mcp-kubecost \
+              --set config.authMode=open \
+              --set "$set_arg" 2>&1); then
+              echo "expected helm template to fail for $set_arg" >&2
+              echo "$out" >&2
+              exit 1
+            fi
+            echo "$out"
+            echo "$out" | grep -F -q "$expect" || {
+              echo "helm failed for $set_arg, but not with the expected message: $expect" >&2
+              echo "$out" >&2
+              exit 1
+            }
+          done
+          if out=$(helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.authMode=open \
+            --set httpRoute.enabled=true \
+            --set 'httpRoute.parentRefs[0].name=mcp-gateway' 2>&1); then
+            echo "expected helm template to fail when httpRoute.hostnames is empty" >&2
+            echo "$out" >&2
+            exit 1
+          fi
+          echo "$out"
+          echo "$out" | grep -F -q 'httpRoute.hostnames is empty' || {
+            echo "helm failed, but not because httpRoute.hostnames is empty:" >&2
+            echo "$out" >&2
+            exit 1
+          }
+
+      - name: Fall back to global.defaultStorageClass for the OAuth PVC
+        run: |
+          helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.authMode=api_key \
+            --set persistence.enabled=true \
+            --set global.defaultStorageClass=fast-ssd \
+            > .helm-render/mcp-kubecost-storageclass.yaml
+          grep -q 'storageClassName: "fast-ssd"' .helm-render/mcp-kubecost-storageclass.yaml
+          helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set config.authMode=api_key \
+            --set persistence.enabled=true \
+            --set global.defaultStorageClass=fast-ssd \
+            --set persistence.storageClass=gp3 \
+            | grep -q 'storageClassName: "gp3"'
 
       - name: Force requireClientApiKey with authMode api_key
         run: |
