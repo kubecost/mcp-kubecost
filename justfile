@@ -53,7 +53,7 @@ test-all:
 
 # Integration tests on http
 test-all-http:
-    MCP_KUBECOST_TARGET=http://localhost:3030/mcp uv run pytest -m integration
+    MCP_KUBECOST_TARGET=http://localhost:3030/mcp uv run pytest -m ""
 
 # ── Development Server ─────────────────────────────────────────────────────────
 
