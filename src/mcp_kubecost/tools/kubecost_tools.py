@@ -2852,8 +2852,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             str,
             Field(
                 description=(
-                    "Kubecost cluster ID to fetch node group sizing recommendations for. "
-                    "Omitting cluster returns an empty recommendations list (not an API error). "
+                    "Required, non-empty Kubecost cluster ID to fetch node group sizing recommendations for. "
                     "If you don't know the cluster name, call get_kubecost_workload_costs "
                     "with aggregate='cluster' first to discover available cluster IDs."
                 )
@@ -2881,8 +2880,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         instance type). Each recommendation includes before/after node count, instance type,
         monthly price, CPU/RAM utilization, and estimated monthly savings.
 
-        Note: omitting cluster does NOT return an API error — it returns 200 with an empty
-        recommendations list. Provide a cluster ID to get useful results.
+        A non-empty cluster ID is required. Missing arguments are rejected by FastMCP;
+        blank or whitespace-only values are rejected here before calling Kubecost.
 
         WHEN TO USE: When investigating node-level infrastructure savings, or when the savings
         overview shows nodeGroupSizing has significant savings.
@@ -2890,6 +2889,17 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN NOT TO USE: For container CPU/memory rightsizing, use get_container_savings_recommendations.
         For abandoned pods, use get_abandoned_workloads.
         """
+        cluster = cluster.strip()
+        if not cluster:
+            raise_tool_error(
+                ErrorCode.INVALID_INPUT,
+                message="cluster ID is required for node group sizing recommendations.",
+                retryable=False,
+                suggested_action=(
+                    "Call get_kubecost_workload_costs with aggregate='cluster' first to discover available cluster IDs."
+                ),
+            )
+
         window = normalize_window_order(window)
         resolved_window = _resolve_window_defensively(window)
         window_display = resolved_window.display if resolved_window else window

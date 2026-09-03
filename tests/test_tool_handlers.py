@@ -853,6 +853,13 @@ class TestGetLocalDiskSavings:
 
 class TestGetClusterRightsizingRecommendations:
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("cluster", ["", "   "])
+    async def test_blank_cluster_is_rejected_before_api_call(self, mcp_app, cluster):
+        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        with pytest.raises(FastMcpToolError, match="cluster ID is required"):
+            await tool.run({"cluster": cluster})
+
+    @pytest.mark.asyncio
     async def test_success_response(self, httpx_mock: HTTPXMock, mcp_app, node_group_sizing_api_response):
         httpx_mock.add_response(method="GET", url=_node_group_url(), json=node_group_sizing_api_response)
         tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
