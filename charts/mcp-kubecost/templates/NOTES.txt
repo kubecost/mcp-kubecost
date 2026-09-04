@@ -1,6 +1,5 @@
-{{- include "mcp-kubecost.validateOIDC" . -}}
 The mcp-kubecost server has been installed as {{ include "mcp-kubecost.fullname" . }}.
-{{- if and (eq (.Values.config.authMode | default "none") "oidc") (not (include "mcp-kubecost.persistenceEnabled" .)) }}
+{{- if and .Values.config.oidc.enabled (not .Values.persistence.enabled) }}
 
 WARNING: config.authMode is "oidc" but persistence.enabled is false. OAuth
 client registrations, grants, and tokens are stored in an emptyDir volume,

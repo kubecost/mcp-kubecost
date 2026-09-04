@@ -10,32 +10,31 @@ This server has two independent, optional auth layers. One protects the **MCP HT
 
 ## Authentication options
 
-`AUTH_MODE` (Helm: `config.authMode`) controls how the MCP HTTP endpoint is protected.
+The MCP HTTP endpoint is protected by two independent settings that compose.
 
-| Mode      | MCP `/mcp`                                                            | Kubecost `X-API-KEY`         |
-| --------- | --------------------------------------------------------------------- | ---------------------------- |
-| `none`    | No auth — **not permitted when `httproute` or `ingress` is enabled**  | Optional env/header fallback |
-| `open`    | No auth enforcement; explicitly acknowledged as exposed               | Optional env/header fallback |
-| `oidc`    | Valid OIDC token via FastMCP `OIDCProxy`                              | Optional env/header fallback |
-| `api_key` | Incoming `X-API-KEY` required (same as `REQUIRE_CLIENT_API_KEY=true`) | Header forwarded to Kubecost |
+| Helm value                    | Environment            | MCP `/mcp`                                       |
+| ----------------------------- | ---------------------- | ------------------------------------------------ |
+| `config.oidc.enabled`         | `AUTH_MODE=oidc`       | Valid OIDC token via FastMCP `OIDCProxy`         |
+| `config.requireClientApiKey`  | `REQUIRE_CLIENT_API_KEY=true` | Incoming `X-API-KEY` required             |
 
-`oidc` requires `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and
+Neither is required for outbound Kubecost calls, which authenticate separately
+with `KUBECOST_API_KEY` — see [Kubecost API keys](#kubecost-api-keys). Set both
+to require OIDC identity **and** a per-request `X-API-KEY`.
+
+OIDC requires `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and
 `MCP_EXTERNAL_URL` (the public origin of this server, e.g.
 `https://kubecost.example.com`). Durable deployments should also set
 `OIDC_JWT_SIGNING_KEY` and `OIDC_STORAGE_ENCRYPTION_KEY` rather than relying
 on ephemeral generated keys.
 
-> [!TIP]
-> To require **both** OIDC identity and a per-request `X-API-KEY`, set `authMode: oidc` and `requireClientApiKey: true`.
 > [!WARNING]
-> If `httproute.enabled: true` or `ingress.enabled: true`, `authMode` must **not** be `"none"`.
-> Set `authMode` to at least `"open"` to acknowledge the exposure, or to a stricter mode such as `"oidc"` or `"api_key"`.
-> Helm will fail pre-install/pre-upgrade if this constraint is violated.
+> Enabling `httpRoute` or `ingress` with neither setting on is rejected at
+> install and upgrade time. Acknowledge intentional unauthenticated exposure —
+> for example an ingress behind a VPN — with `allowUnauthenticatedExposure`.
 >
 > ```yaml
-> # values.yaml — minimum required when exposing a route
-> config:
->   authMode: "open" # or oidc / api_key
+> # values.yaml — exposing a route without authentication
+> allowUnauthenticatedExposure: true
 > httpRoute:
 >   enabled: true
 > ```

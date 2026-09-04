@@ -1,0 +1,95 @@
+suite: configuration guards
+templates:
+  - deployment.yaml
+  - configmap.yaml
+  - secret.yaml
+tests:
+  - it: refuses OIDC without credentials
+    template: deployment.yaml
+    set:
+      config.oidc.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'config.oidc.enabled is true but its durable OAuth secrets are incomplete'
+
+  - it: refuses inline credentials combined with an existing Secret
+    template: deployment.yaml
+    set:
+      config.oidc.enabled: true
+      config.oidc.clientID: client
+      config.oidc.existingSecret: my-oidc
+    asserts:
+      - failedTemplate:
+          errorPattern: 'cannot be combined with inline clientID or clientSecret'
+
+  - it: refuses a plaintext issuer on a non-local host
+    template: deployment.yaml
+    set:
+      config.oidc.enabled: true
+      config.oidc.existingSecret: my-oidc
+      config.oidc.issuerUrl: http://sso.example.com/.well-known/openid-configuration
+      config.externalUrl: https://mcp.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: 'issuerUrl must be an https:// URL'
+
+  - it: accepts a plaintext issuer on localhost
+    template: configmap.yaml
+    set:
+      config.oidc.enabled: true
+      config.oidc.existingSecret: my-oidc
+      config.oidc.issuerUrl: http://localhost:8080/.well-known/openid-configuration
+      config.externalUrl: https://mcp.example.com
+    asserts:
+      - equal:
+          path: data.AUTH_MODE
+          value: oidc
+
+  - it: refuses short or malformed OIDC keys
+    template: deployment.yaml
+    set:
+      config.oidc.enabled: true
+      config.oidc.clientID: client
+      config.oidc.clientSecret: secret
+      config.oidc.issuerUrl: https://sso.example.com/.well-known/openid-configuration
+      config.externalUrl: https://mcp.example.com
+      config.oidc.jwtSigningKey: tooshort
+    asserts:
+      - failedTemplate:
+          errorPattern: 'jwtSigningKey must be at least 32 characters'
+
+  - it: refuses an externalUrl that cannot be resolved
+    template: deployment.yaml
+    set:
+      config.oidc.enabled: true
+      config.oidc.existingSecret: my-oidc
+      config.oidc.issuerUrl: https://sso.example.com/.well-known/openid-configuration
+    asserts:
+      - failedTemplate:
+          errorPattern: 'config.externalUrl could not be inferred'
+
+  - it: refuses multiple replicas while OIDC owns single-writer OAuth storage
+    template: deployment.yaml
+    set:
+      deployment.replicas: 2
+      config.oidc.enabled: true
+      config.oidc.existingSecret: my-oidc
+      config.oidc.issuerUrl: https://sso.example.com/.well-known/openid-configuration
+      config.externalUrl: https://mcp.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: 'deployment.replicas is greater than 1, but this chart cannot share OAuth storage'
+
+  - it: allows multiple replicas behind a gateway that owns session state
+    template: deployment.yaml
+    set:
+      deployment.replicas: 3
+      deployment.strategy.type: RollingUpdate
+      config.requireClientApiKey: true
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+      - equal:
+          path: spec.template.spec.volumes[0].emptyDir
+          value: {}

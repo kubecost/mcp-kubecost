@@ -135,7 +135,7 @@ helm upgrade --install mcp-kubecost \
   --set config.kubecostApiBaseUrl=https://kubecost.example.com \
   --set config.kubecostApiPort=443 \
   --set config.kubecostApiBasePath=/model \
-  --set config.authMode=oidc \
+  --set config.oidc.enabled=true \
   --set config.oidc.issuerUrl=https://keycloak.example.com/realms/kubecost/.well-known/openid-configuration \
   --set config.externalUrl=https://mcp.example.com \
   --set config.oidc.existingSecret=mcp-oidc

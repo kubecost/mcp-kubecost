@@ -115,10 +115,10 @@ are not gated by skipSanityChecks: that flag only skips live Secret lookups.
 */}}
 {{- define "mcp-kubecost.sanityChecks" -}}
 {{- $p := include "mcp-kubecost.valuePrefix" . }}
-{{- $mode := .Values.config.authMode | default "none" }}
 {{- $routeEnabled := or .Values.httpRoute.enabled .Values.ingress.enabled }}
-{{- if and $routeEnabled (eq $mode "none") }}
-{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sconfig.authMode must be configured before enabling %shttpRoute or %singress.\n\n%sconfig.authMode \"none\" with an exposed route is not permitted. Set it to \"oidc\" or \"api_key\" to enforce authentication, or to \"open\" to acknowledge intentional unauthenticated exposure (for example an ingress behind a VPN).\n" $p $p $p $p) }}
+{{- $authenticated := or .Values.config.oidc.enabled .Values.config.requireClientApiKey }}
+{{- if and $routeEnabled (not $authenticated) (not .Values.allowUnauthenticatedExposure) }}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %shttpRoute or %singress is enabled but the MCP endpoint is unauthenticated.\n\nEnforce authentication with %sconfig.oidc.enabled or %sconfig.requireClientApiKey, or set %sallowUnauthenticatedExposure: true to acknowledge intentional exposure (for example an ingress behind a VPN).\n" $p $p $p $p $p) }}
 {{- end }}
 {{- /* An enabled route must carry its own hostnames. The chart ships these empty
      so a placeholder host is never published, and so config.externalUrl is never
@@ -135,9 +135,12 @@ are not gated by skipSanityChecks: that flag only skips live Secret lookups.
 {{- end }}
 {{- end }}
 {{- $replicas := ((.Values.deployment).replicas) | default 1 | int }}
-{{- if and (gt $replicas 1) (or (include "mcp-kubecost.persistenceEnabled" .) (eq $mode "oidc")) }}
-{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sdeployment.replicas is greater than 1, but this chart cannot share OAuth storage across pods.\n\nFileTreeStore is single-writer and the OAuth PVC is ReadWriteOnce. Multiple replicas would Multi-Attach the volume or split client registrations across pods.\n\nTo run more than one replica, put an MCP gateway or OAuth proxy in front of this chart, set %sconfig.authMode to none/open/api_key, and set %spersistence.enabled: false. Until shared OAuth storage exists, keep %sdeployment.replicas: 1 when using OIDC.\n" $p $p $p $p) }}
+{{- if and (gt $replicas 1) .Values.config.oidc.enabled }}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sdeployment.replicas is greater than 1, but this chart cannot share OAuth storage across pods.\n\nFileTreeStore is single-writer and the OAuth PVC is ReadWriteOnce. Multiple replicas would Multi-Attach the volume or split client registrations across pods.\n\nTo run more than one replica, put an MCP gateway or OAuth proxy in front of this chart and disable %sconfig.oidc.enabled here.\n" $p $p) }}
 {{- end }}
+{{- /* Runs here, not from NOTES.txt, so a missing credential is reported before
+     the externalUrl it would also be missing. */}}
+{{- include "mcp-kubecost.validateOIDC" . }}
 {{- if ne (include "mcp-kubecost.skipSanityChecks" .) "true" }}
 {{- $ns := lookup "v1" "Namespace" "" .Release.Namespace }}
 {{- if $ns }}
@@ -236,7 +239,7 @@ that don't need it (no OIDC, no route, or an ambiguous route left unset).
 {{- end -}}
 {{- if eq (len $nonWildcard) 1 -}}
 {{- printf "https://%s" (first $nonWildcard) -}}
-{{- else if eq (.Values.config.authMode | default "none") "oidc" -}}
+{{- else if .Values.config.oidc.enabled -}}
 {{- fail (printf "\n\nFAILURE [mcp-kubecost]: %s could not be inferred.\n\nSet %s explicitly, or enable exactly one of httpRoute/ingress with exactly one non-wildcard hostname.\n%s\n  Example:\n    %s: \"https://kubecost.example.com\"\n" (include "mcp-kubecost.externalUrlRef" .) (include "mcp-kubecost.externalUrlRef" .) (include "mcp-kubecost.externalUrlHint" .) (include "mcp-kubecost.externalUrlRef" .)) -}}
 {{- end -}}
 {{- end -}}
@@ -308,106 +311,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-oauth" (include "mcp-kubecost.fullname" .) | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/*
-Resolve the tri-state persistence.enabled value.
-Returns a non-empty string ("true") when a PVC should be created; empty string otherwise.
-
-  true  (explicit) → always create PVC
-  false (explicit) → never create PVC
-  null  (default)  → create PVC only when config.authMode is "oidc"
-*/}}
+{{/* The OAuth PVC only holds OIDC state, so it is created only for OIDC installs. */}}
 {{- define "mcp-kubecost.persistenceEnabled" -}}
-{{- if eq .Values.persistence.enabled true -}}true
-{{- else if eq .Values.persistence.enabled false -}}
-{{- else if eq (.Values.config.authMode | default "none") "oidc" -}}true
+{{- if and .Values.config.oidc.enabled .Values.persistence.enabled -}}true{{- end -}}
 {{- end -}}
-{{- end -}}
-
-{{/*
-Stable string of all ConfigMap data values used for checksum annotation.
-Must stay in sync with the data block in configmap.yaml.
-*/}}
-{{- define "mcp-kubecost.configmap-data" -}}
-KUBECOST_BASE_URL={{ printf "%s:%v" (tpl .Values.config.kubecostApiBaseUrl .) .Values.config.kubecostApiPort | quote }}
-KUBECOST_API_BASE_PATH={{ .Values.config.kubecostApiBasePath | quote }}
-REQUEST_TIMEOUT_SECONDS={{ .Values.config.requestTimeoutSeconds | quote }}
-REQUEST_RETRY_COUNT={{ .Values.config.requestRetryCount | quote }}
-MCP_RATE_LIMIT_REQUESTS_PER_SECOND={{ .Values.config.rateLimitRequestsPerSecond | quote }}
-MCP_RATE_LIMIT_BURST_CAPACITY={{ .Values.config.rateLimitBurstCapacity | quote }}
-MCP_MAX_CONCURRENT_TOOL_CALLS={{ .Values.config.maxConcurrentToolCalls | quote }}
-DEFAULT_WINDOW={{ .Values.config.defaultWindow | quote }}
-FASTMCP_TRANSPORT="streamable-http"
-FASTMCP_LOG_LEVEL={{ .Values.config.logLevel | upper | quote }}
-FASTMCP_ENABLE_RICH_LOGGING="false"
-FASTMCP_SHOW_SERVER_BANNER="false"
-USE_CAC_VIEWS={{ .Values.config.useCacViews | quote }}
-MCP_LEGACY_TEXT_CONTENT={{ .Values.config.legacyTextContent | quote }}
-REQUIRE_CLIENT_API_KEY={{ (or .Values.config.requireClientApiKey (eq .Values.config.authMode "api_key")) | quote }}
-MCP_SERVER_NAME={{ .Values.config.mcpServerName | quote }}
-FASTMCP_TELEMETRY_MODE={{ .Values.config.telemetryMode | quote }}
-OTEL_SERVICE_NAME={{ .Values.config.otelServiceName | quote }}
-OTEL_METRICS_EXPORTER={{ .Values.config.otelMetricsExporter | quote }}
-OTEL_LOGS_EXPORTER={{ .Values.config.otelLogsExporter | quote }}
-KUBECOST_SSL_VERIFY={{ .Values.config.ssl.verify | quote }}
-FASTMCP_HTTP_HOST_ORIGIN_PROTECTION={{ .Values.config.fastmcpHttpHostOriginProtection | quote }}
-OIDC_STORAGE_PATH="/var/lib/mcp-kubecost/oauth"
-{{- if .Values.config.otelExporterOtlpEndpoint }}
-OTEL_EXPORTER_OTLP_ENDPOINT={{ .Values.config.otelExporterOtlpEndpoint | quote }}
-{{- end }}
-{{- if .Values.config.fastmcpHttpAllowedHosts }}
-FASTMCP_HTTP_ALLOWED_HOSTS={{ .Values.config.fastmcpHttpAllowedHosts | quote }}
-{{- end }}
-{{- if .Values.config.fastmcpHttpAllowedOrigins }}
-FASTMCP_HTTP_ALLOWED_ORIGINS={{ .Values.config.fastmcpHttpAllowedOrigins | quote }}
-{{- end }}
-{{- if .Values.config.ssl.caBundle.existingSecret }}
-SSL_CA_BUNDLE={{ .Values.config.ssl.caBundle.mountPath | quote }}
-{{- end }}
-{{- if ne .Values.config.authMode "none" }}
-AUTH_MODE={{ .Values.config.authMode | quote }}
-{{- if .Values.config.oidc.issuerUrl }}
-OIDC_ISSUER_URL={{ .Values.config.oidc.issuerUrl | quote }}
-{{- end }}
-{{- if .Values.config.oidc.audience }}
-OIDC_AUDIENCE={{ .Values.config.oidc.audience | quote }}
-{{- end }}
-MCP_EXTERNAL_URL={{ include "mcp-kubecost.externalUrl" . | quote }}
-{{- if .Values.config.oidc.requiredScopes }}
-OIDC_REQUIRED_SCOPES={{ .Values.config.oidc.requiredScopes | quote }}
-{{- end }}
-{{- end }}
-{{- end }}
-
-{{/*
-Stable string of the API key Secret stringData used for checksum annotation.
-Returns an empty string when the secret would not be created, so no annotation is emitted.
-Must stay in sync with the first Secret block in secret.yaml.
-*/}}
-{{- define "mcp-kubecost.apikey-stringdata" -}}
-{{- if .Values.config.kubecostApiKey.value -}}
-{{ .Values.config.kubecostApiKey.key }}={{ .Values.config.kubecostApiKey.value }}
-{{- end }}
-{{- end }}
-
-{{/*
-Stable string of the OIDC Secret stringData used for checksum annotation.
-Returns an empty string when the secret would not be created, so no annotation is emitted.
-Must stay in sync with the second Secret block in secret.yaml.
-jwtSigningKey and storageEncryptionKey are included only when non-empty, matching
-the conditional stringData entries in secret.yaml.
-*/}}
-{{- define "mcp-kubecost.oidc-stringdata" -}}
-{{- if and .Values.config.oidc.clientID .Values.config.oidc.clientSecret (not .Values.config.oidc.existingSecret) -}}
-OIDC_CLIENT_ID={{ .Values.config.oidc.clientID }}
-OIDC_CLIENT_SECRET={{ .Values.config.oidc.clientSecret }}
-{{- if .Values.config.oidc.jwtSigningKey }}
-OIDC_JWT_SIGNING_KEY={{ .Values.config.oidc.jwtSigningKey }}
-{{- end }}
-{{- if .Values.config.oidc.storageEncryptionKey }}
-OIDC_STORAGE_ENCRYPTION_KEY={{ .Values.config.oidc.storageEncryptionKey }}
-{{- end }}
-{{- end }}
-{{- end }}
 
 {{/*
 Validate the standalone chart's OIDC configuration. Credentials must come from
@@ -422,14 +329,14 @@ behaviour from it.
 */}}
 {{- define "mcp-kubecost.validateOIDC" -}}
 {{- $p := include "mcp-kubecost.valuePrefix" . -}}
-{{- if eq (.Values.config.authMode | default "none") "oidc" -}}
+{{- if .Values.config.oidc.enabled -}}
 {{- $clientID := trim (.Values.config.oidc.clientID | default "") -}}
 {{- $clientSecret := trim (.Values.config.oidc.clientSecret | default "") -}}
 {{- $hasAnyInline := or (not (empty $clientID)) (not (empty $clientSecret)) -}}
 {{- $hasInline := and (not (empty $clientID)) (not (empty $clientSecret)) -}}
 {{- $hasExisting := not (empty (trim (.Values.config.oidc.existingSecret | default ""))) -}}
 {{- if not (or $hasInline $hasExisting) -}}
-{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sconfig.authMode is \"oidc\" but its durable OAuth secrets are incomplete.\n\nTo fix, choose one of:\n  Option A — set %sconfig.oidc.clientID and %sconfig.oidc.clientSecret (jwtSigningKey and storageEncryptionKey are optional; ephemeral keys are auto-generated when omitted).\n\n  Option B — reference a pre-existing Secret with keys OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, and optionally OIDC_JWT_SIGNING_KEY and OIDC_STORAGE_ENCRYPTION_KEY:\n    %sconfig.oidc.existingSecret: \"<secret-name>\"\n" $p $p $p $p) -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sconfig.oidc.enabled is true but its durable OAuth secrets are incomplete.\n\nTo fix, choose one of:\n  Option A — set %sconfig.oidc.clientID and %sconfig.oidc.clientSecret (jwtSigningKey and storageEncryptionKey are optional; ephemeral keys are auto-generated when omitted).\n\n  Option B — reference a pre-existing Secret with keys OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, and optionally OIDC_JWT_SIGNING_KEY and OIDC_STORAGE_ENCRYPTION_KEY:\n    %sconfig.oidc.existingSecret: \"<secret-name>\"\n" $p $p $p $p) -}}
 {{- end -}}
 {{- if and $hasAnyInline $hasExisting -}}
 {{- fail (printf "\n\nFAILURE [mcp-kubecost]: %sconfig.oidc.existingSecret cannot be combined with inline clientID or clientSecret values. Supply exactly one credential source so the active credentials are unambiguous.\n" $p) -}}
