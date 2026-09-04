@@ -37,8 +37,7 @@ spec:
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
-      {{- $apikeyChecksum := include "mcp-kubecost.apikey-stringdata" . }}
-      {{- $oidcChecksum := include "mcp-kubecost.oidc-stringdata" . }}
+      {{- $secrets := include (print $.Template.BasePath "/secret.yaml") . }}
       {{- $podAnnotations := include "mcp-kubecost.podAnnotations" . }}
       {{- if or $podAnnotations .Values.reloadOnConfigChange }}
       annotations:
@@ -46,12 +45,9 @@ spec:
         {{- . | nindent 8 }}
         {{- end }}
         {{- if .Values.reloadOnConfigChange }}
-        checksum/config: {{ include "mcp-kubecost.configmap-data" . | sha256sum }}
-        {{- if $apikeyChecksum }}
-        checksum/secret-api-key: {{ $apikeyChecksum | sha256sum }}
-        {{- end }}
-        {{- if $oidcChecksum }}
-        checksum/secret-oidc: {{ $oidcChecksum | sha256sum }}
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if trim $secrets }}
+        checksum/secrets: {{ $secrets | sha256sum }}
         {{- end }}
         {{- end }}
       {{- end }}
@@ -71,7 +67,7 @@ spec:
             - configMapRef:
                 name: {{ include "mcp-kubecost.configMapName" . }}
           {{- $hasApiKey := or .Values.config.kubecostApiKey.value .Values.config.kubecostApiKey.existingSecret }}
-          {{- $hasOidc := or .Values.config.oidc.existingSecret (and .Values.config.oidc.clientID .Values.config.oidc.clientSecret) }}
+          {{- $hasOidc := .Values.config.oidc.enabled }}
           {{- if or $hasApiKey $hasOidc }}
           env:
             {{- if $hasApiKey }}
@@ -122,35 +118,23 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
-            allowPrivilegeEscalation: {{ .Values.containerSecurityContext.allowPrivilegeEscalation }}
-            readOnlyRootFilesystem: {{ .Values.containerSecurityContext.readOnlyRootFilesystem }}
-            capabilities:
-              drop:
-                {{- toYaml .Values.containerSecurityContext.capabilitiesDrop | nindent 16 }}
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
           {{- if .Values.probes.enabled }}
           startupProbe:
             httpGet:
               path: {{ .Values.probes.path }}
               port: http
-            failureThreshold: {{ .Values.probes.failureThreshold }}
-            periodSeconds: {{ .Values.probes.periodSeconds }}
-            timeoutSeconds: {{ .Values.probes.timeoutSeconds }}
+            {{- toYaml .Values.probes.startup | nindent 12 }}
           readinessProbe:
             httpGet:
               path: {{ .Values.probes.path }}
               port: http
-            initialDelaySeconds: {{ .Values.probes.initialDelaySeconds }}
-            periodSeconds: {{ .Values.probes.periodSeconds }}
-            timeoutSeconds: {{ .Values.probes.timeoutSeconds }}
-            failureThreshold: {{ .Values.probes.failureThreshold }}
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
           livenessProbe:
             httpGet:
               path: {{ .Values.probes.path }}
               port: http
-            initialDelaySeconds: {{ .Values.probes.initialDelaySeconds }}
-            periodSeconds: {{ .Values.probes.periodSeconds }}
-            timeoutSeconds: {{ .Values.probes.timeoutSeconds }}
-            failureThreshold: {{ .Values.probes.failureThreshold }}
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
           {{- end }}
           volumeMounts:
             - name: oauth-storage

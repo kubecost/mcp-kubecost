@@ -1,0 +1,124 @@
+suite: defaults and image resolution
+templates:
+  - deployment.yaml
+  - configmap.yaml
+  - secret.yaml
+tests:
+  - it: runs a single Recreate replica from the appVersion image
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^icr\.io/kubecost/mcp-kubecost:.+'
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: uses an emptyDir for OAuth state when OIDC is off
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].emptyDir
+          value: {}
+
+  - it: hardens the container by default
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65532
+
+  - it: probes the unauthenticated health endpoint
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /health
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /health
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /health
+
+  - it: omits probes entirely when disabled
+    template: deployment.yaml
+    set:
+      probes.enabled: false
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[0].livenessProbe
+
+  - it: leaves AUTH_MODE unset when OIDC is off
+    template: configmap.yaml
+    asserts:
+      - isNull:
+          path: data.AUTH_MODE
+      - equal:
+          path: data.REQUIRE_CLIENT_API_KEY
+          value: "false"
+      - equal:
+          path: data.KUBECOST_BASE_URL
+          value: "http://kubecost-frontend.kubecost.svc.cluster.local:9090"
+
+  - it: builds KUBECOST_BASE_URL from a tpl-evaluated base URL and port
+    template: configmap.yaml
+    release:
+      name: kubecost
+    set:
+      config.kubecostApiBaseUrl: "http://{{ .Release.Name }}-aggregator"
+      config.kubecostApiPort: 9004
+    asserts:
+      - equal:
+          path: data.KUBECOST_BASE_URL
+          value: "http://kubecost-aggregator:9004"
+
+  - it: prefers global.imageRegistry over image.registry
+    template: deployment.yaml
+    set:
+      global.imageRegistry: public.ecr.aws
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^public\.ecr\.aws/kubecost/mcp-kubecost:'
+
+  - it: unions image.pullSecrets with global.imagePullSecrets, accepting both forms
+    template: deployment.yaml
+    set:
+      image.pullSecrets:
+        - app-pull
+      global.imagePullSecrets:
+        - name: icr-pull
+        - app-pull
+    asserts:
+      - equal:
+          path: spec.template.spec.imagePullSecrets
+          value:
+            - name: app-pull
+            - name: icr-pull
+
+  - it: lets OpenShift assign UID and GID
+    template: deployment.yaml
+    set:
+      global.platforms.openshift.enabled: true
+    asserts:
+      - isNull:
+          path: spec.template.spec.securityContext.runAsUser
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true

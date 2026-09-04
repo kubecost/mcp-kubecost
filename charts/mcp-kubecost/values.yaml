@@ -1,158 +1,112 @@
-# global values are merged from a parent Kubecost chart when this chart is a
-# subchart. They are ignored unless set. Extra parent keys (clusterId, etc.)
-# are accepted and unused. Keys and defaults here mirror the parent chart:
-# https://github.com/kubecost/kubecost/blob/develop/kubecost/values.yaml
+# Values merged from a parent Kubecost chart when this chart is a subchart.
+# Parent values win. Extra parent keys are accepted and unused.
+# Ref: https://github.com/kubecost/kubecost/blob/develop/kubecost/values.yaml
 global:
-  # global.imageRegistry overrides image.registry for every image in this chart.
-  # Kubecost distributes via IBM Cloud Container Registry, so the default matches
-  # the parent chart's global.imageRegistry rather than being empty.
+  # Overrides image.registry for every image in this chart.
   imageRegistry: icr.io
-  # global.imagePullSecrets is merged with image.pullSecrets.
-  # E.g.
-  # imagePullSecrets:
-  #   - myRegistryKeySecretName
+  # Merged with image.pullSecrets. Accepts names or {name: ...} maps.
   imagePullSecrets: []
-  # global.annotations are added to this chart's Deployment metadata. Matches the
-  # parent chart, where global.annotations applies to all controllers.
+  # Added to this chart's Deployment metadata.
   annotations: {}
-  # global.podAnnotations are added to this chart's pod template. Merged with the
-  # chart-local podAnnotations; chart-local keys win on conflict.
+  # Merged into the pod template; chart-local podAnnotations win.
   podAnnotations: {}
-  # global.additionalLabels are added to this chart's resources and pod template.
-  # They are never added to selector labels, which must stay immutable.
+  # Added to resources and the pod template, never to selector labels.
   additionalLabels: {}
   platforms:
-    # global.platforms.openshift matches the Kubecost parent-chart OpenShift block.
     openshift:
-      # Set to true when deploying to OpenShift. The restricted-v2 SCC rejects the
-      # explicit runAsUser/runAsGroup in podSecurityContext below, so the
-      # securityContext here replaces it, exactly as the parent chart does.
+      # Replaces podSecurityContext below, because the restricted-v2 SCC rejects
+      # an explicit runAsUser/runAsGroup and assigns its own IDs.
       enabled: false
-      # global.platforms.openshift.securityContext replaces podSecurityContext
-      # when openshift.enabled is true, letting OpenShift assign the UID/GID.
       securityContext:
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
-    # global.platforms.cicd matches the Kubecost parent-chart CI/CD block.
     cicd:
-      # Set to true when using Argo CD or similar tools so skipSanityChecks applies.
+      # Set both when Helm cannot see the cluster (Argo CD dry-run) or Secrets
+      # are created in a later sync wave, to skip Secret existence lookups.
       enabled: false
-      # Skip Secret existence lookups that fail when Helm cannot see the cluster
-      # (Argo CD dry-run / helm template) or when Secrets are created in a later wave.
       skipSanityChecks: false
 
-# nameOverride replaces the chart name portion of generated resource names.
+# Replaces the chart name portion of generated resource names.
 nameOverride: ""
 
-# fullnameOverride replaces the full generated resource name.
+# Replaces the full generated resource name.
 fullnameOverride: ""
 
 image:
-  # image.registry is the container registry host. Overridden by global.imageRegistry.
   registry: icr.io
-  # image.repository is the image path within the registry (no host).
   repository: kubecost/mcp-kubecost
-  # image.tag is the container image tag. Defaults to the chart appVersion when empty.
+  # Defaults to the chart appVersion when empty.
   tag: ""
-  # image.pullPolicy controls when Kubernetes pulls the image.
   pullPolicy: IfNotPresent
-  # image.pullSecrets is a list of Secret names for private image registries.
   pullSecrets: []
 
-# podAnnotations are annotations added to the MCP server pod template.
 podAnnotations: {}
 
-# podLabels are additional labels added to the MCP server pod template.
 podLabels: {}
 
-# reloadOnConfigChange causes the pod to restart automatically when the ConfigMap or Secrets
-# change. Set to false if your CI/CD tooling manages rollouts independently (e.g. Argo CD,
-# Flux, or a pipeline that handles rollouts after config updates).
+# Restart the pod when the ConfigMap or Secrets change. Set false when CI/CD
+# tooling manages rollouts (Argo CD, Flux).
 reloadOnConfigChange: true
 
 podSecurityContext:
-  # podSecurityContext.runAsUser is the non-root UID used by the container.
   runAsUser: 65532
-  # podSecurityContext.runAsGroup is the non-root GID used by the container.
   runAsGroup: 65532
-  # podSecurityContext.runAsNonRoot prevents the container from running as root.
   runAsNonRoot: true
-  # podSecurityContext.seccompProfile applies the Kubernetes runtime seccomp profile.
   seccompProfile:
     type: RuntimeDefault
-  # podSecurityContext.fsGroup makes the OAuth state PVC writable by the non-root process.
+  # Makes the OAuth state volume writable by the non-root process.
   fsGroup: 65532
-  # Avoid recursively changing ownership after the volume root already has the expected group.
   fsGroupChangePolicy: OnRootMismatch
 
 containerSecurityContext:
-  # containerSecurityContext.allowPrivilegeEscalation prevents gaining extra privileges.
   allowPrivilegeEscalation: false
-  # containerSecurityContext.readOnlyRootFilesystem prevents writes to the image filesystem.
   readOnlyRootFilesystem: true
-  # containerSecurityContext.capabilitiesDrop removes all ambient Linux capabilities.
-  capabilitiesDrop:
-    - ALL
+  capabilities:
+    drop:
+      - ALL
 
-# automountServiceAccountToken controls whether the pod receives a Kubernetes API token.
 automountServiceAccountToken: false
 
 service:
-  # service.type is the Kubernetes Service type.
   type: ClusterIP
-  # service.port is the Service port exposed to other pods and ingress controllers.
   port: 3030
-  # service.annotations are annotations added to the Service.
   annotations: {}
 
+# Acknowledge serving the MCP endpoint without authentication. Required when
+# ingress or httpRoute is enabled while neither config.oidc.enabled nor
+# config.requireClientApiKey is set.
+allowUnauthenticatedExposure: false
+
 httpRoute:
-  # httpRoute.enabled controls whether a Gateway API HTTPRoute is rendered.
-  # Enabling it requires parentRefs and hostnames below; the chart fails otherwise
-  # rather than attaching to a placeholder Gateway.
+  # Requires parentRefs and hostnames below; the chart fails rather than
+  # attaching to a placeholder Gateway.
   enabled: false
-  # httpRoute.annotations are annotations added to the HTTPRoute.
   annotations: {}
-  # httpRoute.parentRefs identifies the existing Gateway and optional listener to
-  # attach to. Required when httpRoute.enabled is true.
   parentRefs: []
     # - name: mcp-gateway
     #   sectionName: https
-  # httpRoute.hostnames are the hostnames matched by the Gateway listener.
-  # Required when httpRoute.enabled is true. A single non-wildcard hostname here
-  # is also what config.externalUrl is inferred from.
+  # A single non-wildcard hostname here is what config.externalUrl is inferred from.
   hostnames: []
     # - mcp.example.com
-  # The chart generates matches for /mcp, /oauth/mcp, and the required
-  # well-known discovery paths. Requests are forwarded without path rewrites.
 
 ingress:
-  # ingress.enabled controls whether the legacy Kubernetes Ingress is rendered.
-  # Prefer httpRoute.enabled when the cluster has Gateway API support.
-  # Enabling it requires hosts below; the chart fails otherwise rather than
-  # publishing a placeholder hostname.
+  # Prefer httpRoute when the cluster has Gateway API support.
   enabled: false
-  # ingress.className is the IngressClass name. Empty leaves the cluster's
-  # default IngressClass to claim the Ingress.
+  # Empty leaves the cluster's default IngressClass to claim the Ingress.
   className: ""
-  # ingress.annotations are annotations added to the Ingress. Certificate
-  # issuance is left to the operator, e.g.:
+  # Certificate issuance is left to the operator, e.g.
   #   cert-manager.io/cluster-issuer: letsencrypt-http
   annotations: {}
-  # ingress.hosts configures hostnames routed to the MCP server. The chart
-  # generates the same fixed paths as the HTTPRoute. Required when
-  # ingress.enabled is true. A single non-wildcard host here is also what
-  # config.externalUrl is inferred from.
+  # A single non-wildcard host here is what config.externalUrl is inferred from.
   hosts: []
     # - host: mcp.example.com
-  # ingress.tls configures TLS secrets and their hostnames.
   tls: []
     # - secretName: kubecost-mcp-server-tls
     #   hosts:
     #     - mcp.example.com
 
 resources:
-  # resources.requests and resources.limits define the pod's CPU and memory budget.
   requests:
     cpu: 250m
     memory: 1Gi
@@ -160,174 +114,132 @@ resources:
     cpu: 1000m
     memory: 1Gi
 
-# persistence controls the PVC that stores FastMCP OAuth registrations, grants, and tokens.
-# Tokens are encrypted before FileTreeStore writes them beneath the mount point.
-# If persistence is disabled, clients are forced to re-register whenever the pod restarts.
+# PVC for FastMCP OAuth registrations, grants, and tokens, created only when
+# config.oidc.enabled is true. Set false to use an emptyDir instead, forcing
+# clients to re-register whenever the pod restarts.
 persistence:
-  # persistence.enabled accepts three states:
-  #   null (default) — auto: PVC is created when config.authMode is "oidc", omitted otherwise.
-  #   true           — always create the PVC regardless of authMode.
-  #   false          — never create the PVC (clients re-register on every pod restart).
-  enabled: null
-  # Empty falls back to the parent chart's global.defaultStorageClass, and then
-  # to the cluster's default StorageClass.
+  enabled: true
+  # Empty falls back to global.defaultStorageClass, then the cluster default.
   storageClass: ""
   accessModes:
     - ReadWriteOnce
   size: 1Gi
   annotations: {}
 
-# Defaults to one replica with Recreate, which is required for the RWO OAuth PVC.
-# Multiple replicas are supported when an MCP gateway or OAuth proxy owns session
-# state in front of this chart (authMode none/open/api_key and persistence off).
-# FileTreeStore is single-writer, so replicas > 1 is rejected while a PVC is
-# mounted or authMode is oidc. Switch strategy to RollingUpdate when scaling out.
+# FileTreeStore is single-writer, so replicas > 1 is rejected while OIDC is on.
+# Run multiple replicas only behind an MCP gateway or OAuth proxy that owns
+# session state, and switch strategy to RollingUpdate when scaling out.
 deployment:
-  # deployment.replicas is the number of replicas to run.
   replicas: 1
-  # deployment.strategy is the Kubernetes Deployment strategy.
   strategy:
     type: Recreate
-  # deployment.annotations are merged into Deployment metadata; keys here win over
-  # global.annotations.
+  # Merged into Deployment metadata; keys here win over global.annotations.
   annotations: {}
-  # deployment.labels are additional labels on Deployment metadata only (not selectors).
   labels: {}
   # Extra matchLabels on spec.selector and the pod template. Immutable after install.
   selector: {}
 
+# Startup, readiness, and liveness checks against the unauthenticated GET /health.
+# Do not point path at /mcp — kubelet cannot present OIDC or X-API-KEY.
 probes:
-  # probes.enabled enables HTTP startup, readiness, and liveness checks.
   enabled: true
-  # probes.path is the unauthenticated liveness endpoint (GET /health).
-  # Do not point this at /mcp — kubelet cannot present OIDC or X-API-KEY.
   path: /health
-  # probes.initialDelaySeconds delays the first liveness/readiness checks.
-  initialDelaySeconds: 5
-  # probes.periodSeconds is the interval between probe requests.
-  periodSeconds: 10
-  # probes.timeoutSeconds is the probe request timeout.
-  timeoutSeconds: 3
-  # probes.failureThreshold is the number of failures before the container is considered unhealthy.
-  failureThreshold: 3
+  startup:
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  liveness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
 
-# Full authentication reference: docs/auth/auth-technical.md
-# Authentication overview and mode selection: docs/auth/README.md
 config:
-  # config.authMode controls how the MCP HTTP endpoint is protected.
-  # Supported values: none, open, oidc, api_key.
-  #   none    — no auth (default); NOT permitted when httproute or ingress is enabled
-  #   open    — no auth enforcement, but explicitly acknowledged as exposed (required minimum when httproute or ingress is enabled)
-  #   oidc    — require a valid OIDC token via FastMCP's OIDCProxy
-  #   api_key — require X-API-KEY header (same as requireClientApiKey: true)
-  # To require both OIDC and X-API-KEY, set authMode: oidc and requireClientApiKey: true.
-  authMode: "none"
-  # config.kubecostApiBaseUrl is the required base URL of the Kubecost API (scheme + host only).
-  # Must not include a port — use kubecostApiPort for that.
-  # Evaluated with tpl, so umbrella charts may pass "http://{{ .Release.Name }}-frontend".
-  # The standalone default assumes the Kubecost frontend is in the kubecost namespace.
+  # Base URL of the Kubecost API (scheme + host, no port). Evaluated with tpl,
+  # so umbrella charts may pass "http://{{ .Release.Name }}-aggregator".
   kubecostApiBaseUrl: http://kubecost-frontend.kubecost.svc.cluster.local
-  # config.kubecostApiPort is appended to kubecostApiBaseUrl to form KUBECOST_BASE_URL.
   kubecostApiPort: 9090
-  # config.kubecostApiBasePath is the path prefix used for Kubecost API calls.
   kubecostApiBasePath: /model
-  # config.kubecostApiKey is sent to Kubecost as an X-API-KEY request header.
-  # An MCP client may override it per request by sending its own X-API-KEY header.
-  # Use with authMode oidc, open, or none for a shared outbound key.
-  # config.kubecostApiKey.value optionally creates a Secret containing the API key; prefer existingSecret.
+  # Sent to Kubecost as an X-API-KEY header on outbound calls. An MCP client may
+  # override it per request with its own X-API-KEY header.
   kubecostApiKey:
+    # Creates a Secret containing the key; prefer existingSecret.
     value: ""
-    # config.kubecostApiKey.existingSecret is the name of a pre-created Secret containing the API key.
     existingSecret: ""
-    # config.kubecostApiKey.key is the key in the existing or generated API-key Secret.
+    # Key within the existing or generated Secret.
     key: KUBECOST_API_KEY
-  # config.requireClientApiKey rejects HTTP requests that arrive without an X-API-KEY
-  # header. When authMode is "api_key", this value is ignored and forced to true.
-  # Set it to true with authMode "oidc" to require both OIDC and an API key.
+  # Reject inbound requests that arrive without an X-API-KEY header. Combines
+  # with config.oidc.enabled to require both.
   requireClientApiKey: false
-  # config.requestTimeoutSeconds is the Kubecost HTTP request timeout in seconds.
   requestTimeoutSeconds: 15
-  # config.requestRetryCount is the number of configured HTTP retries.
   requestRetryCount: 2
-  # Sustained MCP request rate per pod. FastMCP uses a token bucket.
+  # Sustained MCP request rate per pod (FastMCP token bucket), and its burst size.
   rateLimitRequestsPerSecond: 10
-  # Maximum burst size for the MCP request rate limiter.
   rateLimitBurstCapacity: 20
-  # Maximum tool calls executing concurrently per pod.
+  # Tool calls executing concurrently per pod.
   maxConcurrentToolCalls: 10
-  # config.defaultWindow is the default Kubecost query window.
   defaultWindow: 15d
-  # config.logLevel is the FastMCP log level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL').
+  # DEBUG, INFO, WARNING, ERROR, or CRITICAL.
   logLevel: INFO
-  # config.useCacViews enables Kubecost CAC views.
   useCacViews: false
-  # config.legacyTextContent restores the full JSON payload in each tool
-  # result's text content, duplicating structuredContent. Leave false unless
-  # a client cannot read structuredContent; true roughly doubles token usage.
+  # Restore the full JSON payload in each tool result's text content, duplicating
+  # structuredContent. Roughly doubles token usage.
   legacyTextContent: false
-  # config.externalUrl is the public origin of this MCP server, with no path.
-  # Required for OIDC unless the chart can infer it from exactly one enabled
-  # Ingress or HTTPRoute containing exactly one non-wildcard hostname.
-  # The fixed public URLs are /mcp and /oauth/mcp on this origin.
+  # Public origin of this server, scheme and host only. Required when OIDC is
+  # enabled unless it can be inferred from exactly one enabled route with exactly
+  # one non-wildcard hostname. The public URLs are /mcp and /oauth/mcp on this origin.
   externalUrl: ""
-
-  # Enable FastMCP's Host/Origin request guard. "auto" protects local binds and
-  # activates strict checks when either allowlist below is configured.
+  # FastMCP Host/Origin request guard. "auto" protects local binds and activates
+  # strict checks when either allowlist below is set. Both are JSON array strings.
   fastmcpHttpHostOriginProtection: auto
-  # JSON array string of permitted HTTP Host headers.
   fastmcpHttpAllowedHosts: ""
-  # JSON array string of permitted browser Origin headers.
   fastmcpHttpAllowedOrigins: ""
-  # config.mcpServerName overrides the MCP server name exposed by FastMCP.
   mcpServerName: mcp-kubecost
-  # config.telemetryMode controls the OpenTelemetry wrapper; off disables it.
+  # OpenTelemetry wrapper; "off" disables it.
   telemetryMode: "off"
-  # config.otelServiceName is the OpenTelemetry service name.
   otelServiceName: mcp-kubecost
-  # config.otelExporterOtlpEndpoint is the OTLP endpoint used when telemetry is enabled.
   otelExporterOtlpEndpoint: ""
-  # config.otelMetricsExporter selects the OTEL metrics exporter, such as none.
   otelMetricsExporter: none
-  # config.otelLogsExporter selects the OTEL logs exporter, such as none.
   otelLogsExporter: none
   ssl:
-    # config.ssl.verify controls Kubecost TLS certificate verification.
     verify: true
     caBundle:
-      # config.ssl.caBundle.existingSecret is the Secret containing a custom CA certificate.
       existingSecret: ""
-      # config.ssl.caBundle.key is the key in the custom CA Secret.
       key: ca.crt
-      # config.ssl.caBundle.mountPath is the file path passed to SSL_CA_BUNDLE.
       mountPath: /etc/mcp-kubecost/ca/ca.crt
 
+  # Require a valid OIDC token via FastMCP's OIDCProxy.
+  # Full reference: docs/auth/auth-technical.md — overview: docs/auth/README.md
   oidc:
-    # config.oidc.issuerUrl is the identity provider's OIDC discovery-document URL.
+    enabled: false
+    # The provider's OIDC discovery-document URL.
     # Example: https://sso.example.com/.well-known/openid-configuration
     issuerUrl: ""
-    # config.oidc.audience is the token audience expected by the provider (optional).
     audience: ""
-    # config.oidc.requiredScopes is a comma-separated list of OAuth scopes to request.
+    # Comma-separated OAuth scopes to request.
     requiredScopes: "openid,profile"
-    # Optional JSON array of allowed downstream MCP-client redirect URI patterns.
-    # Leave empty for the Open default, which supports standards-compatible DCR/CIMD
+    # JSON array of allowed downstream MCP-client redirect URI patterns. Empty
+    # keeps the Open default, which supports standards-compatible DCR/CIMD
     # clients. This does not configure the upstream IdP callback.
-    # Example Restricted posture: '["http://localhost:*", "https://client.example/callback"]'
+    # Example: '["http://localhost:*", "https://client.example/callback"]'
     allowedClientRedirectUris: ""
-    # config.oidc.clientID is the OIDC client ID. Prefer existingSecret for production.
+    # Prefer existingSecret in production. Register
+    # https://<externalUrl host>/oauth/mcp/callback as the redirect URI at the IdP.
     clientID: ""
-    # config.oidc.clientSecret is the OIDC client secret. Prefer existingSecret for production.
     clientSecret: ""
-    # Optional — auto-generated as an ephemeral key at startup when unset. Set explicitly in
-    # production to ensure token consistency across restarts.
-    # Generate with: openssl rand -base64 32
+    # Both auto-generate as ephemeral keys at startup when unset. An ephemeral
+    # storage key wipes OAuth storage on every restart, forcing clients to
+    # re-register. Generate with: openssl rand -base64 32
     jwtSigningKey: ""
-    # Optional — auto-generated as an ephemeral Fernet key at startup when unset. Leaving this
-    # unset wipes the OAuth storage directory on every restart, so clients must re-register and
-    # re-authorize after each redeploy. Set explicitly in production to preserve OAuth sessions.
-    # Generate with: openssl rand -base64 32
     storageEncryptionKey: ""
-    # Pre-created Secret containing the four OIDC secret values above.
+    # Pre-created Secret holding OIDC_CLIENT_ID, OIDC_CLIENT_SECRET, and
+    # optionally OIDC_JWT_SIGNING_KEY and OIDC_STORAGE_ENCRYPTION_KEY.
+    # Supply either this or the inline values above, not both.
     existingSecret: ""
 
 nodeSelector: {}

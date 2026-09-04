@@ -1,0 +1,156 @@
+suite: routes and exposure guards
+templates:
+  - ingress.yaml
+  - httproute.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - secret.yaml
+tests:
+  - it: renders no route by default
+    templates:
+      - ingress.yaml
+      - httproute.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: routes the MCP and OAuth discovery paths through an Ingress
+    template: ingress.yaml
+    set:
+      allowUnauthenticatedExposure: true
+      ingress.enabled: true
+      ingress.className: nginx
+      ingress.hosts:
+        - host: mcp.example.com
+    asserts:
+      - equal:
+          path: spec.ingressClassName
+          value: nginx
+      - equal:
+          path: spec.rules[0].http.paths[0].path
+          value: /mcp
+      - equal:
+          path: spec.rules[0].http.paths[0].pathType
+          value: Prefix
+      - equal:
+          path: spec.rules[0].http.paths[1].path
+          value: /oauth/mcp
+      - equal:
+          path: spec.rules[0].http.paths[2].path
+          value: /.well-known/oauth-protected-resource/mcp
+      - equal:
+          path: spec.rules[0].http.paths[7].path
+          value: /.well-known/openid-configuration
+      - lengthEqual:
+          path: spec.rules[0].http.paths
+          count: 8
+
+  - it: routes the same paths through an HTTPRoute
+    template: httproute.yaml
+    set:
+      allowUnauthenticatedExposure: true
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: mcp-gateway
+          sectionName: https
+      httpRoute.hostnames:
+        - mcp.example.com
+    asserts:
+      - equal:
+          path: spec.parentRefs[0].name
+          value: mcp-gateway
+      - equal:
+          path: spec.rules[0].matches[0].path.value
+          value: /mcp
+      - equal:
+          path: spec.rules[0].matches[0].path.type
+          value: PathPrefix
+      - equal:
+          path: spec.rules[0].matches[7].path.value
+          value: /.well-known/openid-configuration
+      - lengthEqual:
+          path: spec.rules[0].matches
+          count: 8
+      - equal:
+          path: spec.rules[0].backendRefs[0].port
+          value: 3030
+
+  - it: infers the external URL from a single route hostname
+    template: configmap.yaml
+    set:
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: mcp-gateway
+      httpRoute.hostnames:
+        - mcp.example.com
+      config.oidc.enabled: true
+      config.oidc.issuerUrl: https://sso.example.com/.well-known/openid-configuration
+      config.oidc.clientID: client
+      config.oidc.clientSecret: secret
+    asserts:
+      - equal:
+          path: data.MCP_EXTERNAL_URL
+          value: https://mcp.example.com
+
+  - it: refuses an unauthenticated route
+    template: deployment.yaml
+    set:
+      ingress.enabled: true
+      ingress.hosts:
+        - host: mcp.example.com
+    asserts:
+      - failedTemplate:
+          errorPattern: 'ingress is enabled but the MCP endpoint is unauthenticated'
+
+  - it: refuses two chart-managed routes at once
+    template: deployment.yaml
+    set:
+      allowUnauthenticatedExposure: true
+      ingress.enabled: true
+      ingress.hosts:
+        - host: mcp.example.com
+      httpRoute.enabled: true
+      httpRoute.parentRefs:
+        - name: mcp-gateway
+      httpRoute.hostnames:
+        - mcp.example.com
+      config.oidc.enabled: true
+      config.oidc.issuerUrl: https://sso.example.com/.well-known/openid-configuration
+      config.oidc.existingSecret: mcp-oidc
+    asserts:
+      - failedTemplate:
+          errorPattern: 'httpRoute.enabled and ingress.enabled cannot both be true'
+
+  - it: refuses an enabled Ingress with no hosts
+    template: deployment.yaml
+    set:
+      allowUnauthenticatedExposure: true
+      ingress.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'ingress.enabled is true but ingress.hosts is empty'
+
+  - it: refuses an enabled HTTPRoute with no parentRefs or hostnames
+    template: deployment.yaml
+    set:
+      allowUnauthenticatedExposure: true
+      httpRoute.enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: 'httpRoute.parentRefs is empty'
+
+  - it: refuses an externalUrl that disagrees with the route hostname
+    template: deployment.yaml
+    set:
+      allowUnauthenticatedExposure: true
+      ingress.enabled: true
+      ingress.hosts:
+        - host: mcp.example.com
+      config.externalUrl: https://other.example.com
+      config.oidc.enabled: true
+      config.oidc.issuerUrl: https://sso.example.com/.well-known/openid-configuration
+      config.oidc.clientID: client
+      config.oidc.clientSecret: secret
+    asserts:
+      - failedTemplate:
+          errorPattern: 'is not one of the enabled route.s hostnames'

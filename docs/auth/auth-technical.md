@@ -145,7 +145,8 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 
 | Environment variable | Helm value | Role |
 | --- | --- | --- |
-| `AUTH_MODE` | `config.authMode` | `none`, `open`, `oidc`, or `api_key` |
+| `AUTH_MODE` | `config.oidc.enabled` | Set to `oidc` by the chart when OIDC is enabled |
+| `REQUIRE_CLIENT_API_KEY` | `config.requireClientApiKey` | Require an inbound `X-API-KEY` header |
 | `OIDC_ISSUER_URL` | `config.oidc.issuerUrl` | Upstream provider discovery URL |
 | `OIDC_CLIENT_ID` | `config.oidc.clientID` or Secret | Upstream confidential client ID |
 | `OIDC_CLIENT_SECRET` | `config.oidc.clientSecret` or Secret | Upstream confidential client secret |
@@ -166,7 +167,7 @@ helm upgrade --install mcp-kubecost ./charts/mcp-kubecost \
   --namespace mcp-kubecost --create-namespace \
   --set config.kubecostApiBaseUrl=https://kubecost.example.com \
   --set config.kubecostApiPort=443 \
-  --set config.authMode=oidc \
+  --set config.oidc.enabled=true \
   --set config.oidc.issuerUrl=https://keycloak.example.com/realms/kubecost/.well-known/openid-configuration \
   --set config.externalUrl=https://kubecost.example.com \
   --set config.oidc.existingSecret=mcp-oidc

@@ -26,29 +26,7 @@
         },
         "annotations": { "type": "object" },
         "podAnnotations": { "type": "object" },
-        "additionalLabels": { "type": "object" },
-        "platforms": {
-          "type": "object",
-          "additionalProperties": true,
-          "properties": {
-            "openshift": {
-              "type": "object",
-              "additionalProperties": true,
-              "properties": {
-                "enabled": { "type": "boolean" },
-                "securityContext": { "type": "object" }
-              }
-            },
-            "cicd": {
-              "type": "object",
-              "additionalProperties": true,
-              "properties": {
-                "enabled": { "type": "boolean" },
-                "skipSanityChecks": { "type": "boolean" }
-              }
-            }
-          }
-        }
+        "additionalLabels": { "type": "object" }
       }
     },
     "nameOverride": { "type": "string" },
@@ -62,41 +40,13 @@
         "tag": { "type": "string" },
         "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
         "pullSecrets": { "type": "array", "items": { "type": "string" } }
-      },
-      "required": ["repository", "tag", "pullPolicy", "pullSecrets"]
+      }
     },
     "podAnnotations": { "type": "object" },
     "podLabels": { "type": "object" },
     "reloadOnConfigChange": { "type": "boolean" },
-    "podSecurityContext": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "runAsUser": { "type": "integer", "minimum": 1 },
-        "runAsGroup": { "type": "integer", "minimum": 1 },
-        "runAsNonRoot": { "type": "boolean" },
-        "seccompProfile": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "type": { "type": "string", "enum": ["RuntimeDefault", "Localhost"] },
-            "localhostProfile": { "type": "string" }
-          },
-          "required": ["type"]
-        },
-        "fsGroup": { "type": ["integer", "null"], "minimum": 1 },
-        "fsGroupChangePolicy": { "type": "string", "enum": ["Always", "OnRootMismatch"] }
-      }
-    },
-    "containerSecurityContext": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "allowPrivilegeEscalation": { "type": "boolean" },
-        "readOnlyRootFilesystem": { "type": "boolean" },
-        "capabilitiesDrop": { "type": "array", "items": { "type": "string" } }
-      }
-    },
+    "podSecurityContext": { "type": "object" },
+    "containerSecurityContext": { "type": "object" },
     "automountServiceAccountToken": { "type": "boolean" },
     "service": {
       "type": "object",
@@ -105,9 +55,9 @@
         "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
         "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
         "annotations": { "type": "object" }
-      },
-      "required": ["type", "port", "annotations"]
+      }
     },
+    "allowUnauthenticatedExposure": { "type": "boolean" },
     "httpRoute": {
       "type": "object",
       "additionalProperties": false,
@@ -116,7 +66,6 @@
         "annotations": { "type": "object" },
         "parentRefs": {
           "type": "array",
-          "minItems": 0,
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -131,12 +80,8 @@
             "required": ["name"]
           }
         },
-        "hostnames": {
-          "type": "array",
-          "items": { "type": "string", "minLength": 1 }
-        }
-      },
-      "required": ["enabled", "annotations", "parentRefs", "hostnames"]
+        "hostnames": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
     },
     "ingress": {
       "type": "object",
@@ -150,9 +95,7 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "properties": {
-              "host": { "type": "string", "minLength": 1 }
-            },
+            "properties": { "host": { "type": "string", "minLength": 1 } },
             "required": ["host"]
           }
         },
@@ -168,15 +111,14 @@
             "required": ["secretName", "hosts"]
           }
         }
-      },
-      "required": ["enabled", "className", "annotations", "hosts", "tls"]
+      }
     },
     "resources": { "type": "object" },
     "persistence": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": ["boolean", "null"] },
+        "enabled": { "type": "boolean" },
         "storageClass": { "type": "string" },
         "accessModes": {
           "type": "array",
@@ -185,8 +127,7 @@
         },
         "size": { "type": "string", "minLength": 1 },
         "annotations": { "type": "object" }
-      },
-      "required": ["storageClass", "accessModes", "size", "annotations"]
+      }
     },
     "deployment": {
       "type": "object",
@@ -204,11 +145,10 @@
       "additionalProperties": false,
       "properties": {
         "enabled": { "type": "boolean" },
-        "path": { "type": "string", "minLength": 1 },
-        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
-        "periodSeconds": { "type": "integer", "minimum": 1 },
-        "timeoutSeconds": { "type": "integer", "minimum": 1 },
-        "failureThreshold": { "type": "integer", "minimum": 1 }
+        "path": { "type": "string", "pattern": "^/" },
+        "startup": { "type": "object" },
+        "readiness": { "type": "object" },
+        "liveness": { "type": "object" }
       }
     },
     "config": {
@@ -225,9 +165,9 @@
             "value": { "type": "string" },
             "existingSecret": { "type": "string" },
             "key": { "type": "string", "minLength": 1 }
-          },
-          "required": ["value", "existingSecret", "key"]
+          }
         },
+        "requireClientApiKey": { "type": "boolean" },
         "requestTimeoutSeconds": { "type": "number", "exclusiveMinimum": 0 },
         "requestRetryCount": { "type": "integer", "minimum": 0 },
         "rateLimitRequestsPerSecond": { "type": "number", "exclusiveMinimum": 0 },
@@ -237,8 +177,6 @@
         "logLevel": { "type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "debug", "info", "warning", "error", "critical"] },
         "useCacViews": { "type": "boolean" },
         "legacyTextContent": { "type": "boolean" },
-        "authMode": { "type": "string", "enum": ["none", "open", "oidc", "api_key"] },
-        "requireClientApiKey": { "type": "boolean" },
         "externalUrl": { "type": "string", "pattern": "^$|^https://[^/?#]+/?$" },
         "fastmcpHttpHostOriginProtection": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["auto"] }] },
         "fastmcpHttpAllowedHosts": { "type": "string" },
@@ -261,16 +199,15 @@
                 "existingSecret": { "type": "string" },
                 "key": { "type": "string", "minLength": 1 },
                 "mountPath": { "type": "string", "pattern": "^/" }
-              },
-              "required": ["existingSecret", "key", "mountPath"]
+              }
             }
-          },
-          "required": ["verify", "caBundle"]
+          }
         },
         "oidc": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "enabled": { "type": "boolean" },
             "issuerUrl": { "type": "string" },
             "audience": { "type": "string" },
             "requiredScopes": { "type": "string" },
@@ -282,17 +219,10 @@
             "existingSecret": { "type": "string" }
           }
         }
-      },
-      "required": ["authMode", "kubecostApiBaseUrl", "kubecostApiPort", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "rateLimitRequestsPerSecond", "rateLimitBurstCapacity", "maxConcurrentToolCalls", "defaultWindow", "logLevel", "useCacViews", "legacyTextContent", "requireClientApiKey", "externalUrl", "fastmcpHttpHostOriginProtection", "fastmcpHttpAllowedHosts", "fastmcpHttpAllowedOrigins", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "ssl", "oidc"]
+      }
     },
     "nodeSelector": { "type": "object" },
     "tolerations": { "type": "array" },
     "affinity": { "type": "object" }
-  },
-  "allOf": [
-    {
-      "if": { "properties": { "config": { "properties": { "kubecostApiKey": { "properties": { "existingSecret": { "minLength": 1 } } } } } } },
-      "then": { "properties": { "config": { "properties": { "kubecostApiKey": { "properties": { "value": { "maxLength": 0 } } } } } } }
-    }
-  ]
+  }
 }

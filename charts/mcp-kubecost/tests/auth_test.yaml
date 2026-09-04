@@ -1,0 +1,155 @@
+suite: authentication
+templates:
+  - configmap.yaml
+  - deployment.yaml
+  - secret.yaml
+  - pvc.yaml
+set:
+  config.oidc.issuerUrl: https://sso.example.com/.well-known/openid-configuration
+  config.externalUrl: https://mcp.example.com
+tests:
+  - it: requires an inbound API key on its own, without OIDC
+    template: configmap.yaml
+    set:
+      config.oidc.enabled: false
+      config.requireClientApiKey: true
+    asserts:
+      - equal:
+          path: data.REQUIRE_CLIENT_API_KEY
+          value: "true"
+      - isNull:
+          path: data.AUTH_MODE
+
+  - it: enables OIDC and publishes the external origin
+    template: configmap.yaml
+    set:
+      config.oidc.enabled: true
+      config.oidc.clientID: client
+      config.oidc.clientSecret: secret
+    asserts:
+      - equal:
+          path: data.AUTH_MODE
+          value: oidc
+      - equal:
+          path: data.MCP_EXTERNAL_URL
+          value: https://mcp.example.com
+      - equal:
+          path: data.OIDC_ISSUER_URL
+          value: https://sso.example.com/.well-known/openid-configuration
+      - equal:
+          path: data.OIDC_REQUIRED_SCOPES
+          value: openid,profile
+
+  - it: combines OIDC with an inbound API key
+    template: configmap.yaml
+    set:
+      config.oidc.enabled: true
+      config.oidc.clientID: client
+      config.oidc.clientSecret: secret
+      config.requireClientApiKey: true
+    asserts:
+      - equal:
+          path: data.AUTH_MODE
+          value: oidc
+      - equal:
+          path: data.REQUIRE_CLIENT_API_KEY
+          value: "true"
+
+  - it: passes the client redirect allowlist through to the server
+    template: configmap.yaml
+    set:
+      config.oidc.enabled: true
+      config.oidc.clientID: client
+      config.oidc.clientSecret: secret
+      config.oidc.allowedClientRedirectUris: '["http://localhost:*"]'
+    asserts:
+      - equal:
+          path: data.OIDC_ALLOWED_CLIENT_REDIRECT_URIS
+          value: '["http://localhost:*"]'
+
+  - it: checksums the ConfigMap and Secrets so config changes roll the pod
+    template: deployment.yaml
+    set:
+      config.oidc.enabled: true
+      config.oidc.clientID: client
+      config.oidc.clientSecret: secret
+    asserts:
+      - exists:
+          path: spec.template.metadata.annotations["checksum/config"]
+      - exists:
+          path: spec.template.metadata.annotations["checksum/secrets"]
+
+  - it: generates an OIDC Secret from inline credentials
+    template: secret.yaml
+    documentIndex: 0
+    set:
+      config.oidc.enabled: true
+      config.oidc.clientID: client
+      config.oidc.clientSecret: secret
+    asserts:
+      - equal:
+          path: stringData.OIDC_CLIENT_ID
+          value: client
+      - isNull:
+          path: stringData.OIDC_JWT_SIGNING_KEY
+
+  - it: reads credentials from an existing Secret, treating the optional keys as optional
+    template: deployment.yaml
+    set:
+      config.oidc.enabled: true
+      config.oidc.existingSecret: my-oidc
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].valueFrom.secretKeyRef.name
+          value: my-oidc
+      - equal:
+          path: spec.template.spec.containers[0].env[2].valueFrom.secretKeyRef.optional
+          value: true
+
+  - it: creates the OAuth PVC only for OIDC installs
+    template: pvc.yaml
+    set:
+      config.oidc.enabled: true
+      config.oidc.clientID: client
+      config.oidc.clientSecret: secret
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.resources.requests.storage
+          value: 1Gi
+
+  - it: falls back to global.defaultStorageClass for the OAuth PVC
+    template: pvc.yaml
+    set:
+      config.oidc.enabled: true
+      config.oidc.clientID: client
+      config.oidc.clientSecret: secret
+      global.defaultStorageClass: gp3
+    asserts:
+      - equal:
+          path: spec.storageClassName
+          value: gp3
+
+  - it: renders no PVC when persistence is disabled
+    template: pvc.yaml
+    set:
+      config.oidc.enabled: true
+      config.oidc.clientID: client
+      config.oidc.clientSecret: secret
+      persistence.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: sends the outbound Kubecost API key from a generated Secret
+    template: deployment.yaml
+    set:
+      config.kubecostApiKey.value: shhh
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: KUBECOST_API_KEY
+      - equal:
+          path: spec.template.spec.containers[0].env[0].valueFrom.secretKeyRef.name
+          value: RELEASE-NAME-mcp-kubecost-api-key

@@ -1,3 +1,4 @@
+{{- include "mcp-kubecost.sanityChecks" . }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -19,7 +20,7 @@ data:
   FASTMCP_SHOW_SERVER_BANNER: "false"
   USE_CAC_VIEWS: {{ .Values.config.useCacViews | quote }}
   MCP_LEGACY_TEXT_CONTENT: {{ .Values.config.legacyTextContent | quote }}
-  REQUIRE_CLIENT_API_KEY: {{ (or .Values.config.requireClientApiKey (eq .Values.config.authMode "api_key")) | quote }}
+  REQUIRE_CLIENT_API_KEY: {{ .Values.config.requireClientApiKey | quote }}
   MCP_SERVER_NAME: {{ .Values.config.mcpServerName | quote }}
   FASTMCP_TELEMETRY_MODE: {{ .Values.config.telemetryMode | quote }}
   OTEL_SERVICE_NAME: {{ .Values.config.otelServiceName | quote }}
@@ -40,11 +41,9 @@ data:
   {{- if .Values.config.ssl.caBundle.existingSecret }}
   SSL_CA_BUNDLE: {{ .Values.config.ssl.caBundle.mountPath | quote }}
   {{- end }}
-  {{- if ne .Values.config.authMode "none" }}
-  AUTH_MODE: {{ .Values.config.authMode | quote }}
-  {{- if .Values.config.oidc.issuerUrl }}
+  {{- if .Values.config.oidc.enabled }}
+  AUTH_MODE: "oidc"
   OIDC_ISSUER_URL: {{ .Values.config.oidc.issuerUrl | quote }}
-  {{- end }}
   {{- if .Values.config.oidc.audience }}
   OIDC_AUDIENCE: {{ .Values.config.oidc.audience | quote }}
   {{- end }}

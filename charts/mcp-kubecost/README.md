@@ -18,25 +18,38 @@ helm upgrade --install kubecost-mcp mcp-kubecost \
   -f helmValues-mcp-kubecost.yaml
 ```
 
-Prefer an existing Secret so credentials are not stored in a values file or Helm command history. OIDC, API-key precedence, `REQUIRE_CLIENT_API_KEY`, shared-hostname OAuth routes, and pod hardening are documented in [docs/auth](https://github.com/kubecost/mcp-kubecost/blob/HEAD/docs/auth).
+Prefer an existing Secret so credentials are not stored in a values file or Helm command history. OIDC, API-key precedence, shared-hostname OAuth routes, and pod hardening are documented in [docs/auth](https://github.com/kubecost/mcp-kubecost/blob/HEAD/docs/auth).
 
-The Deployment defaults to one replica with `Recreate`.
-Multiple replicas are supported when an MCP gateway or OAuth proxy owns session state in front of this chart.
+## Authentication
 
-Set `deployment.replicas` greater than 1, switch `deployment.strategy.type` to `RollingUpdate`, keep `config.authMode` at `none` / `open` / `api_key`, and set `persistence.enabled: false`.
+Two independent settings protect the MCP HTTP endpoint, and they compose:
 
-Helm rejects `replicas > 1` while a PVC is mounted or `authMode` is `oidc` — FileTreeStore is single-writer and cannot share OAuth registrations across pods until shared storage exists.
+| Value | Effect |
+| --- | --- |
+| `config.oidc.enabled` | Require a valid OIDC token via FastMCP's `OIDCProxy`. |
+| `config.requireClientApiKey` | Reject requests that arrive without an `X-API-KEY` header. |
 
-`persistence.enabled` is a tri-state field:
+Enabling `ingress` or `httpRoute` with neither of them set is rejected. Set
+`allowUnauthenticatedExposure: true` to acknowledge intentional exposure, for
+example an ingress behind a VPN.
 
-| Value            | Behaviour                                                                                                                                                                                                        |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `null` (default) | PVC is created automatically when `config.authMode` is `oidc`; omitted for all other auth modes.                                                                                                                 |
-| `true`           | PVC is always created regardless of `authMode`.                                                                                                                                                                  |
-| `false`          | PVC is never created. The pod uses an `emptyDir` instead, and clients must re-register every time the pod restarts. A post-install warning is shown when `authMode=oidc` and persistence is explicitly disabled. |
+`config.oidc.enabled` also creates a `ReadWriteOnce` PVC for FastMCP's OAuth
+registrations, grants, and tokens, sized by `persistence.size` and provisioned by
+`persistence.storageClass`, falling back to the parent chart's
+`global.defaultStorageClass` and then the cluster default. Set
+`persistence.enabled: false` to use an `emptyDir` instead, which forces clients to
+re-register every time the pod restarts.
 
-When a PVC is created it defaults to `1Gi`. The StorageClass is `persistence.storageClass`, falling back to the parent chart's `global.defaultStorageClass` and then to the cluster's default StorageClass.
-Set `persistence.storageClass`, `persistence.accessModes`, `persistence.size`, or `persistence.annotations` when the cluster requires different provisioning.
+## Replicas
+
+The Deployment defaults to one replica with `Recreate`. FileTreeStore is
+single-writer and cannot share OAuth registrations across pods, so Helm rejects
+`replicas > 1` while `config.oidc.enabled` is true.
+
+To scale out, put an MCP gateway or OAuth proxy that owns session state in front
+of this chart, then set `deployment.replicas`, switch
+`deployment.strategy.type` to `RollingUpdate`, and leave `config.oidc.enabled` off
+here.
 
 ## Kubecost parent chart
 
@@ -46,12 +59,21 @@ The MCP, by default, is bundled with the Kubecost helm installation in v3.3+. Th
 
 When this chart is a subchart, the parent `global` values are merged in and take precedence over the defaults in this chart's `values.yaml`:
 
-| Parent key                                                                 | Effect in this chart                                                                                                                                                   |
-| -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `global.imageRegistry`                                                     | Replaces `image.registry`. Defaults to `icr.io` in both charts.                                                                                                        |
-| `global.imagePullSecrets`                                                  | Unioned with `image.pullSecrets`. Accepts name strings or `{name: ...}` maps.                                                                                          |
-| `global.annotations`                                                       | Merged into this chart's Deployment metadata with `deployment.annotations`; chart-local keys win on conflict.                                                          |
-| `global.podAnnotations`                                                    | Merged into the pod template; this chart's `podAnnotations` win on key conflicts, and the config-reload checksums are preserved.                                       |
-| `global.additionalLabels`                                                  | Added to this chart's resources and pod template. Never added to selector labels, which must stay immutable.                                                           |
-| `global.platforms.openshift.enabled`                                       | Replaces `podSecurityContext` with `global.platforms.openshift.securityContext`, because the OpenShift restricted-v2 SCC rejects an explicit `runAsUser`/`runAsGroup`. |
-| `global.platforms.cicd.enabled` + `global.platforms.cicd.skipSanityChecks` | Skip Secret existence lookups. Set both when Helm cannot see the live cluster (Argo CD) or Secrets are created in a later sync wave.                                   |
+| Parent key | Effect in this chart |
+| --- | --- |
+| `global.imageRegistry` | Replaces `image.registry`. Defaults to `icr.io` in both charts. |
+| `global.imagePullSecrets` | Unioned with `image.pullSecrets`. Accepts name strings or `{name: ...}` maps. |
+| `global.defaultStorageClass` | Used for the OAuth PVC when `persistence.storageClass` is empty. |
+| `global.annotations` | Merged into this chart's Deployment metadata with `deployment.annotations`; chart-local keys win on conflict. |
+| `global.podAnnotations` | Merged into the pod template; this chart's `podAnnotations` win on key conflicts, and the config-reload checksums are preserved. |
+| `global.additionalLabels` | Added to this chart's resources and pod template. Never added to selector labels, which must stay immutable. |
+| `global.platforms.openshift.enabled` | Replaces `podSecurityContext` with `global.platforms.openshift.securityContext`, because the OpenShift restricted-v2 SCC rejects an explicit `runAsUser`/`runAsGroup`. |
+| `global.platforms.cicd.enabled` + `global.platforms.cicd.skipSanityChecks` | Skip Secret existence lookups. Set both when Helm cannot see the live cluster (Argo CD) or Secrets are created in a later sync wave. |
+
+## Tests
+
+Template behaviour is covered by [helm-unittest](https://github.com/helm-unittest/helm-unittest) suites in `tests/`:
+
+```bash
+helm unittest charts/mcp-kubecost
+```
