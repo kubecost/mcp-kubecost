@@ -802,6 +802,7 @@ class TestCIMDOriginAllowlist:
         )
         await proxy.register_client(info)
 
+        assert info.client_id is not None
         assert await proxy.get_client(info.client_id) is not None
 
     def test_oidc_allowed_redirect_uris_restricts_cimd_redirects(self):
