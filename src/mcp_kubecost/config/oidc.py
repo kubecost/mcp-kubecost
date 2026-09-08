@@ -20,9 +20,11 @@ import uuid
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from cryptography.fernet import Fernet
 from fastmcp.server.auth import AccessToken, TokenVerifier
+from fastmcp.server.auth.cimd import CIMDClientManager
 from fastmcp.server.auth.oauth_proxy.models import UpstreamTokenSet
 from fastmcp.server.auth.oidc_proxy import OIDCProxy
 from fastmcp.server.auth.providers.jwt import JWTVerifier
@@ -66,6 +68,45 @@ def looks_like_jwt(token: str) -> bool:
     return isinstance(header, dict) and "alg" in header
 
 
+class AllowlistCIMDClientManager(CIMDClientManager):
+    """CIMDClientManager that restricts CIMD clients to an approved hostname allowlist.
+
+    ``allowed_origins`` follows the ``OIDC_ALLOWED_CLIENT_REDIRECT_URIS``
+    convention: ``None`` accepts any https CIMD URL (Open posture), an explicit
+    list accepts only those hostnames (Restricted), and ``[]`` denies every CIMD
+    client. Entries are lowercase hostnames; ``get_settings()`` normalizes them.
+    """
+
+    def __init__(self, *, allowed_origins: list[str] | None, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._allowed_origins: frozenset[str] | None = (
+            None if allowed_origins is None else frozenset(o.lower() for o in allowed_origins)
+        )
+        # Hostnames already reported, so a misbehaving client cannot flood the log.
+        self._rejected_hosts: set[str] = set()
+
+    def is_allowed_origin(self, client_id: str) -> bool:
+        """Return True when the client_id's hostname passes the allowlist."""
+        if self._allowed_origins is None:
+            return True
+        hostname = (urlparse(client_id).hostname or "").lower()
+        if hostname in self._allowed_origins:
+            return True
+        if hostname not in self._rejected_hosts:
+            self._rejected_hosts.add(hostname)
+            logger.warning(
+                "Rejected CIMD client %r: hostname %r is not in OIDC_ALLOWED_CIMD_ORIGINS. "
+                "Further rejections for this hostname are not logged.",
+                client_id,
+                hostname,
+            )
+        return False
+
+    def is_cimd_client_id(self, client_id: str) -> bool:
+        """Accept only URLs the parent recognizes as CIMD *and* whose host is allowed."""
+        return super().is_cimd_client_id(client_id) and self.is_allowed_origin(client_id)
+
+
 class AdaptiveTokenVerifier(TokenVerifier):
     """Route verification to the access-token or id_token JWTVerifier."""
 
@@ -86,12 +127,31 @@ class AdaptiveOidcProxy(OIDCProxy):
     Also makes Dynamic Client Registration idempotent — see ``register_client``.
     """
 
-    def __init__(self, *, dcr_client_id_key: str, storage_dir: Path, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        dcr_client_id_key: str,
+        storage_dir: Path,
+        allowed_cimd_origins: list[str] | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self._dcr_client_id_key: bytes = dcr_client_id_key.encode()
         self._storage_dir = storage_dir
         self._logged_opaque: bool = False
         self._install_adaptive_verifier()
+        # Replace the default CIMDClientManager with an allowlist-aware one.
+        # _cimd_manager is None when enable_cimd=False; preserve that. The
+        # keyword arguments mirror CIMDClientManager.__init__ in FastMCP 3.4.x
+        # (enable_cimd, default_scope, allowed_redirect_uri_patterns); a FastMCP
+        # release that adds a parameter must be reflected here.
+        if self._cimd_manager is not None:
+            self._cimd_manager = AllowlistCIMDClientManager(
+                allowed_origins=allowed_cimd_origins,
+                enable_cimd=True,
+                default_scope=self._cimd_manager.default_scope,
+                allowed_redirect_uri_patterns=self._cimd_manager.allowed_redirect_uri_patterns,
+            )
 
     def _derive_client_id(self, client_info: OAuthClientInformationFull) -> str:
         """Return a stable client_id for a registration: same metadata, same id.
@@ -195,16 +255,22 @@ class AdaptiveOidcProxy(OIDCProxy):
         await super().register_client(client_info)
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
-        """Wrap the parent with a DecryptionError guard.
+        """Wrap the parent with a DecryptionError guard and re-apply the CIMD allowlist.
 
         A key rotation (new OIDC_STORAGE_ENCRYPTION_KEY without wiping the storage
         directory) leaves ciphertext on disk that cannot be decrypted with the current
         key. Without this guard the error propagates as an unhandled exception inside
         FastMCP's request handlers. Returning None lets FastMCP respond with a clean
         401 instead of a 500 traceback.
+
+        FastMCP persists resolved CIMD clients in the client store and serves them
+        from there on later calls without consulting ``is_cimd_client_id`` again, so
+        a client accepted under an Open posture would outlive a later tightening of
+        ``OIDC_ALLOWED_CIMD_ORIGINS``. Re-check stored CIMD clients here and evict
+        any the current allowlist rejects.
         """
         try:
-            return await super().get_client(client_id)
+            client = await super().get_client(client_id)
         except DecryptionError:
             logger.error(
                 "Failed to decrypt stored OAuth client %r — the storage was likely written "
@@ -215,6 +281,15 @@ class AdaptiveOidcProxy(OIDCProxy):
                 self._storage_dir,
             )
             return None
+        if (
+            client is not None
+            and getattr(client, "cimd_document", None) is not None
+            and isinstance(self._cimd_manager, AllowlistCIMDClientManager)
+            and not self._cimd_manager.is_allowed_origin(client_id)
+        ):
+            await self._client_store.delete(key=client_id)
+            return None
+        return client
 
     async def load_authorization_code(
         self,
@@ -344,6 +419,13 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
         MCP_PATH,
         OAUTH_PREFIX,
     )
+    cimd_origins = settings.oidc_allowed_cimd_origins
+    if cimd_origins is None:
+        logger.info("CIMD enabled (open posture — any https CIMD client ID accepted)")
+    elif cimd_origins:
+        logger.info("CIMD enabled (Restricted posture — allowed origins: %s)", cimd_origins)
+    else:
+        logger.info("CIMD effectively disabled — OIDC_ALLOWED_CIMD_ORIGINS is an empty list")
 
     try:
         storage_dir = Path(settings.oidc_storage_path)
@@ -379,6 +461,7 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
             require_authorization_consent="remember",
             dcr_client_id_key=settings.oidc_storage_encryption_key,
             storage_dir=storage_dir,
+            allowed_cimd_origins=settings.oidc_allowed_cimd_origins,
         )
     except ConfigError:
         raise

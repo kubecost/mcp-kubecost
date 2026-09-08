@@ -275,6 +275,7 @@
             "audience": { "type": "string" },
             "requiredScopes": { "type": "string" },
             "allowedClientRedirectUris": { "type": "string" },
+            "allowedCimdOrigins": { "type": "string" },
             "clientID": { "type": "string" },
             "clientSecret": { "type": "string" },
             "jwtSigningKey": { "type": "string" },

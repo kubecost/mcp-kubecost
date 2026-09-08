@@ -354,6 +354,39 @@ class TestAuthModeSetting:
             get_settings.cache_clear()
 
 
+class TestOidcAllowedCimdOriginsSetting:
+    def test_unset_and_blank_values_default_to_open_posture(self, monkeypatch):
+        monkeypatch.delenv("OIDC_ALLOWED_CIMD_ORIGINS", raising=False)
+        assert _load_settings(monkeypatch).oidc_allowed_cimd_origins is None
+        assert _load_settings(monkeypatch, OIDC_ALLOWED_CIMD_ORIGINS="   ").oidc_allowed_cimd_origins is None
+
+    def test_lowercases_and_strips_hostnames(self, monkeypatch):
+        settings = _load_settings(monkeypatch, OIDC_ALLOWED_CIMD_ORIGINS='[" Client.Corp.Example ", "mcp.example"]')
+        assert settings.oidc_allowed_cimd_origins == ["client.corp.example", "mcp.example"]
+
+    def test_preserves_explicit_empty_list(self, monkeypatch):
+        assert _load_settings(monkeypatch, OIDC_ALLOWED_CIMD_ORIGINS="[]").oidc_allowed_cimd_origins == []
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            '["https://client.example"]',
+            '["client.example:443"]',
+            '["client.example/path"]',
+            '["client example"]',
+            '["user@client.example"]',
+        ],
+    )
+    def test_rejects_entries_that_are_not_bare_hostnames(self, monkeypatch, value):
+        with pytest.raises(ConfigError, match="bare hostname"):
+            _load_settings(monkeypatch, OIDC_ALLOWED_CIMD_ORIGINS=value)
+
+    @pytest.mark.parametrize("value", ["not json", '{"a": 1}', '["", "x"]', "[1]"])
+    def test_rejects_malformed_json(self, monkeypatch, value):
+        with pytest.raises(ConfigError, match="OIDC_ALLOWED_CIMD_ORIGINS"):
+            _load_settings(monkeypatch, OIDC_ALLOWED_CIMD_ORIGINS=value)
+
+
 class TestOidcAllowedClientRedirectUrisSetting:
     def test_unset_and_blank_values_default_to_open_posture(self, monkeypatch):
         monkeypatch.delenv("OIDC_ALLOWED_CLIENT_REDIRECT_URIS", raising=False)

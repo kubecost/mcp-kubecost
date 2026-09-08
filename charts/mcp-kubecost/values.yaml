@@ -310,10 +310,19 @@ config:
     # config.oidc.requiredScopes is a comma-separated list of OAuth scopes to request.
     requiredScopes: "openid,profile"
     # Optional JSON array of allowed downstream MCP-client redirect URI patterns.
-    # Leave empty for the Open default, which supports standards-compatible DCR/CIMD
-    # clients. This does not configure the upstream IdP callback.
+    # Applies to both DCR (Dynamic Client Registration) and CIMD (Client ID Metadata
+    # Document) clients. Leave empty for the Open default. This does not configure the
+    # upstream IdP callback. Client priority order: pre-registered → CIMD → DCR.
+    # DCR is deprecated in the 2026-07-28 MCP spec but still served for compatibility.
     # Example Restricted posture: '["http://localhost:*", "https://client.example/callback"]'
     allowedClientRedirectUris: ""
+    # Optional JSON array of allowed CIMD (Client ID Metadata Document) client
+    # hostnames. Bare hostnames only, no scheme or port. Leave empty for the Open
+    # default (any https CIMD client ID accepted). Set to '[]' to deny all CIMD clients.
+    # Note: with CIMD enabled the pod fetches client metadata over https from the
+    # client's origin; a restrictive NetworkPolicy must allow that egress on TCP/443.
+    # Example: '["client.corp.example", "mcp-client.example"]'
+    allowedCimdOrigins: ""
     # config.oidc.clientID is the OIDC client ID. Prefer existingSecret for production.
     clientID: ""
     # config.oidc.clientSecret is the OIDC client secret. Prefer existingSecret for production.
