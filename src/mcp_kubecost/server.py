@@ -30,6 +30,7 @@ from mcp_kubecost.config.settings import AuthMode, apply_http_rich_logging, get_
 from mcp_kubecost.errors import ConfigError
 from mcp_kubecost.middleware import TextContentSummaryMiddleware, ToolConcurrencyLimitMiddleware
 from mcp_kubecost.skills import register_all_skills
+from mcp_kubecost.telemetry import log_telemetry_status
 from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
 
 _SERVER_INSTRUCTIONS = (
@@ -243,6 +244,7 @@ os.environ["FASTMCP_SHOW_SERVER_BANNER"] = "false"
 version = pkg_version(distribution_name="mcp-kubecost")
 
 logger.info(f"Starting kubecost mcp version: {version}")
+log_telemetry_status()
 try:
     mcp = create_server(mcp_server_name)
 except ConfigError as exc:

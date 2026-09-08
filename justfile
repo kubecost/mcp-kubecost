@@ -22,6 +22,7 @@ _update_chart_version:
     just _sed 's|^appVersion:.*|appVersion: "'"$VERSION"'"|' charts/mcp-kubecost/Chart.yaml
     echo "Updated charts/mcp-kubecost/Chart.yaml appVersion to $VERSION"
 
+# build and run docker image on por 3030 for integration tests
 docker-build-run:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -31,38 +32,32 @@ docker-build-run:
     echo ""
     echo -e "\033[33m  Image built. Wait a few seconds for the server to start.\033[0m"
     echo -e "\033[33m  Then open a new terminal and run your tests. Example command:\033[0m"
-    echo -e "\033[33m  fastmcp call mcp-http.json get_container_savings_recommendations --input-json '{\"window\": \"15d\"}'\033[0m"
+    echo -e "\033[33m  fastmcp call ./config/mcp-http.json get_container_savings_recommendations --input-json '{\"window\": \"15d\"}'\033[0m"
     docker run --rm \
       --name mcp-kubecost \
       -p 3030:3030 \
       -e KUBECOST_BASE_URL=http://host.docker.internal:9090  \
+      -e FASTMCP_LOG_LEVEL=DEBUG \
       mcp-kubecost
 
-# ── Environment ────────────────────────────────────────────────────────────────
 # Install dependencies and create virtual environment
 setup-dev-environment:
     uv venv --clear
     uv sync --all-extras --active
 
-# ── Testing ────────────────────────────────────────────────────────────────────
-test:
-    uv run pytest
-# Integration tests
-test-all:
-    uv run pytest -m ""
-
-# Integration tests on http
-test-all-http:
-    MCP_KUBECOST_TARGET=http://localhost:3030/mcp uv run pytest -m ""
-
-# ── Development Server ─────────────────────────────────────────────────────────
-
 # Start FastMCP dev server with browser inspector UI
-dev:
+dev-inspector:
     fastmcp dev inspector
 
 # Start FastMCP as HTTP server on port 3030 (for debugging with logs)
 serve:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ -z "${KUBECOST_BASE_URL:-}" ]]; then
+        echo "Error: KUBECOST_BASE_URL is not set." >&2
+        echo "Set it in your environment or copy .env.example to .env and fill it in." >&2
+        exit 1
+    fi
     fastmcp run ./config/fastmcp-http.json
 
 # ── FastMCP CLI ────────────────────────────────────────────────────────────────
@@ -92,7 +87,7 @@ call-json TOOL INPUT:
 cost-comparison AGGREGATE="namespace":
     scripts/cost_comparison-day.sh {{MCP_CONFIG}} {{AGGREGATE}}
 
-# ── Client Setup ───────────────────────────────────────────────────────────────
+# ── AI Client Setup ───────────────────────────────────────────────────────────────
 
 # Install MCP config for other agents
 install-mcp-json:
@@ -102,10 +97,7 @@ install-mcp-json:
 install-claude:
     fastmcp install claude-desktop ./config/fastmcp.json --project $PWD --env-file .env
 
-# ── Linting ────────────────────────────────────────────────────────────────────
-
-# Dead-code scan. Uses [tool.vulture] in pyproject.toml (FastMCP decorator
-# ignore + Pydantic field whitelist). Pass no extra paths — they replace config.
+# Dead-code scan. Uses [tool.vulture] in pyproject.toml
 vulture:
     uv run vulture
 
@@ -135,10 +127,23 @@ spell-check:
         charts/mcp-kubecost/values.schema.json \
         "charts/mcp-kubecost/templates/**"
 
+# Automatically check for outdated dependencies and update pyproject.toml
 update-dependencies:
     just setup-dev-environment
     ./scripts/update_dependencies.py
     uv sync --all-extras --active --upgrade
+
+
+# run python tests (no integration tests)
+test:
+    uv run pytest
+# Integration tests
+test-all:
+    uv run pytest -m ""
+
+# Integration tests on http
+test-all-http:
+    MCP_KUBECOST_TARGET=http://localhost:3030/mcp uv run pytest -m ""
 
 # public demo test, just to help with inspector cli syntax
 test-demo:
