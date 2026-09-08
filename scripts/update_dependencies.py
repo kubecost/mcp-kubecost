@@ -296,7 +296,7 @@ def print_summary(
 
 
 def main() -> None:
-    console.print(Panel.fit("Fleet Manager dependency update", style="bold magenta"))
+    console.print(Panel.fit("Python dependencies update", style="bold magenta"))
 
     for tool in ("uv", "npm", "npx"):
         if subprocess.run(["which", tool], capture_output=True).returncode != 0:
