@@ -39,6 +39,7 @@
     "distroless",
     "docstrings",
     "dotenv",
+    "envoyproxy",
     "fastmcp",
     "fernet",
     "FileTreeStore",
