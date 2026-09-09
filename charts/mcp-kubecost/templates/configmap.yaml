@@ -40,12 +40,8 @@ data:
   {{- if .Values.config.ssl.caBundle.existingSecret }}
   SSL_CA_BUNDLE: {{ .Values.config.ssl.caBundle.mountPath | quote }}
   {{- end }}
-  {{- if or .Values.httpRoute.enabled .Values.ingress.enabled }}
-  # The pod only sees the Gateway or ingress controller as its TCP peer. Let
-  # uvicorn trust X-Forwarded-For from it so per-client-IP limits (such as the
-  # one on POST /oauth/mcp/register) key on the real client, not the proxy.
-  FORWARDED_ALLOW_IPS: "*"
-  {{- end }}
+  # Empty explicitly disables uvicorn's proxy-header trust (including loopback).
+  FORWARDED_ALLOW_IPS: {{ .Values.config.forwardedAllowIps | quote }}
   {{- if ne .Values.config.authMode "none" }}
   AUTH_MODE: {{ .Values.config.authMode | quote }}
   {{- if .Values.config.oidc.issuerUrl }}

@@ -39,6 +39,14 @@ jobs:
           grep -q 'image: "icr.io/kubecost/mcp-kubecost:' .helm-render/mcp-kubecost-default.yaml
           grep -q 'replicas: 1' .helm-render/mcp-kubecost-default.yaml
           grep -q 'type: Recreate' .helm-render/mcp-kubecost-default.yaml
+          grep -q 'FORWARDED_ALLOW_IPS: ""' .helm-render/mcp-kubecost-default.yaml
+
+      - name: Render optional trusted proxy configuration
+        run: |
+          helm template mcp-kubecost "$CHART_DIR" \
+            --set-string 'config.forwardedAllowIps=10.0.1.10\,10.0.2.0/24' \
+            > .helm-render/mcp-kubecost-trusted-proxy.yaml
+          grep -q 'FORWARDED_ALLOW_IPS: "10.0.1.10,10.0.2.0/24"' .helm-render/mcp-kubecost-trusted-proxy.yaml
 
       - name: Reject replicas > 1 with persistence or OIDC (expect failure)
         run: |
@@ -112,6 +120,7 @@ jobs:
             --set config.authMode=open \
             > .helm-render/mcp-kubecost-secure.yaml
           grep -q 'kind: Ingress' .helm-render/mcp-kubecost-secure.yaml
+          grep -q 'FORWARDED_ALLOW_IPS: ""' .helm-render/mcp-kubecost-secure.yaml
           grep -q 'host: "mcp.example.com"' .helm-render/mcp-kubecost-secure.yaml
           grep -q 'AUTH_MODE: "open"' .helm-render/mcp-kubecost-secure.yaml
           grep -q 'name: KUBECOST_API_KEY' .helm-render/mcp-kubecost-secure.yaml
@@ -132,6 +141,7 @@ jobs:
             --set config.authMode=open \
             > .helm-render/mcp-kubecost-httproute.yaml
           grep -q 'kind: HTTPRoute' .helm-render/mcp-kubecost-httproute.yaml
+          grep -q 'FORWARDED_ALLOW_IPS: ""' .helm-render/mcp-kubecost-httproute.yaml
           grep -q 'name: mcp-gateway' .helm-render/mcp-kubecost-httproute.yaml
           grep -q 'sectionName: https' .helm-render/mcp-kubecost-httproute.yaml
           grep -q 'mcp.example.com' .helm-render/mcp-kubecost-httproute.yaml

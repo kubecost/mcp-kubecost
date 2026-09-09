@@ -270,6 +270,13 @@ config:
   # Ingress or HTTPRoute containing exactly one non-wildcard hostname.
   # The fixed public URLs are /mcp and /oauth/mcp on this origin.
   externalUrl: ""
+  # Optional comma-separated trusted proxy IPs or CIDRs for uvicorn's
+  # X-Forwarded-For / X-Forwarded-Proto handling. Empty disables header trust,
+  # including with Ingress or HTTPRoute enabled; no proxy IP knowledge is required.
+  # Behind an untrusted proxy, clients share its DCR registration rate budget.
+  # Example: "10.0.1.10,10.0.2.0/24". Use "*" only if every path to the pod
+  # passes through a proxy that overwrites client-supplied forwarded headers.
+  forwardedAllowIps: ""
 
   # Enable FastMCP's Host/Origin request guard. "auto" protects local binds and
   # activates strict checks when either allowlist below is configured.

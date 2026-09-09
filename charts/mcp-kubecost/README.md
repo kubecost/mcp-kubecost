@@ -55,3 +55,9 @@ When this chart is a subchart, the parent `global` values are merged in and take
 | `global.additionalLabels`                                                  | Added to this chart's resources and pod template. Never added to selector labels, which must stay immutable.                                                           |
 | `global.platforms.openshift.enabled`                                       | Replaces `podSecurityContext` with `global.platforms.openshift.securityContext`, because the OpenShift restricted-v2 SCC rejects an explicit `runAsUser`/`runAsGroup`. |
 | `global.platforms.cicd.enabled` + `global.platforms.cicd.skipSanityChecks` | Skip Secret existence lookups. Set both when Helm cannot see the live cluster (Argo CD) or Secrets are created in a later sync wave.                                   |
+
+## Optional proxy-header trust
+
+The chart works without knowing your proxy IPs. `config.forwardedAllowIps` defaults to `""`, which disables forwarded-header trust even with Ingress or HTTPRoute enabled. Behind a proxy, clients share its DCR registration rate budget; HTTP 429 responses include `Retry-After: 60`.
+
+To give clients independent budgets, optionally set `config.forwardedAllowIps` to known proxy IPs or CIDRs, such as `"10.0.1.10,10.0.2.0/24"`. This configures uvicorn's `FORWARDED_ALLOW_IPS` for both forwarded client IPs and schemes. It is not a client access allowlist. Use `"*"` only when every path to the pod passes through a proxy that overwrites client-supplied forwarded headers.

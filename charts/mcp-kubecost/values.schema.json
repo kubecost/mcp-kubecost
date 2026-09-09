@@ -240,6 +240,7 @@
         "authMode": { "type": "string", "enum": ["none", "open", "oidc", "api_key"] },
         "requireClientApiKey": { "type": "boolean" },
         "externalUrl": { "type": "string", "pattern": "^$|^https://[^/?#]+/?$" },
+        "forwardedAllowIps": { "type": "string" },
         "fastmcpHttpHostOriginProtection": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["auto"] }] },
         "fastmcpHttpAllowedHosts": { "type": "string" },
         "fastmcpHttpAllowedOrigins": { "type": "string" },

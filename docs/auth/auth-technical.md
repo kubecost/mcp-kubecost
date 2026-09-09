@@ -2,6 +2,8 @@
 
 This page is the technical reference for MCP OIDC, reverse-proxy routing, Helm configuration, and troubleshooting. For the auth-mode overview, see [README.md](README.md).
 
+**The MCP Server authentication has limited testing and is considered beta. Consider using multiple layers of security for production deployments.**
+
 ## Protecting the MCP HTTP endpoint (OIDC)
 
 With `AUTH_MODE=oidc`, FastMCP acts as an OAuth authorization server to MCP clients and as an OIDC client to the upstream identity provider. Those are two different protocol relationships.
@@ -75,7 +77,9 @@ The DCR path derives a stable `client_id` from an HMAC of the registration metad
 
 Client files, DCR and CIMD alike, accumulate in `OIDC_STORAGE_PATH` for as long as the same encryption key is in use. FastMCP does not expire them automatically. With a stable key, the growth rate is bounded by the number of distinct clients — typically a few files per deployment. If you redeploy with an ephemeral key (no `OIDC_STORAGE_ENCRYPTION_KEY` set), the directory is wiped at startup automatically.
 
-`POST /oauth/mcp/register` is unauthenticated, so the server rate-limits it: 30 requests per minute per client IP (burst 15) and 120 per minute per pod (burst 60). Excess requests receive `429` with `Retry-After: 60`. The per-IP key is the TCP peer unless uvicorn trusts `X-Forwarded-For` from it, which the chart enables through `FORWARDED_ALLOW_IPS` whenever `httpRoute` or `ingress` is enabled.
+`POST /oauth/mcp/register` is unauthenticated, so the server rate-limits it: 30 requests per minute per client IP (burst 15) and 120 per minute per pod (burst 60). Excess requests receive `429` with `Retry-After: 60`. The chart disables forwarded-header trust by default (`FORWARDED_ALLOW_IPS=""`), including with Ingress or HTTPRoute enabled. No proxy IP configuration is required to install or log in. The per-IP key is the TCP peer, so clients behind the same proxy share its budget. Operators who know their proxy IPs or CIDRs can opt in through `config.forwardedAllowIps` (for example, `"10.0.1.10,10.0.2.0/24"`). This controls uvicorn's handling of both `X-Forwarded-For` and `X-Forwarded-Proto`; it does not restrict who may connect. Use `"*"` only when every route to the pod passes through a proxy that overwrites client-supplied forwarded headers.
+
+The per-IP bucket map holds at most 1,000 entries. When full, idle entries are reclaimed; if all entries are active, new IPs receive 429 until space is available. Requests rejected by the global limit allocate no per-IP state.
 
 ### Shared Kubecost frontend hostname
 
@@ -181,7 +185,7 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 | `OIDC_REQUIRED_SCOPES` | `config.oidc.requiredScopes` | Provider scopes; default `openid,profile` |
 | `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` | `config.oidc.allowedClientRedirectUris` | Optional downstream MCP-client callback allowlist (DCR and CIMD) |
 | `OIDC_ALLOWED_CIMD_ORIGINS` | `config.oidc.allowedCimdOrigins` | Optional JSON array of allowed CIMD client hostnames |
-| `FORWARDED_ALLOW_IPS` | set to `*` by the chart when `httpRoute` or `ingress` is enabled | Peers uvicorn trusts for `X-Forwarded-For`; needed so per-IP limits see the real client |
+| `FORWARDED_ALLOW_IPS` | `config.forwardedAllowIps` (default `""`) | Optional trusted proxy IPs/CIDRs; empty disables forwarded-header trust |
 | `OIDC_AUDIENCE` | `config.oidc.audience` | Optional upstream API audience |
 | `OIDC_STORAGE_PATH` | fixed by chart | Encrypted OAuth state directory |
 | `OIDC_JWT_SIGNING_KEY` | `config.oidc.jwtSigningKey` or Secret | Stable FastMCP signing key |
@@ -238,7 +242,7 @@ Use `/health`, not `/mcp`.
 
 **Clients receive `429` from `/oauth/mcp/register` after a restart**
 
-Registration is rate-limited per client IP. Behind a Gateway or Ingress every request shares the proxy's IP unless uvicorn trusts `X-Forwarded-For` from it. Confirm `FORWARDED_ALLOW_IPS` is present in the ConfigMap (the chart sets it when `httpRoute.enabled` or `ingress.enabled` is true). If the MCP endpoint is published some other way, set that variable yourself. Setting `OIDC_STORAGE_ENCRYPTION_KEY` also removes the re-register-everything burst after each restart.
+Registration is rate-limited per TCP peer by default. Clients behind a Gateway or Ingress share its budget; honor `Retry-After: 60` if a burst exceeds it. If you know the proxy IPs or CIDRs, optionally set `config.forwardedAllowIps` (or `FORWARDED_ALLOW_IPS` outside Helm) to give forwarded client addresses independent budgets. Leave it empty when those addresses are unknown. Set a stable `OIDC_STORAGE_ENCRYPTION_KEY` to preserve registrations across restarts.
 
 **OIDC initialization reports HTML discovery metadata**
 

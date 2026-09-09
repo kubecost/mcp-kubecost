@@ -95,9 +95,10 @@ _BROWSER_CORS = Middleware(
 # cost of a legitimate burst is low.
 #
 # The per-IP key is scope["client"], which uvicorn rewrites from
-# X-Forwarded-For only for peers listed in FORWARDED_ALLOW_IPS. The chart sets
-# that when a Gateway or Ingress is enabled. Do not parse the header here: an
-# untrusted header must never choose the bucket.
+# X-Forwarded-For only for peers listed in FORWARDED_ALLOW_IPS. The chart
+# disables this trust by default; operators can opt in with known proxy IPs
+# or CIDRs. Do not parse the header here: an untrusted header must never
+# choose the bucket. Clients behind an untrusted proxy share its IP budget.
 #
 # None of this is configurable through Helm. Registration is a one-time event
 # per client and these ceilings are far above any legitimate rate.
@@ -155,26 +156,31 @@ class _DcrRateLimiter:
     def allow(self, client_ip: str) -> bool:
         """Return True and consume one token from both buckets, or False and consume none."""
         now = self._clock()
+        self._global.refill(now)
+        if self._global.tokens < 1.0:
+            return False
         bucket = self._buckets.get(client_ip)
         if bucket is None:
             self._evict_idle(now)
+            if len(self._buckets) >= self._max_tracked_ips:
+                return False
             bucket = self._buckets[client_ip] = _TokenBucket(
                 per_minute=self._per_ip_per_minute, burst=self._per_ip_burst, now=now
             )
         bucket.refill(now)
-        self._global.refill(now)
-        if bucket.tokens < 1.0 or self._global.tokens < 1.0:
+        if bucket.tokens < 1.0:
             return False
         bucket.consume()
         self._global.consume()
         return True
 
     def _evict_idle(self, now: float) -> None:
-        """Drop buckets that have refilled to full, once the map is over its cap.
+        """Drop idle buckets when the map reaches its hard cap.
 
         A bucket idle for ``capacity / rate`` seconds is indistinguishable from a
-        fresh one, so dropping it loses no state. This keeps memory bounded by
-        the number of IPs seen in the last refill horizon, not ever.
+        fresh one, so dropping it loses no state. If none can be evicted,
+        new IPs are rejected until space becomes available; active IPs keep
+        their budgets. The scan visits at most ``max_tracked_ips`` entries.
         """
         if len(self._buckets) < self._max_tracked_ips:
             return

@@ -767,7 +767,8 @@ class TestCIMDOriginAllowlist:
         assert isinstance(proxy._cimd_manager, AllowlistCIMDClientManager)
         assert proxy._cimd_manager._allowed_origins == frozenset({"corp.example"})
 
-    async def test_stored_cimd_client_is_evicted_when_allowlist_tightens(self):
+    @pytest.mark.parametrize("allowed_origins", [["trusted.example"], []])
+    async def test_stored_cimd_client_is_evicted_when_allowlist_tightens(self, allowed_origins):
         """FastMCP serves stored CIMD clients without re-checking is_cimd_client_id.
 
         A client accepted under an Open posture must not survive a later
@@ -776,10 +777,20 @@ class TestCIMDOriginAllowlist:
         cimd_url = "https://old.example/.well-known/mcp-client"
         proxy = _dcr_proxy()
         await proxy._client_store.put(key=cimd_url, value=_cimd_client(cimd_url))
-        proxy._cimd_manager = AllowlistCIMDClientManager(allowed_origins=["trusted.example"])
+        proxy._cimd_manager = AllowlistCIMDClientManager(allowed_origins=allowed_origins)
+        proxy._cimd_manager._fetcher.fetch = AsyncMock(return_value=_cimd_client(cimd_url).cimd_document)
 
         assert await proxy.get_client(cimd_url) is None
         assert await proxy._client_store.get(key=cimd_url) is None
+        proxy._cimd_manager._fetcher.fetch.assert_not_awaited()
+
+    async def test_new_disallowed_cimd_client_is_rejected_without_fetch(self):
+        proxy = _dcr_proxy()
+        proxy._cimd_manager = AllowlistCIMDClientManager(allowed_origins=[])
+        proxy._cimd_manager._fetcher.fetch = AsyncMock()
+
+        assert await proxy.get_client("https://untrusted.example/client.json") is None
+        proxy._cimd_manager._fetcher.fetch.assert_not_awaited()
 
     async def test_stored_cimd_client_survives_when_origin_allowed(self):
         cimd_url = "https://trusted.example/.well-known/mcp-client"

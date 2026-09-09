@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -10,6 +11,7 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.responses import JSONResponse
 from starlette.routing import Route
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from mcp_kubecost.server import _DCR_REGISTER_PATH, _DcrRateLimiter, _DcrRateLimitMiddleware
 
@@ -61,6 +63,27 @@ class TestDcrRateLimiter:
         assert limiter.allow("2.2.2.2") is True
         assert limiter.allow("3.3.3.3") is False
 
+    def test_global_denials_do_not_allocate_buckets(self):
+        limiter, _ = _limiter(global_burst=1, max_tracked_ips=3)
+        assert limiter.allow("first") is True
+        for i in range(100):
+            assert limiter.allow(f"new-{i}") is False
+        assert limiter.tracked_ips == 1
+
+    def test_full_map_rejects_new_ips_without_resetting_active_budgets(self):
+        limiter, clock = _limiter(max_tracked_ips=2)
+        for _ in range(3):
+            assert limiter.allow("busy") is True
+        assert limiter.allow("other") is True
+        for i in range(100):
+            assert limiter.allow(f"new-{i}") is False
+        assert limiter.tracked_ips == 2
+        assert limiter.allow("busy") is False
+        assert limiter.allow("other") is True
+        clock.now += 3
+        assert limiter.allow("new") is True
+        assert limiter.tracked_ips == 1
+
     def test_global_denial_does_not_consume_ip_token(self):
         limiter, clock = _limiter(global_per_minute=60, global_burst=1)
         assert limiter.allow("1.1.1.1") is True
@@ -101,6 +124,11 @@ def _app(limiter: _DcrRateLimiter) -> Starlette:
     )
 
 
+def _proxied_app(limiter: _DcrRateLimiter, trusted_hosts: str) -> Any:
+    # Uvicorn uses narrower ASGI event types than Starlette/httpx for the same protocol.
+    return ProxyHeadersMiddleware(cast(Any, _app(limiter)), trusted_hosts=trusted_hosts)
+
+
 @pytest.fixture
 def client():
     limiter, _ = _limiter(per_ip_burst=2)
@@ -109,6 +137,38 @@ def client():
 
 
 class TestDcrRateLimitMiddleware:
+    @pytest.mark.parametrize(
+        ("trusted_hosts", "peer", "expected"),
+        [
+            ("", "10.0.0.1", [201, 201, 429]),
+            ("10.0.0.0/24", "192.0.2.1", [201, 201, 429]),
+            ("10.0.0.0/24", "10.0.0.1", [201, 201, 201]),
+        ],
+    )
+    async def test_forwarded_ips_only_split_budgets_for_trusted_proxies(self, trusted_hosts, peer, expected):
+        limiter, _ = _limiter(per_ip_burst=2)
+        app = _proxied_app(limiter, trusted_hosts)
+        transport = httpx.ASGITransport(app=app, client=(peer, 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="https://mcp.example") as client:
+            statuses = [
+                (await client.post(_DCR_REGISTER_PATH, headers={"X-Forwarded-For": f"198.51.100.{i}"})).status_code
+                for i in range(3)
+            ]
+        assert statuses == expected
+
+    async def test_trusted_proxy_appending_real_ip_does_not_trust_spoofed_prefix(self):
+        limiter, _ = _limiter(per_ip_burst=2)
+        app = _proxied_app(limiter, "10.0.0.0/24")
+        transport = httpx.ASGITransport(app=app, client=("10.0.0.1", 12345))
+        async with httpx.AsyncClient(transport=transport, base_url="https://mcp.example") as client:
+            statuses = [
+                (
+                    await client.post(_DCR_REGISTER_PATH, headers={"X-Forwarded-For": f"198.51.100.{i}, 203.0.113.42"})
+                ).status_code
+                for i in range(3)
+            ]
+        assert statuses == [201, 201, 429]
+
     async def test_register_post_is_limited(self, client):
         async with client:
             statuses = [(await client.post(_DCR_REGISTER_PATH, json={})).status_code for _ in range(3)]

@@ -266,9 +266,16 @@ class AdaptiveOidcProxy(OIDCProxy):
         FastMCP persists resolved CIMD clients in the client store and serves them
         from there on later calls without consulting ``is_cimd_client_id`` again, so
         a client accepted under an Open posture would outlive a later tightening of
-        ``OIDC_ALLOWED_CIMD_ORIGINS``. Re-check stored CIMD clients here and evict
-        any the current allowlist rejects.
+        ``OIDC_ALLOWED_CIMD_ORIGINS``. Reject and evict disallowed CIMD URLs
+        before the parent can refresh their metadata over the network.
         """
+        if (
+            isinstance(self._cimd_manager, AllowlistCIMDClientManager)
+            and CIMDClientManager.is_cimd_client_id(self._cimd_manager, client_id)
+            and not self._cimd_manager.is_allowed_origin(client_id)
+        ):
+            await self._client_store.delete(key=client_id)
+            return None
         try:
             client = await super().get_client(client_id)
         except DecryptionError:
@@ -280,14 +287,6 @@ class AdaptiveOidcProxy(OIDCProxy):
                 client_id,
                 self._storage_dir,
             )
-            return None
-        if (
-            client is not None
-            and getattr(client, "cimd_document", None) is not None
-            and isinstance(self._cimd_manager, AllowlistCIMDClientManager)
-            and not self._cimd_manager.is_allowed_origin(client_id)
-        ):
-            await self._client_store.delete(key=client_id)
             return None
         return client
 
