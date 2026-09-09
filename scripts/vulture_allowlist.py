@@ -6,6 +6,9 @@
 
 # FastMCP framework overrides, called by the base class.
 _get_verification_token  # unused method (src/mcp_kubecost/config/oidc.py:90)
+
+# Public property used in tests (vulture only scans src/, not tests/).
+tracked_ips  # unused property (src/mcp_kubecost/server.py:152)
 _uses_alternate_verification  # unused method (src/mcp_kubecost/config/oidc.py:106)
 on_call_tool  # unused method (src/mcp_kubecost/middleware.py:21)
 
