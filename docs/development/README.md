@@ -38,7 +38,7 @@ uv run mcp-kubecost
 # or
 uv run python -m mcp_kubecost.server
 # or
-uv run fastmcp run config/fastmcp.json
+uv run fastmcp run fastmcp.json
 ```
 
 **HTTP** (service deployment, port 3030):
@@ -70,21 +70,23 @@ just readme-tools
 ## Testing and Quality
 
 ```bash
-.venv/bin/pytest                       # unit suite (integration tests deselected by default)
-.venv/bin/pytest -m integration        # integration only — hits https://demo.kubecost.xyz
-.venv/bin/pytest -m ""                 # everything, as CI runs it
+just test                              # unit suite (integration tests deselected by default)
+just test-integration                  # integration only — hits https://demo.kubecost.xyz
+just test-all                          # everything (`pytest -m ""`), as the CI `test` job runs it
+just test-ci-locally --no-auto-format  # local mirror of the CI `test` job
 .venv/bin/ruff format .                # format
 .venv/bin/ruff check . --fix           # lint
-.venv/bin/pyrefly check                # type check
+just pyrefly-check                     # type check
 just vulture                           # blocking dead-code scan
-uvx pre-commit run --config .github/pre-commit-config-ci.yaml --all-files
+just check-consent-branding --check    # served OAuth consent screen (also in the CI `test` job)
+just auto-format                       # CI pre-commit config; stage or stash unstaged edits first
 ```
 
-Run `ruff format`, `ruff check --fix`, and `pyrefly check` after every Python edit. Since this guide now lives under [`docs/development/`](../development/), run the pre-commit command from the repository root.
+Run `ruff format`, `ruff check --fix`, and `pyrefly check` after every Python edit. `just auto-format` and `just test-ci-locally` must be run from the repository root. `pre-commit` is in the `dev` extra — use `uv run pre-commit` (or the just recipes), not `uvx pre-commit`, so the version matches `uv.lock`.
 
 **Pyrefly** is the project's type checker, configured under `[tool.pyrefly]` in `pyproject.toml` and enforced in CI at the `basic` preset (0 errors). The `[tool.basedpyright]` block is retained only for IDEs without Pyrefly language-server support; it is not an enforced gate, and Pyrefly wins if the two disagree.
 
-CI runs on Python 3.12 ([`ci.yml`](../../.github/workflows/ci.yml)), matching `requires-python`. See [`pre-commit-checks.md`](pre-commit-checks.md) for local vs CI hook tiers.
+CI runs on Python 3.12 ([`ci.yml`](../../.github/workflows/ci.yml)), matching `requires-python`. The `test` job runs pyrefly, vulture, consent-screen branding, `pytest -m ""` with coverage, and repo safety checks. The `integration` job hits the public demo via `tests/mcp-demo.json`. See [`pre-commit-checks.md`](pre-commit-checks.md) for local vs CI hook tiers. Formatting is a separate workflow ([`auto-fix-formatting.yml`](../../.github/workflows/auto-fix-formatting.yml)), not part of `ci.yml`.
 
 ## Docker / Kubernetes
 

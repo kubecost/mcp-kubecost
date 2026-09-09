@@ -60,11 +60,9 @@ serve:
     fi
     fastmcp run ./config/fastmcp-http.json
 
-# ── FastMCP CLI ────────────────────────────────────────────────────────────────
-
-# Inspect the MCP server (list tools, prompts, resources)
+# Inspect the MCP server (counts for tools, prompts, resources)
 inspect:
-    fastmcp inspect config/fastmcp.json
+    fastmcp inspect fastmcp.json
 
 # List all tools and prompts
 list:
@@ -91,15 +89,11 @@ cost-comparison AGGREGATE="namespace":
 
 # Install MCP config for other agents
 install-mcp-json:
-    fastmcp install mcp-json ./config/fastmcp.json --project $PWD --env-file .env
+    fastmcp install mcp-json ./fastmcp.json --project $PWD --env-file .env
 
 # Install MCP config for Claude Desktop
 install-claude:
-    fastmcp install claude-desktop ./config/fastmcp.json --project $PWD --env-file .env
-
-# Dead-code scan. Uses [tool.vulture] in pyproject.toml
-vulture:
-    uv run vulture
+    fastmcp install claude-desktop ./fastmcp.json --project $PWD --env-file .env
 
 # Serve the OAuth consent screen against a stub IdP and assert it is Kubecost-branded.
 # The only local path that reaches this page — STDIO serves no HTTP routes.
@@ -134,16 +128,79 @@ update-dependencies:
     uv sync --all-extras --active --upgrade
 
 
-# run python tests (no integration tests)
+# Unit tests only (integration marker is deselected by default)
 test:
     uv run pytest
-# Integration tests
+
+# Full pytest suite, same selector CI uses (`-m ""`)
 test-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export KUBECOST_BASE_URL="${KUBECOST_BASE_URL:-https://demo.kubecost.xyz}"
     uv run pytest -m ""
 
-# Integration tests on http
-test-all-http:
-    MCP_KUBECOST_TARGET=http://localhost:3030/mcp uv run pytest -m ""
+# Live integration tests only. Default target is tests/mcp-demo.json (same as the CI `integration` job).
+test-integration:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export KUBECOST_BASE_URL="${KUBECOST_BASE_URL:-https://demo.kubecost.xyz}"
+    export MCP_KUBECOST_TARGET="${MCP_KUBECOST_TARGET:-tests/mcp-demo.json}"
+    uv run pytest -m integration
+
+# Integration tests against an already-running HTTP server on port 3030 (`just serve` or `just docker-build-run`)
+test-integration-http-3030:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! curl -fsS --max-time 2 "http://localhost:3030/health" >/dev/null; then
+        echo -e "\033[33m  Error: FastMCP server is not running on port 3030.\033[0m" >&2
+        echo -e "\033[33m  Run 'just serve' or 'just docker-build-run' to start the FastMCP server.\033[0m" >&2
+        exit 1
+    fi
+    MCP_KUBECOST_TARGET=http://localhost:3030/mcp uv run pytest -m integration
+
+# Mirror the `test` job in .github/workflows/ci.yml. Pass --no-auto-format to skip the formatter prompt.
+[positional-arguments]
+test-ci-locally *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    skip_auto_format=0
+    for arg in "$@"; do
+        case "$arg" in
+            -- | test-ci-locally) ;;
+            --no-auto-format) skip_auto_format=1 ;;
+            *)
+                echo "Unknown argument: $arg" >&2
+                echo "Usage: just test-ci-locally [--no-auto-format]" >&2
+                exit 1
+                ;;
+        esac
+    done
+    export KUBECOST_BASE_URL="${KUBECOST_BASE_URL:-https://demo.kubecost.xyz}"
+    uv sync --extra dev
+
+    if [[ "$skip_auto_format" -eq 1 ]]; then
+        echo -e "\033[33m  Skipping just auto-format (--no-auto-format)\033[0m"
+    elif [[ -t 0 ]]; then
+        read -r -p $'\033[33m  Run just auto-format? [y/N] \033[0m' reply
+        if [[ "${reply}" =~ ^[Yy]$ ]]; then
+            just auto-format
+        else
+            echo -e "\033[33m  Skipping just auto-format\033[0m"
+        fi
+    else
+        echo -e "\033[33m  Skipping just auto-format (non-interactive)\033[0m"
+    fi
+    echo -e "\033[33m  Running pyrefly check\033[0m"
+    just pyrefly-check
+    echo -e "\033[33m  Running vulture\033[0m"
+    just vulture
+    echo -e "\033[33m  Running check-consent-branding --check\033[0m"
+    just check-consent-branding --check
+    echo -e "\033[33m  Running pytest -m \"\" (unit + integration if a target is present)\033[0m"
+    uv run pytest --cov=mcp_kubecost --cov-report=xml -m ""
+    echo -e "\033[33m  Running repo safety checks\033[0m"
+    uv run python scripts/pre_commit_hooks/check_repo_safety.py
+
 
 # public demo test, just to help with inspector cli syntax
 test-demo:
@@ -156,3 +213,21 @@ test-sso:
     npx @modelcontextprotocol/inspector \
     --cli https://ibm-sso.demo.kubecost.cloud/mcp \
     --method tools/call --tool-name get_savings_overview
+
+# run pyrefly check
+pyrefly-check:
+    uv run pyrefly check
+
+# Dead-code scan. Uses [tool.vulture] in pyproject.toml
+vulture:
+    uv run vulture
+
+# Run the CI pre-commit config (ruff, yaml, safety). Stage or stash unstaged edits first so the diff stays reviewable.
+auto-format:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! git diff --quiet; then
+        echo -e "\033[33m  Error: unstaged changes detected. Stash or stage them before running auto-format.\033[0m" >&2
+        exit 1
+    fi
+    uv run pre-commit run --config .github/pre-commit-config-ci.yaml --all-files

@@ -15,20 +15,24 @@ Runtime FinOps guidance for MCP clients lives in tool docstrings, [`src/mcp_kube
 The virtual environment lives at `.venv/`. Invoke its interpreter directly — do **not** run `source .venv/bin/activate`, and do not use `uvx pytest` (it resolves in an isolated environment without the project's dependencies, so test collection fails).
 
 ```bash
-.venv/bin/pytest                        # unit suite; integration tests are deselected by default
-.venv/bin/pytest -m integration         # integration only — hits https://demo.kubecost.xyz
-.venv/bin/pytest -m ""                  # everything, as CI runs it
+just test                               # unit suite; integration tests are deselected by default
+just test-integration                   # integration only — hits https://demo.kubecost.xyz via tests/mcp-demo.json
+just test-all                           # everything (`pytest -m ""`), as the CI `test` job runs it
+just test-integration-http-3030         # integration against a server already on :3030 (`just serve`)
+just test-ci-locally --no-auto-format   # local mirror of the CI `test` job (pyrefly, vulture, consent branding, pytest -m "", repo safety)
 .venv/bin/ruff format .
 .venv/bin/ruff check . --fix
-.venv/bin/pyrefly check                 # type check
+just pyrefly-check                      # type check
 just vulture                            # dead-code scan (configured; do not pass extra paths)
 just check-consent-branding             # serves the OAuth consent screen and asserts branding
-uvx pre-commit run --config .github/pre-commit-config-ci.yaml --all-files
+just auto-format                        # CI pre-commit config; stage or stash unstaged edits first
 ```
 
-Run `ruff format`, `ruff check --fix`, and `pyrefly check` after every Python edit. If the venv is stale after a dependency change, refresh it with `uv sync --extra dev` (or `just setup`).
+Run `ruff format`, `ruff check --fix`, and `pyrefly check` after every Python edit. If the venv is stale after a dependency change, refresh it with `uv sync --extra dev` (or `just setup-dev-environment`).
 
 `just --list` shows the full task runner surface (`just test`, `just serve`, `just inspect`, `just vulture`, `just call-json <tool> '<json>'`).
+
+`just test-ci-locally` is a convenience wrapper around the **`test` job** in [`.github/workflows/ci.yml`](.github/workflows/ci.yml). It is not a substitute for that workflow: it optionally prompts for `just auto-format` (a separate CI workflow), defaults `KUBECOST_BASE_URL` to `https://demo.kubecost.xyz` when unset, and does not run the dedicated `integration` job. Use `just test-integration` for that job's selector. Pass `--no-auto-format` in non-interactive or already-formatted trees.
 
 ## Architecture Map
 
@@ -42,7 +46,7 @@ Run `ruff format`, `ruff check --fix`, and `pyrefly check` after every Python ed
 | HTTP custom routes (`/health`, `/version`, `/favicon.ico`) | [`server.py`](src/mcp_kubecost/server.py) |
 | OAuth consent / error page look and feel | [`src/mcp_kubecost/branding.py`](src/mcp_kubecost/branding.py) |
 | Env-backed settings | [`src/mcp_kubecost/config/settings.py`](src/mcp_kubecost/config/settings.py) |
-| FastMCP run configs (stdio / HTTP / public demo client) | [`config/`](config/) |
+| FastMCP run configs (stdio / HTTP / public demo client) | [`fastmcp.json`](fastmcp.json) (stdio), [`config/`](config/) (HTTP + public demo) |
 
 **Pattern A for tools:** thin handler → `call_get_api()` → domain helpers → typed Pydantic response. Do not create separate `prompts/`, `resources/`, or `api/` packages unless deliberately refactoring.
 
@@ -246,7 +250,7 @@ Do not try to verify consent branding through the Kiro power or `just inspect` �
 
 ## Transport / Local Verification
 
-- **STDIO:** `.venv/bin/mcp-kubecost`, `.venv/bin/python -m mcp_kubecost.server`, or `uv run fastmcp run config/fastmcp.json`
+- **STDIO:** `.venv/bin/mcp-kubecost`, `.venv/bin/python -m mcp_kubecost.server`, or `uv run fastmcp run fastmcp.json`
 - **HTTP:** `uv run fastmcp run config/fastmcp-http.json` (port 3030)
 - **Docker:** `CMD` is `/app/.venv/bin/mcp-kubecost-http` ([`otel_entrypoint.py`](src/mcp_kubecost/otel_entrypoint.py)), which wraps the server with `opentelemetry-instrument` unless `FASTMCP_TELEMETRY_MODE=off`
 
