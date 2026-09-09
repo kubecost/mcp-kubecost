@@ -58,6 +58,31 @@ When this chart is a subchart, the parent `global` values are merged in and take
 
 ## Optional proxy-header trust
 
-The chart works without knowing your proxy IPs. `config.forwardedAllowIps` defaults to `""`, which disables forwarded-header trust even with Ingress or HTTPRoute enabled. Behind a proxy, clients share its DCR registration rate budget; HTTP 429 responses include `Retry-After: 60`.
+`config.forwardedAllowIps` defaults to `""`, disabling uvicorn's trust in forwarded client addresses and schemes. Set it only when those headers are needed, using known proxy IPs or CIDRs. Use `"*"` only when every path to the pod passes through a proxy that overwrites client-supplied headers. This setting does not authorize clients.
 
-To give clients independent budgets, optionally set `config.forwardedAllowIps` to known proxy IPs or CIDRs, such as `"10.0.1.10,10.0.2.0/24"`. This configures uvicorn's `FORWARDED_ALLOW_IPS` for both forwarded client IPs and schemes. It is not a client access allowlist. Use `"*"` only when every path to the pod passes through a proxy that overwrites client-supplied forwarded headers.
+OAuth registration shares one process-wide budget: 120 requests/minute, burst 60. HTTP 429 includes `Retry-After: 60`. Changing forwarded-header trust does not change this budget. The limiter slows storage abuse but does not cap accumulated client files.
+
+## HTTP Host and Origin validation
+
+The chart enables FastMCP's strict guard (`config.fastmcpHttpHostOriginProtection: true`). It derives allowed Hosts from Service DNS names, `config.externalUrl`, and enabled Ingress/HTTPRoute hosts, and allows the public HTTPS origins. TLS may terminate at a proxy: these explicit HTTPS origins work with forwarded-header trust disabled.
+
+For a separately managed proxy, set `config.externalUrl`. For additional native-client Host names or browser clients, set JSON array strings:
+
+```yaml
+config:
+  externalUrl: https://mcp.example.com
+  fastmcpHttpAllowedHosts: '["internal-mcp.example.com"]'
+  fastmcpHttpAllowedOrigins: '["http://127.0.0.1:6274"]' # MCP Inspector
+```
+
+The two lists extend the derived defaults. Avoid wildcard hosts/origins unless intentionally trusting that entire scope. Native clients need no Origin header. Kubernetes HTTP probes use `Host: localhost` so strict validation does not depend on changing pod IPs. Additional cluster DNS suffixes can be supplied in `fastmcpHttpAllowedHosts`.
+
+CORS permits browser clients to send protocol headers; FastMCP separately rejects invalid Hosts (421) and Origins (403). OAuth consent, CSRF, redirect validation and SSRF protection remain in FastMCP. NetworkPolicy does not replace these checks. Outside Helm, configure the FastMCP environment variables in `.env.example` explicitly.
+
+## Network isolation
+
+`networkPolicy.enabled` defaults to `false`: gateway labels, DNS topology and egress destinations are cluster-specific. Enabling it with empty rules denies both ingress and egress. Rules use the standard Kubernetes NetworkPolicy schema and are rendered verbatim, without template evaluation. Selectors identify this chart's pods even when deployed as a subchart.
+
+Copy the [Envoy Gateway HTTPRoute example](../../docs/examples/network-policies/README.md) into your deployment values. The example folder contains a Helm values overlay, an external HTTPS egress fragment, and guidance for DNS, Kubecost, OIDC, CIMD and telemetry destinations.
+
+NetworkPolicy requires an enforcing CNI and does not replace FastMCP's Host/Origin, OAuth or SSRF protections. Validate allowed and denied traffic on your cluster after configuring the example.

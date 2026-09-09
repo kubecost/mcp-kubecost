@@ -1,0 +1,9 @@
+# A list of egress rules, NOT a Helm values overlay or Kubernetes manifest.
+# Copy entries into networkPolicy.egress in envoy-httproute.values.yaml.
+# Helm replaces arrays: a separate egress overlay would remove DNS/Kubecost.
+# Replace this documentation-only IP with the destination's actual CIDR.
+- to:
+    - ipBlock:
+        cidr: 203.0.113.10/32
+  ports:
+    - { protocol: TCP, port: 443 }

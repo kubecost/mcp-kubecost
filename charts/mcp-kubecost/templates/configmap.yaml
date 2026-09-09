@@ -31,12 +31,8 @@ data:
   OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.config.otelExporterOtlpEndpoint | quote }}
   {{- end }}
   FASTMCP_HTTP_HOST_ORIGIN_PROTECTION: {{ .Values.config.fastmcpHttpHostOriginProtection | quote }}
-  {{- if .Values.config.fastmcpHttpAllowedHosts }}
-  FASTMCP_HTTP_ALLOWED_HOSTS: {{ .Values.config.fastmcpHttpAllowedHosts | quote }}
-  {{- end }}
-  {{- if .Values.config.fastmcpHttpAllowedOrigins }}
-  FASTMCP_HTTP_ALLOWED_ORIGINS: {{ .Values.config.fastmcpHttpAllowedOrigins | quote }}
-  {{- end }}
+  FASTMCP_HTTP_ALLOWED_HOSTS: {{ include "mcp-kubecost.allowedHosts" . | quote }}
+  FASTMCP_HTTP_ALLOWED_ORIGINS: {{ include "mcp-kubecost.allowedOrigins" . | quote }}
   {{- if .Values.config.ssl.caBundle.existingSecret }}
   SSL_CA_BUNDLE: {{ .Values.config.ssl.caBundle.mountPath | quote }}
   {{- end }}
@@ -56,8 +52,5 @@ data:
   {{- end }}
   {{- if .Values.config.oidc.allowedClientRedirectUris }}
   OIDC_ALLOWED_CLIENT_REDIRECT_URIS: {{ .Values.config.oidc.allowedClientRedirectUris | quote }}
-  {{- end }}
-  {{- if .Values.config.oidc.allowedCimdOrigins }}
-  OIDC_ALLOWED_CIMD_ORIGINS: {{ .Values.config.oidc.allowedCimdOrigins | quote }}
   {{- end }}
   {{- end }}

@@ -273,17 +273,17 @@ config:
   # Optional comma-separated trusted proxy IPs or CIDRs for uvicorn's
   # X-Forwarded-For / X-Forwarded-Proto handling. Empty disables header trust,
   # including with Ingress or HTTPRoute enabled; no proxy IP knowledge is required.
-  # Behind an untrusted proxy, clients share its DCR registration rate budget.
   # Example: "10.0.1.10,10.0.2.0/24". Use "*" only if every path to the pod
   # passes through a proxy that overwrites client-supplied forwarded headers.
   forwardedAllowIps: ""
 
-  # Enable FastMCP's Host/Origin request guard. "auto" protects local binds and
-  # activates strict checks when either allowlist below is configured.
-  fastmcpHttpHostOriginProtection: auto
-  # JSON array string of permitted HTTP Host headers.
+  # Strict FastMCP Host/Origin validation on every bind.
+  fastmcpHttpHostOriginProtection: true
+  # Additional permitted HTTP Host headers (JSON array string).
+  # Service names, externalUrl and chart route hosts are included automatically.
   fastmcpHttpAllowedHosts: ""
-  # JSON array string of permitted browser Origin headers.
+  # Additional browser Origin headers (JSON array string), e.g. MCP Inspector.
+  # Public HTTPS origins are included automatically.
   fastmcpHttpAllowedOrigins: ""
   # config.mcpServerName overrides the MCP server name exposed by FastMCP.
   mcpServerName: mcp-kubecost
@@ -323,13 +323,6 @@ config:
     # DCR is deprecated in the 2026-07-28 MCP spec but still served for compatibility.
     # Example Restricted posture: '["http://localhost:*", "https://client.example/callback"]'
     allowedClientRedirectUris: ""
-    # Optional JSON array of allowed CIMD (Client ID Metadata Document) client
-    # hostnames. Bare hostnames only, no scheme or port. Leave empty for the Open
-    # default (any https CIMD client ID accepted). Set to '[]' to deny all CIMD clients.
-    # Note: with CIMD enabled the pod fetches client metadata over https from the
-    # client's origin; a restrictive NetworkPolicy must allow that egress on TCP/443.
-    # Example: '["client.corp.example", "mcp-client.example"]'
-    allowedCimdOrigins: ""
     # config.oidc.clientID is the OIDC client ID. Prefer existingSecret for production.
     clientID: ""
     # config.oidc.clientSecret is the OIDC client secret. Prefer existingSecret for production.
@@ -349,3 +342,12 @@ config:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# Requires a CNI that enforces Kubernetes NetworkPolicy. When enabled, both
+# directions default to deny; supply standard NetworkPolicy rules for your cluster.
+# See docs/examples/network-policies/ in the repository for Envoy Gateway,
+# DNS, Kubecost, OIDC, CIMD and telemetry examples.
+networkPolicy:
+  enabled: false
+  ingress: []
+  egress: []
