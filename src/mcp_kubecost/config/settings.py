@@ -61,7 +61,6 @@ class Settings:
     external_url: str | None
     oidc_required_scopes: list[str]
     oidc_allowed_client_redirect_uris: list[str] | None
-    oidc_allowed_cimd_origins: list[str] | None
     oidc_storage_path: str
     oidc_jwt_signing_key: str | None
     oidc_storage_encryption_key: str | None
@@ -241,27 +240,6 @@ def _get_oidc_allowed_client_redirect_uris() -> list[str] | None:
     return _get_oidc_json_str_list("OIDC_ALLOWED_CLIENT_REDIRECT_URIS")
 
 
-def _get_oidc_allowed_cimd_origins() -> list[str] | None:
-    """Parse an optional JSON allowlist of CIMD client hostnames.
-
-    Entries are lowercased because the hostname FastMCP extracts from a CIMD
-    client_id is lowercase. Anything that is not a bare hostname is rejected
-    rather than silently never matching.
-    """
-    values = _get_oidc_json_str_list("OIDC_ALLOWED_CIMD_ORIGINS")
-    if values is None:
-        return None
-    origins: list[str] = []
-    for value in values:
-        if any(ch in value for ch in "/:@?#") or any(ch.isspace() for ch in value):
-            raise ConfigError(
-                f"OIDC_ALLOWED_CIMD_ORIGINS entry {value!r} is not a bare hostname "
-                "(no scheme, port, path, or whitespace)"
-            )
-        origins.append(value.lower())
-    return origins
-
-
 _DEFAULT_OIDC_STORAGE_PATH = "/var/lib/mcp-kubecost/oauth"
 
 
@@ -404,7 +382,6 @@ def get_settings() -> Settings:
         external_url=external_url,
         oidc_required_scopes=_get_oidc_scopes(),
         oidc_allowed_client_redirect_uris=_get_oidc_allowed_client_redirect_uris(),
-        oidc_allowed_cimd_origins=_get_oidc_allowed_cimd_origins(),
         oidc_storage_path=_get_oidc_storage_path(),
         oidc_jwt_signing_key=oidc_jwt_signing_key,
         oidc_storage_encryption_key=oidc_storage_encryption_key,

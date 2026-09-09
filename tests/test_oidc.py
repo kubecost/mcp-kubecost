@@ -14,7 +14,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from cryptography.fernet import Fernet
-from fastmcp.server.auth.cimd import CIMDDocument, CIMDFetchError
+from fastmcp.server.auth.cimd import CIMDClientManager, CIMDDocument, CIMDFetchError
 from fastmcp.server.auth.oauth_proxy.models import InvalidRedirectUriError, ProxyDCRClient, UpstreamTokenSet
 from fastmcp.server.auth.oidc_proxy import OIDCConfiguration, OIDCProxy
 from fastmcp.server.auth.redirect_validation import validate_redirect_uri
@@ -41,7 +41,6 @@ from mcp_kubecost.config.oidc import (
     OAUTH_PREFIX,
     AdaptiveOidcProxy,
     AdaptiveTokenVerifier,
-    AllowlistCIMDClientManager,
     create_oidc_provider,
     looks_like_jwt,
 )
@@ -71,7 +70,6 @@ _SETTINGS: dict[str, Any] = dict(
     external_url=None,
     oidc_required_scopes=["openid", "profile"],
     oidc_allowed_client_redirect_uris=None,
-    oidc_allowed_cimd_origins=None,
     oidc_storage_path="/tmp/mcp-kubecost-test-oauth",
     oidc_jwt_signing_key=None,
     oidc_storage_encryption_key=None,
@@ -667,7 +665,7 @@ class TestCIMDClientResolution:
     async def test_cimd_url_is_resolved_via_cimd_manager(self):
         proxy = _dcr_proxy()
         cimd_url = "https://client.example/.well-known/mcp-client"
-        mgr = AllowlistCIMDClientManager(allowed_origins=None)
+        mgr = CIMDClientManager()
         mgr.get_client = AsyncMock(return_value=_cimd_client(cimd_url))
         proxy._cimd_manager = mgr
 
@@ -685,7 +683,7 @@ class TestCIMDClientResolution:
         """
         proxy = _dcr_proxy()
         cimd_url = "https://client.example/.well-known/mcp-client"
-        mgr = AllowlistCIMDClientManager(allowed_origins=None)
+        mgr = CIMDClientManager()
         mgr._fetcher.fetch = AsyncMock(side_effect=CIMDFetchError("connection refused"))
         proxy._cimd_manager = mgr
 
@@ -694,7 +692,7 @@ class TestCIMDClientResolution:
     async def test_decryption_error_on_stored_client_yields_none(self):
         """The DecryptionError guard still applies when CIMD is active."""
         proxy = _dcr_proxy()
-        proxy._cimd_manager = AllowlistCIMDClientManager(allowed_origins=None)
+        proxy._cimd_manager = CIMDClientManager()
         proxy._client_store = MagicMock()
         proxy._client_store.get = AsyncMock(side_effect=DecryptionError("bad key"))
 
@@ -705,117 +703,21 @@ class TestCIMDDocumentValidation:
     """CIMD client-ID shape rules are enforced by FastMCP's CIMDClientManager."""
 
     def test_non_https_url_is_not_a_cimd_client_id(self):
-        mgr = AllowlistCIMDClientManager(allowed_origins=None)
+        mgr = CIMDClientManager()
         assert mgr.is_cimd_client_id("http://client.example/mcp-client") is False
         assert mgr.is_cimd_client_id("https://client.example/.well-known/mcp-client") is True
 
     def test_root_path_url_is_not_a_cimd_client_id(self):
-        mgr = AllowlistCIMDClientManager(allowed_origins=None)
+        mgr = CIMDClientManager()
         assert mgr.is_cimd_client_id("https://client.example/") is False
         assert mgr.is_cimd_client_id("https://client.example") is False
 
     def test_uuid_dcr_id_is_not_a_cimd_client_id(self):
-        mgr = AllowlistCIMDClientManager(allowed_origins=None)
+        mgr = CIMDClientManager()
         assert mgr.is_cimd_client_id(str(uuid4())) is False
 
 
-class TestCIMDOriginAllowlist:
-    """AllowlistCIMDClientManager restricts CIMD client origins."""
-
-    def test_open_posture_accepts_any_https_cimd_url(self):
-        mgr = AllowlistCIMDClientManager(allowed_origins=None)
-        assert mgr.is_cimd_client_id("https://unanticipated.example/mcp") is True
-
-    def test_restricted_posture_allows_listed_origins(self):
-        mgr = AllowlistCIMDClientManager(allowed_origins=["client.example"])
-        assert mgr.is_cimd_client_id("https://client.example/.well-known/mcp-client") is True
-
-    def test_restricted_posture_rejects_unlisted_origin(self):
-        mgr = AllowlistCIMDClientManager(allowed_origins=["trusted.example"])
-        assert mgr.is_cimd_client_id("https://unanticipated.example/mcp") is False
-
-    def test_empty_allowlist_rejects_all_cimd_origins(self):
-        mgr = AllowlistCIMDClientManager(allowed_origins=[])
-        assert mgr.is_cimd_client_id("https://client.example/.well-known/mcp-client") is False
-
-    def test_matching_is_case_insensitive(self):
-        mgr = AllowlistCIMDClientManager(allowed_origins=["Client.Example"])
-        assert mgr.is_cimd_client_id("https://CLIENT.example/mcp") is True
-
-    def test_rejection_is_logged_once_per_hostname(self, caplog):
-        mgr = AllowlistCIMDClientManager(allowed_origins=["trusted.example"])
-        with caplog.at_level(logging.WARNING, logger="mcp_kubecost.config.oidc"):
-            mgr.is_cimd_client_id("https://bad.example/a")
-            mgr.is_cimd_client_id("https://bad.example/b")
-        assert sum("OIDC_ALLOWED_CIMD_ORIGINS" in r.message for r in caplog.records) == 1
-
-    def test_create_oidc_provider_forwards_allowed_cimd_origins(self, tmp_path):
-        with patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy") as proxy:
-            create_oidc_provider(
-                _settings(
-                    **{
-                        **_OIDC,
-                        "oidc_storage_path": str(tmp_path),
-                        "oidc_allowed_cimd_origins": ["corp.example"],
-                    }
-                )
-            )
-        assert proxy.call_args.kwargs["allowed_cimd_origins"] == ["corp.example"]
-
-    def test_real_proxy_installs_allowlist_manager(self, tmp_path):
-        proxy = _real_proxy(tmp_path, oidc_allowed_cimd_origins=["corp.example"])
-        assert isinstance(proxy._cimd_manager, AllowlistCIMDClientManager)
-        assert proxy._cimd_manager._allowed_origins == frozenset({"corp.example"})
-
-    @pytest.mark.parametrize("allowed_origins", [["trusted.example"], []])
-    async def test_stored_cimd_client_is_evicted_when_allowlist_tightens(self, allowed_origins):
-        """FastMCP serves stored CIMD clients without re-checking is_cimd_client_id.
-
-        A client accepted under an Open posture must not survive a later
-        Restricted allowlist that excludes its origin.
-        """
-        cimd_url = "https://old.example/.well-known/mcp-client"
-        proxy = _dcr_proxy()
-        await proxy._client_store.put(key=cimd_url, value=_cimd_client(cimd_url))
-        proxy._cimd_manager = AllowlistCIMDClientManager(allowed_origins=allowed_origins)
-        proxy._cimd_manager._fetcher.fetch = AsyncMock(return_value=_cimd_client(cimd_url).cimd_document)
-
-        assert await proxy.get_client(cimd_url) is None
-        assert await proxy._client_store.get(key=cimd_url) is None
-        proxy._cimd_manager._fetcher.fetch.assert_not_awaited()
-
-    async def test_new_disallowed_cimd_client_is_rejected_without_fetch(self):
-        proxy = _dcr_proxy()
-        proxy._cimd_manager = AllowlistCIMDClientManager(allowed_origins=[])
-        proxy._cimd_manager._fetcher.fetch = AsyncMock()
-
-        assert await proxy.get_client("https://untrusted.example/client.json") is None
-        proxy._cimd_manager._fetcher.fetch.assert_not_awaited()
-
-    async def test_stored_cimd_client_survives_when_origin_allowed(self):
-        cimd_url = "https://trusted.example/.well-known/mcp-client"
-        proxy = _dcr_proxy()
-        await proxy._client_store.put(key=cimd_url, value=_cimd_client(cimd_url))
-        mgr = AllowlistCIMDClientManager(allowed_origins=["trusted.example"])
-        mgr.get_client = AsyncMock(return_value=None)  # refresh fails; cached copy is served
-        proxy._cimd_manager = mgr
-
-        result = await proxy.get_client(cimd_url)
-        assert result is not None
-        assert result.client_id == cimd_url
-
-    async def test_stored_dcr_client_is_untouched_by_allowlist(self):
-        proxy = _dcr_proxy()
-        proxy._cimd_manager = AllowlistCIMDClientManager(allowed_origins=[])
-        info = OAuthClientInformationFull(
-            client_id="unused",
-            redirect_uris=[AnyUrl("http://127.0.0.1:33418/callback")],
-        )
-        await proxy.register_client(info)
-
-        assert info.client_id is not None
-        assert await proxy.get_client(info.client_id) is not None
-
+class TestCIMDRedirectValidation:
     def test_oidc_allowed_redirect_uris_restricts_cimd_redirects(self):
         """ProxyDCRClient.validate_redirect_uri applies the allowlist to CIMD clients too."""
         cimd_url = "https://client.example/.well-known/mcp-client"

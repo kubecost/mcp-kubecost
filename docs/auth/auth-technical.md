@@ -57,7 +57,7 @@ Which path a given MCP client takes is decided by the client. Check the server l
 
 #### CIMD egress requirement
 
-With CIMD enabled (the default), the `mcp-kubecost` pod fetches client metadata from arbitrary `https://` origins — not only the upstream IdP. If your cluster applies a restrictive `NetworkPolicy`, ensure the pod has egress to TCP/443 for any CIMD client origin your users will present. The chart ships no `NetworkPolicy` by default; this is a note for operators who add their own.
+With CIMD enabled (the default), the `mcp-kubecost` pod fetches client metadata from arbitrary `https://` origins — not only the upstream IdP. If your cluster applies a restrictive `NetworkPolicy`, ensure the pod has egress to TCP/443 for any CIMD client origin your users will present. The chart provides opt-in `networkPolicy` rules; see [the Envoy Gateway NetworkPolicy examples](../examples/network-policies/README.md).
 
 ### Downstream client redirects
 
@@ -65,7 +65,7 @@ The default Open posture supports standards-compatible DCR and CIMD clients. For
 
 This allowlist applies to **both DCR and CIMD clients**. Inspect `Client registered with redirect_uri` logs and test every supported MCP client before enabling it.
 
-To restrict which CIMD client origins the server accepts, set `OIDC_ALLOWED_CIMD_ORIGINS` to a JSON array of bare hostnames (no scheme, port, or path; matching is case-insensitive). An unset value (Open) accepts any `https://` CIMD client ID; `[]` denies all CIMD clients. Example: `["client.corp.example", "mcp-client.example"]`. Tightening the list also evicts previously stored CIMD clients from those origins on their next request, so no storage wipe is needed. Rejections are logged once per hostname at WARNING.
+CIMD metadata validation and SSRF protection belong to FastMCP. The server accepts any valid CIMD client URL; there is no custom hostname allowlist. OAuth consent and redirect validation still apply.
 
 ### DCR derived client ID
 
@@ -75,11 +75,13 @@ The DCR path derives a stable `client_id` from an HMAC of the registration metad
 - A key rotation changes every derived ID. Clients using stored sessions must re-register.
 - CIMD clients never pass through this path; their `client_id` is the metadata document URL.
 
-Client files, DCR and CIMD alike, accumulate in `OIDC_STORAGE_PATH` for as long as the same encryption key is in use. FastMCP does not expire them automatically. With a stable key, the growth rate is bounded by the number of distinct clients — typically a few files per deployment. If you redeploy with an ephemeral key (no `OIDC_STORAGE_ENCRYPTION_KEY` set), the directory is wiped at startup automatically.
+Client files, DCR and CIMD alike, accumulate in `OIDC_STORAGE_PATH` for as long as the same encryption key is in use. FastMCP does not expire them automatically. With a stable key, each distinct registration can add storage; rate limiting slows abuse but does not cap total disk usage. Monitor volume capacity. If you redeploy with an ephemeral key (no `OIDC_STORAGE_ENCRYPTION_KEY` set), the directory is wiped at startup automatically.
 
-`POST /oauth/mcp/register` is unauthenticated, so the server rate-limits it: 30 requests per minute per client IP (burst 15) and 120 per minute per pod (burst 60). Excess requests receive `429` with `Retry-After: 60`. The chart disables forwarded-header trust by default (`FORWARDED_ALLOW_IPS=""`), including with Ingress or HTTPRoute enabled. No proxy IP configuration is required to install or log in. The per-IP key is the TCP peer, so clients behind the same proxy share its budget. Operators who know their proxy IPs or CIDRs can opt in through `config.forwardedAllowIps` (for example, `"10.0.1.10,10.0.2.0/24"`). This controls uvicorn's handling of both `X-Forwarded-For` and `X-Forwarded-Proto`; it does not restrict who may connect. Use `"*"` only when every route to the pod passes through a proxy that overwrites client-supplied forwarded headers.
+`POST /oauth/mcp/register` is unauthenticated, so one process-wide token bucket limits it to 120 requests per minute (burst 60). All clients share this budget regardless of source IP or forwarded headers. Excess requests receive `429` with `Retry-After: 60`. The normal single-process pod has one bucket; additional processes or replicas have independent budgets. This limits throughput, not cumulative storage growth or per-client fairness. NetworkPolicy cannot replace this HTTP limit.
 
-The per-IP bucket map holds at most 1,000 entries. When full, idle entries are reclaimed; if all entries are active, new IPs receive 429 until space is available. Requests rejected by the global limit allocate no per-IP state.
+The chart disables forwarded-header trust by default (`FORWARDED_ALLOW_IPS=""`). Optional `config.forwardedAllowIps` controls uvicorn's interpretation of forwarded client addresses and schemes; it neither authorizes clients nor changes registration budgets. Trust only proxies that overwrite client-supplied headers.
+
+The chart enables strict FastMCP Host/Origin validation, deriving public allowlists from `config.externalUrl` and enabled route hostnames. Additional browser clients can be admitted with `config.fastmcpHttpAllowedOrigins`. Native clients without an Origin header remain supported. See [the chart HTTP guard configuration](../../charts/mcp-kubecost/README.md#http-host-and-origin-validation). Outside Helm, configure `FASTMCP_HTTP_HOST_ORIGIN_PROTECTION=true` and the public Host/Origin allowlists explicitly as shown in `.env.example`.
 
 ### Shared Kubecost frontend hostname
 
@@ -149,16 +151,6 @@ The exact nginx configuration belongs in the parent Kubecost chart because that 
 
 If the MCP has a dedicated hostname, set `MCP_EXTERNAL_URL=https://mcp.example.com` there — the same fixed `/mcp` and `/oauth/mcp` paths apply.
 
-### Consent screen branding
-
-The OAuth consent and error pages are Kubecost-branded automatically in OIDC mode. The logo, favicon, and CSS are inline so the pages need no extra proxy routes or external network access. FastMCP continues to own the form, CSRF protection, cookies, and transaction fields.
-
-Verify the served flow with:
-
-```bash
-just check-consent-branding
-```
-
 ### Unauthenticated HTTP paths
 
 These custom routes are not wrapped in OAuth middleware:
@@ -184,7 +176,6 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 | `MCP_EXTERNAL_URL` | `config.externalUrl` | Public origin, no path; e.g. `https://host`. Derives the fixed `/mcp` and `/oauth/mcp` URLs |
 | `OIDC_REQUIRED_SCOPES` | `config.oidc.requiredScopes` | Provider scopes; default `openid,profile` |
 | `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` | `config.oidc.allowedClientRedirectUris` | Optional downstream MCP-client callback allowlist (DCR and CIMD) |
-| `OIDC_ALLOWED_CIMD_ORIGINS` | `config.oidc.allowedCimdOrigins` | Optional JSON array of allowed CIMD client hostnames |
 | `FORWARDED_ALLOW_IPS` | `config.forwardedAllowIps` (default `""`) | Optional trusted proxy IPs/CIDRs; empty disables forwarded-header trust |
 | `OIDC_AUDIENCE` | `config.oidc.audience` | Optional upstream API audience |
 | `OIDC_STORAGE_PATH` | fixed by chart | Encrypted OAuth state directory |
@@ -242,7 +233,7 @@ Use `/health`, not `/mcp`.
 
 **Clients receive `429` from `/oauth/mcp/register` after a restart**
 
-Registration is rate-limited per TCP peer by default. Clients behind a Gateway or Ingress share its budget; honor `Retry-After: 60` if a burst exceeds it. If you know the proxy IPs or CIDRs, optionally set `config.forwardedAllowIps` (or `FORWARDED_ALLOW_IPS` outside Helm) to give forwarded client addresses independent budgets. Leave it empty when those addresses are unknown. Set a stable `OIDC_STORAGE_ENCRYPTION_KEY` to preserve registrations across restarts.
+Registration shares one process-wide budget; honor `Retry-After: 60` after HTTP 429. Proxy-header trust does not change the budget. Set a stable `OIDC_STORAGE_ENCRYPTION_KEY` to preserve registrations across restarts.
 
 **OIDC initialization reports HTML discovery metadata**
 

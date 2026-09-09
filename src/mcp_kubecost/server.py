@@ -87,26 +87,10 @@ _BROWSER_CORS = Middleware(
 # encrypted file per unique metadata set to OIDC_STORAGE_PATH, so without a
 # limit a single caller can fill the storage volume.
 #
-# Two token buckets apply: one per client IP and one per pod. The per-pod
-# bucket is the real disk-fill guard, since a spoofed or rotating source IP
-# defeats the per-IP one. The defaults are deliberately generous. After a
-# restart with ephemeral keys every client re-registers at once, and the
-# derived client ID makes a repeated identical registration idempotent, so the
-# cost of a legitimate burst is low.
-#
-# The per-IP key is scope["client"], which uvicorn rewrites from
-# X-Forwarded-For only for peers listed in FORWARDED_ALLOW_IPS. The chart
-# disables this trust by default; operators can opt in with known proxy IPs
-# or CIDRs. Do not parse the header here: an untrusted header must never
-# choose the bucket. Clients behind an untrusted proxy share its IP budget.
-#
-# None of this is configurable through Helm. Registration is a one-time event
-# per client and these ceilings are far above any legitimate rate.
-_DCR_PER_IP_PER_MINUTE = 30
-_DCR_PER_IP_BURST = 15
+# One process-wide bucket bounds registration throughput without tracking client IPs.
+# This slows storage abuse; it does not bound cumulative storage growth.
 _DCR_GLOBAL_PER_MINUTE = 120
 _DCR_GLOBAL_BURST = 60
-_DCR_MAX_TRACKED_IPS = 1000
 _DCR_REGISTER_PATH = "/oauth/mcp/register"
 
 
@@ -130,64 +114,24 @@ class _TokenBucket:
 
 
 class _DcrRateLimiter:
-    """Per-IP plus per-pod token buckets for POST /oauth/mcp/register."""
+    """One process-wide token bucket for POST /oauth/mcp/register."""
 
     def __init__(
         self,
         *,
-        per_ip_per_minute: float = _DCR_PER_IP_PER_MINUTE,
-        per_ip_burst: int = _DCR_PER_IP_BURST,
         global_per_minute: float = _DCR_GLOBAL_PER_MINUTE,
         global_burst: int = _DCR_GLOBAL_BURST,
-        max_tracked_ips: int = _DCR_MAX_TRACKED_IPS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._per_ip_per_minute = per_ip_per_minute
-        self._per_ip_burst = per_ip_burst
-        self._max_tracked_ips = max_tracked_ips
         self._clock = clock
         self._global = _TokenBucket(per_minute=global_per_minute, burst=global_burst, now=clock())
-        self._buckets: dict[str, _TokenBucket] = {}
 
-    @property
-    def tracked_ips(self) -> int:
-        return len(self._buckets)
-
-    def allow(self, client_ip: str) -> bool:
-        """Return True and consume one token from both buckets, or False and consume none."""
-        now = self._clock()
-        self._global.refill(now)
+    def allow(self) -> bool:
+        self._global.refill(self._clock())
         if self._global.tokens < 1.0:
             return False
-        bucket = self._buckets.get(client_ip)
-        if bucket is None:
-            self._evict_idle(now)
-            if len(self._buckets) >= self._max_tracked_ips:
-                return False
-            bucket = self._buckets[client_ip] = _TokenBucket(
-                per_minute=self._per_ip_per_minute, burst=self._per_ip_burst, now=now
-            )
-        bucket.refill(now)
-        if bucket.tokens < 1.0:
-            return False
-        bucket.consume()
         self._global.consume()
         return True
-
-    def _evict_idle(self, now: float) -> None:
-        """Drop idle buckets when the map reaches its hard cap.
-
-        A bucket idle for ``capacity / rate`` seconds is indistinguishable from a
-        fresh one, so dropping it loses no state. If none can be evicted,
-        new IPs are rejected until space becomes available; active IPs keep
-        their budgets. The scan visits at most ``max_tracked_ips`` entries.
-        """
-        if len(self._buckets) < self._max_tracked_ips:
-            return
-        horizon = self._per_ip_burst / (self._per_ip_per_minute / 60.0)
-        stale = [ip for ip, b in self._buckets.items() if now - b.last >= horizon]
-        for ip in stale:
-            del self._buckets[ip]
 
 
 _dcr_limiter = _DcrRateLimiter()
@@ -201,7 +145,7 @@ _DCR_429_BODY = json.dumps(
 
 
 class _DcrRateLimitMiddleware:
-    """ASGI middleware that rate-limits POST /oauth/mcp/register per client IP and per pod."""
+    """ASGI middleware that rate-limits POST /oauth/mcp/register per server process."""
 
     def __init__(self, app, limiter: _DcrRateLimiter | None = None) -> None:
         self._app = app
@@ -209,10 +153,8 @@ class _DcrRateLimitMiddleware:
 
     async def __call__(self, scope, receive, send) -> None:
         if scope.get("type") == "http" and scope.get("method") == "POST" and scope.get("path") == _DCR_REGISTER_PATH:
-            client = scope.get("client")
-            ip = client[0] if client else "unknown"
-            if not self._limiter.allow(ip):
-                logger.warning("Rate-limited POST %s from %s", _DCR_REGISTER_PATH, ip)
+            if not self._limiter.allow():
+                logger.warning("Rate-limited POST %s", _DCR_REGISTER_PATH)
                 await send(
                     {
                         "type": "http.response.start",
