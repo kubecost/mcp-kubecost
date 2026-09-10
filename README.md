@@ -1,13 +1,28 @@
 # Kubecost FinOps MCP Server<!-- omit in toc -->
 
-A read-only MCP server that connects your AI assistant to [Kubecost](https://www.kubecost.com/) so you can ask natural-language questions about Kubernetes cloud costs and potential savings.
+## Why
 
-For most, the preferred method for installing the MCP is to use the Kubecost Helm Chart. It is included by default in Kubecost v3.3+.
+AI tools now enable FinOps practitioners to engage in multi-turn, interactive dialogue with their billing data—moving past rigid dashboards to actively interrogate cost spikes as they occur.
+
+FInOps executives who may not know all of the technical terminology behind Kubernetes can now have a conversation with a expert-level technical + FinOps analyst that can communicate at any level.
+
+## What
+
+This MCP server exposes Kubecost’s real-time cost allocation and optimization APIs to your AI assistant. It empowers your assistant to:
+
+* **Synthesize massive datasets:** Condense millions of cloud and container infrastructure metrics into clean, digestible reports.
+* **Interpret technical context:** Automatically translate complex Kubernetes terminology into clear, accessible business-value insights.
+* **Support interactive deep-dives:** Maintain conversational context so you can continuously interrogate data trends and drill down from high-level cluster overviews into root-cause anomalies.
+
+## How to use implement
+
+For most, the preferred method for installing the MCP is to use the [Kubecost Helm Chart](https://github.com/kubecost/kubecost). It is included by default in Kubecost v3.3+.
 
 This repo may have newer versions of the MCP available for users looking for the latest improvements. The MCP should be compatible with any version of Kubecost 3.x, though be sure to read the release notes for any dependencies. Additional detail can be found in the [helm chart readme](charts/mcp-kubecost/README.md).
 
-[Kubecost Helm Chart](https://github.com/kubecost/kubecost)
-
+- [Why](#why)
+- [What](#what)
+- [How to use implement](#how-to-use-implement)
 - [Who This Is For](#who-this-is-for)
 - [Examples of What You Can Ask](#examples-of-what-you-can-ask)
   - [Cost Visibility](#cost-visibility)
