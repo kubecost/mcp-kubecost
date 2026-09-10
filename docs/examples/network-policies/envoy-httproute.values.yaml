@@ -1,0 +1,52 @@
+# Helm values overlay; combine with your deployment's authentication settings.
+# Assumes an existing Envoy-managed Gateway finops/mcp-gateway with an HTTPS
+# listener named https, and Envoy proxy pods in envoy-gateway-system.
+# Replace the hostname, namespaces, labels and ports for your cluster.
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: mcp-gateway
+      namespace: finops
+      sectionName: https
+  hostnames:
+    - mcp.example.com
+
+ingress:
+  enabled: false
+
+# Only the Envoy data plane may connect to MCP. Egress allows DNS and Kubecost;
+# add OIDC/CIMD/telemetry destinations below when those features are enabled.
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+          podSelector:
+            matchLabels:
+              gateway.envoyproxy.io/owning-gateway-name: mcp-gateway
+              gateway.envoyproxy.io/owning-gateway-namespace: finops
+      ports:
+        - protocol: TCP
+          port: 3030
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kubecost
+          podSelector:
+            matchLabels:
+              app: kubecost-frontend
+      ports:
+        - { protocol: TCP, port: 9090 }

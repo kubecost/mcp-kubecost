@@ -2,6 +2,8 @@
 
 This page is the technical reference for MCP OIDC, reverse-proxy routing, Helm configuration, and troubleshooting. For the auth-mode overview, see [README.md](README.md).
 
+**The MCP Server authentication has limited testing and is considered beta. Consider using multiple layers of security for production deployments.**
+
 ## Protecting the MCP HTTP endpoint (OIDC)
 
 With `AUTH_MODE=oidc`, FastMCP acts as an OAuth authorization server to MCP clients and as an OIDC client to the upstream identity provider. Those are two different protocol relationships.
@@ -43,11 +45,43 @@ Do not register MCP-client callbacks such as loopback, Claude, or ChatGPT URLs a
 
 FastMCP stores registrations, grants, and tokens through an encrypted FileTreeStore. Keep `OIDC_JWT_SIGNING_KEY` and `OIDC_STORAGE_ENCRYPTION_KEY` stable in production. The Helm chart automatically creates a single-writer PVC in OIDC mode unless persistence is explicitly disabled.
 
+### Client registration — priority order and mechanisms
+
+MCP clients use one of three registration paths, tried in priority order:
+
+1. **Pre-registration** — The client already holds credentials issued out of band and skips registration. Under this proxy the only such path is a client that presents the upstream OAuth app's own `client_id` directly; FastMCP synthesizes a client record for it on the fly. There is no operator-facing way to seed other pre-registered clients.
+2. **CIMD — Client ID Metadata Document** — The client presents an `https://` URL as its `client_id`. FastMCP fetches the CIMD document from that URL, validates `redirect_uris`, and stores the resolved client in the same encrypted FileTreeStore DCR uses, refreshing it on later requests according to the document's HTTP cache headers.
+3. **DCR — Dynamic Client Registration, RFC 7591** — The client sends a `POST /oauth/mcp/register` request. The server derives a deterministic `client_id` from the registration metadata (see below), writes an encrypted file to `OIDC_STORAGE_PATH`, and returns 201. This path is deprecated in the spec but supported for clients that do not yet implement CIMD.
+
+Which path a given MCP client takes is decided by the client. Check the server logs during a live handshake rather than assuming; `Client registered with redirect_uri` marks DCR, and a `client_id` that is an `https://` URL marks CIMD.
+
+#### CIMD egress requirement
+
+With CIMD enabled (the default), the `mcp-kubecost` pod fetches client metadata from arbitrary `https://` origins — not only the upstream IdP. If your cluster applies a restrictive `NetworkPolicy`, ensure the pod has egress to TCP/443 for any CIMD client origin your users will present. The chart provides opt-in `networkPolicy` rules; see [the Envoy Gateway NetworkPolicy examples](../examples/network-policies/README.md).
+
 ### Downstream client redirects
 
-The default Open posture supports standards-compatible DCR and client ID metadata document clients. For an enterprise Restricted posture, set `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` to a JSON array of approved FastMCP redirect patterns. An unset value remains Open; `[]` deliberately denies every downstream redirect.
+The default Open posture supports standards-compatible DCR and CIMD clients. For an enterprise Restricted posture, set `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` to a JSON array of approved FastMCP redirect patterns. An unset value remains Open; `[]` deliberately denies every downstream redirect.
 
-This allowlist does not change the IdP callback. Inspect `Client registered with redirect_uri` logs and test every supported MCP client before enabling it.
+This allowlist applies to **both DCR and CIMD clients**. Inspect `Client registered with redirect_uri` logs and test every supported MCP client before enabling it.
+
+CIMD metadata validation and SSRF protection belong to FastMCP. The server accepts any valid CIMD client URL; there is no custom hostname allowlist. OAuth consent and redirect validation still apply.
+
+### DCR derived client ID
+
+The DCR path derives a stable `client_id` from an HMAC of the registration metadata keyed on `OIDC_STORAGE_ENCRYPTION_KEY`. This means:
+
+- The same `redirect_uris`, `client_name`, `grant_types`, `response_types`, `scope`, and `token_endpoint_auth_method` always yield the same `client_id` for a given key.
+- A key rotation changes every derived ID. Clients using stored sessions must re-register.
+- CIMD clients never pass through this path; their `client_id` is the metadata document URL.
+
+Client files, DCR and CIMD alike, accumulate in `OIDC_STORAGE_PATH` for as long as the same encryption key is in use. FastMCP does not expire them automatically. With a stable key, each distinct registration can add storage; rate limiting slows abuse but does not cap total disk usage. Monitor volume capacity. If you redeploy with an ephemeral key (no `OIDC_STORAGE_ENCRYPTION_KEY` set), the directory is wiped at startup automatically.
+
+`POST /oauth/mcp/register` is unauthenticated, so one process-wide token bucket limits it to 120 requests per minute (burst 60). All clients share this budget regardless of source IP or forwarded headers. Excess requests receive `429` with `Retry-After: 60`. The normal single-process pod has one bucket; additional processes or replicas have independent budgets. This limits throughput, not cumulative storage growth or per-client fairness. NetworkPolicy cannot replace this HTTP limit.
+
+The chart disables forwarded-header trust by default (`FORWARDED_ALLOW_IPS=""`). Optional `config.forwardedAllowIps` controls uvicorn's interpretation of forwarded client addresses and schemes; it neither authorizes clients nor changes registration budgets. Trust only proxies that overwrite client-supplied headers.
+
+The chart enables strict FastMCP Host/Origin validation, deriving public allowlists from `config.externalUrl` and enabled route hostnames. Additional browser clients can be admitted with `config.fastmcpHttpAllowedOrigins`. Native clients without an Origin header remain supported. See [the chart HTTP guard configuration](../../charts/mcp-kubecost/README.md#http-host-and-origin-validation). Outside Helm, configure `FASTMCP_HTTP_HOST_ORIGIN_PROTECTION=true` and the public Host/Origin allowlists explicitly as shown in `.env.example`.
 
 ### Shared Kubecost frontend hostname
 
@@ -117,16 +151,6 @@ The exact nginx configuration belongs in the parent Kubecost chart because that 
 
 If the MCP has a dedicated hostname, set `MCP_EXTERNAL_URL=https://mcp.example.com` there — the same fixed `/mcp` and `/oauth/mcp` paths apply.
 
-### Consent screen branding
-
-The OAuth consent and error pages are Kubecost-branded automatically in OIDC mode. The logo, favicon, and CSS are inline so the pages need no extra proxy routes or external network access. FastMCP continues to own the form, CSRF protection, cookies, and transaction fields.
-
-Verify the served flow with:
-
-```bash
-just check-consent-branding
-```
-
 ### Unauthenticated HTTP paths
 
 These custom routes are not wrapped in OAuth middleware:
@@ -151,7 +175,8 @@ Templates: [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values
 | `OIDC_CLIENT_SECRET` | `config.oidc.clientSecret` or Secret | Upstream confidential client secret |
 | `MCP_EXTERNAL_URL` | `config.externalUrl` | Public origin, no path; e.g. `https://host`. Derives the fixed `/mcp` and `/oauth/mcp` URLs |
 | `OIDC_REQUIRED_SCOPES` | `config.oidc.requiredScopes` | Provider scopes; default `openid,profile` |
-| `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` | `config.oidc.allowedClientRedirectUris` | Optional downstream MCP-client callback allowlist |
+| `OIDC_ALLOWED_CLIENT_REDIRECT_URIS` | `config.oidc.allowedClientRedirectUris` | Optional downstream MCP-client callback allowlist (DCR and CIMD) |
+| `FORWARDED_ALLOW_IPS` | `config.forwardedAllowIps` (default `""`) | Optional trusted proxy IPs/CIDRs; empty disables forwarded-header trust |
 | `OIDC_AUDIENCE` | `config.oidc.audience` | Optional upstream API audience |
 | `OIDC_STORAGE_PATH` | fixed by chart | Encrypted OAuth state directory |
 | `OIDC_JWT_SIGNING_KEY` | `config.oidc.jwtSigningKey` or Secret | Stable FastMCP signing key |
@@ -206,6 +231,21 @@ Confirm the PVC is Bound and the pod security context retains an appropriate wri
 
 Use `/health`, not `/mcp`.
 
+**Clients receive `429` from `/oauth/mcp/register` after a restart**
+
+Registration shares one process-wide budget; honor `Retry-After: 60` after HTTP 429. Proxy-header trust does not change the budget. Set a stable `OIDC_STORAGE_ENCRYPTION_KEY` to preserve registrations across restarts.
+
 **OIDC initialization reports HTML discovery metadata**
 
 `OIDC_ISSUER_URL` must point to the upstream provider's JSON discovery document, not a login page or this server's OAuth metadata.
+
+## Upstream spec tracking
+
+The items below are gaps in FastMCP `3.4.x` relative to the 2026-07-28 MCP Authorization spec. They are tracked here to avoid confusing upstream gaps with local ones. No local patch is needed — fix-it when the upstream version ships.
+
+| Item | Spec level | Status |
+| --- | --- | --- |
+| RFC 9207 `iss` parameter in authorization responses | SHOULD (flagged to become MUST) | Missing from FastMCP. The callback redirect does not carry `iss` and `authorization_response_iss_parameter_supported` is absent from the AS metadata. |
+| `scope` in `WWW-Authenticate` 401 challenge | SHOULD | FastMCP emits only `resource_metadata`. Once available, wire `OIDC_REQUIRED_SCOPES` into it. |
+
+Watch [FastMCP releases](https://gofastmcp.com/updates) for these items. Bump the `>=3.4.7,<4.0` pin and re-run the full suite (including `just check-consent-branding`) against every FastMCP minor release.

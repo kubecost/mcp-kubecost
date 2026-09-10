@@ -3,6 +3,7 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "networkPolicy": {"type": "object", "additionalProperties": false, "required": ["enabled", "ingress", "egress"], "properties": {"enabled": {"type": "boolean"}, "ingress": {"type": "array", "items": {"type": "object"}}, "egress": {"type": "array", "items": {"type": "object"}}}},
     "enabled": { "type": "boolean" },
     "global": {
       "type": "object",
@@ -240,6 +241,7 @@
         "authMode": { "type": "string", "enum": ["none", "open", "oidc", "api_key"] },
         "requireClientApiKey": { "type": "boolean" },
         "externalUrl": { "type": "string", "pattern": "^$|^https://[^/?#]+/?$" },
+        "forwardedAllowIps": { "type": "string" },
         "fastmcpHttpHostOriginProtection": { "oneOf": [{ "type": "boolean" }, { "type": "string", "enum": ["auto"] }] },
         "fastmcpHttpAllowedHosts": { "type": "string" },
         "fastmcpHttpAllowedOrigins": { "type": "string" },

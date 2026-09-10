@@ -132,6 +132,9 @@ spec:
             httpGet:
               path: {{ .Values.probes.path }}
               port: http
+              httpHeaders:
+                - name: Host
+                  value: localhost
             failureThreshold: {{ .Values.probes.failureThreshold }}
             periodSeconds: {{ .Values.probes.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.timeoutSeconds }}
@@ -139,6 +142,9 @@ spec:
             httpGet:
               path: {{ .Values.probes.path }}
               port: http
+              httpHeaders:
+                - name: Host
+                  value: localhost
             initialDelaySeconds: {{ .Values.probes.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.timeoutSeconds }}
@@ -147,6 +153,9 @@ spec:
             httpGet:
               path: {{ .Values.probes.path }}
               port: http
+              httpHeaders:
+                - name: Host
+                  value: localhost
             initialDelaySeconds: {{ .Values.probes.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.periodSeconds }}
             timeoutSeconds: {{ .Values.probes.timeoutSeconds }}

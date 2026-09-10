@@ -6,7 +6,9 @@ import json
 import logging
 import os
 import sys
+import time
 from argparse import ArgumentParser
+from collections.abc import Callable
 from importlib.metadata import version as pkg_version
 
 # Disable FastMCP banner before importing FastMCP
@@ -24,7 +26,7 @@ from starlette.responses import JSONResponse, Response
 from mcp_kubecost.branding import FAVICON_MEDIA_TYPE, FAVICON_PNG, KUBECOST_WEBSITE_URL, server_icons
 from mcp_kubecost.client import kubecost_client_lifespan
 from mcp_kubecost.config.oidc import create_oidc_provider
-from mcp_kubecost.config.settings import apply_http_rich_logging, get_settings
+from mcp_kubecost.config.settings import AuthMode, apply_http_rich_logging, get_settings
 from mcp_kubecost.errors import ConfigError
 from mcp_kubecost.middleware import TextContentSummaryMiddleware, ToolConcurrencyLimitMiddleware
 from mcp_kubecost.skills import register_all_skills
@@ -76,6 +78,98 @@ _BROWSER_CORS = Middleware(
 )
 
 
+# ---------------------------------------------------------------------------
+# DCR rate-limiting ASGI middleware
+# ---------------------------------------------------------------------------
+# The FastMCP RateLimitingMiddleware added in create_server() is MCP-message
+# middleware and never sees plain HTTP OAuth routes such as
+# POST /oauth/mcp/register. Registration is unauthenticated and writes one
+# encrypted file per unique metadata set to OIDC_STORAGE_PATH, so without a
+# limit a single caller can fill the storage volume.
+#
+# One process-wide bucket bounds registration throughput without tracking client IPs.
+# This slows storage abuse; it does not bound cumulative storage growth.
+_DCR_GLOBAL_PER_MINUTE = 120
+_DCR_GLOBAL_BURST = 60
+_DCR_REGISTER_PATH = "/oauth/mcp/register"
+
+
+class _TokenBucket:
+    """Token bucket with fractional refill. ``tokens`` starts full."""
+
+    __slots__ = ("capacity", "last", "rate", "tokens")
+
+    def __init__(self, *, per_minute: float, burst: int, now: float) -> None:
+        self.rate = per_minute / 60.0
+        self.capacity = float(burst)
+        self.tokens = float(burst)
+        self.last = now
+
+    def refill(self, now: float) -> None:
+        self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.rate)
+        self.last = now
+
+    def consume(self) -> None:
+        self.tokens -= 1.0
+
+
+class _DcrRateLimiter:
+    """One process-wide token bucket for POST /oauth/mcp/register."""
+
+    def __init__(
+        self,
+        *,
+        global_per_minute: float = _DCR_GLOBAL_PER_MINUTE,
+        global_burst: int = _DCR_GLOBAL_BURST,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._clock = clock
+        self._global = _TokenBucket(per_minute=global_per_minute, burst=global_burst, now=clock())
+
+    def allow(self) -> bool:
+        self._global.refill(self._clock())
+        if self._global.tokens < 1.0:
+            return False
+        self._global.consume()
+        return True
+
+
+_dcr_limiter = _DcrRateLimiter()
+
+_DCR_429_BODY = json.dumps(
+    {
+        "error": "rate_limited",
+        "error_description": "Too many client registration requests; retry after 60 seconds",
+    }
+).encode()
+
+
+class _DcrRateLimitMiddleware:
+    """ASGI middleware that rate-limits POST /oauth/mcp/register per server process."""
+
+    def __init__(self, app, limiter: _DcrRateLimiter | None = None) -> None:
+        self._app = app
+        self._limiter = limiter or _dcr_limiter
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") == "http" and scope.get("method") == "POST" and scope.get("path") == _DCR_REGISTER_PATH:
+            if not self._limiter.allow():
+                logger.warning("Rate-limited POST %s", _DCR_REGISTER_PATH)
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 429,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"retry-after", b"60"),
+                        ],
+                    }
+                )
+                await send({"type": "http.response.body", "body": _DCR_429_BODY, "more_body": False})
+                return
+        await self._app(scope, receive, send)
+
+
 class KubecostMCP(FastMCP):
     """FastMCP that applies ``_BROWSER_CORS`` to the whole HTTP app.
 
@@ -86,7 +180,10 @@ class KubecostMCP(FastMCP):
     """
 
     def http_app(self, *args, middleware: list[Middleware] | None = None, **kwargs):
-        return super().http_app(*args, middleware=[_BROWSER_CORS, *(middleware or [])], **kwargs)
+        extra: list[Middleware] = [_BROWSER_CORS]
+        if get_settings().auth_mode == AuthMode.OIDC:
+            extra.append(Middleware(_DcrRateLimitMiddleware))
+        return super().http_app(*args, middleware=[*extra, *(middleware or [])], **kwargs)
 
 
 def create_server(server_name) -> FastMCP:

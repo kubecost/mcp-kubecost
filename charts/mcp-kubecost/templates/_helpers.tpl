@@ -354,12 +354,8 @@ OIDC_STORAGE_PATH="/var/lib/mcp-kubecost/oauth"
 {{- if .Values.config.otelExporterOtlpEndpoint }}
 OTEL_EXPORTER_OTLP_ENDPOINT={{ .Values.config.otelExporterOtlpEndpoint | quote }}
 {{- end }}
-{{- if .Values.config.fastmcpHttpAllowedHosts }}
-FASTMCP_HTTP_ALLOWED_HOSTS={{ .Values.config.fastmcpHttpAllowedHosts | quote }}
-{{- end }}
-{{- if .Values.config.fastmcpHttpAllowedOrigins }}
-FASTMCP_HTTP_ALLOWED_ORIGINS={{ .Values.config.fastmcpHttpAllowedOrigins | quote }}
-{{- end }}
+FASTMCP_HTTP_ALLOWED_HOSTS={{ include "mcp-kubecost.allowedHosts" . | quote }}
+FASTMCP_HTTP_ALLOWED_ORIGINS={{ include "mcp-kubecost.allowedOrigins" . | quote }}
 {{- if .Values.config.ssl.caBundle.existingSecret }}
 SSL_CA_BUNDLE={{ .Values.config.ssl.caBundle.mountPath | quote }}
 {{- end }}
@@ -454,4 +450,39 @@ behaviour from it.
 {{- fail (printf "\n\nFAILURE [mcp-kubecost]: %s could not be resolved.\n\nSet %s explicitly, or enable exactly one of httpRoute/ingress with exactly one non-wildcard hostname.\n%s\n  Example:\n    %s: \"https://kubecost.example.com\"\n" (include "mcp-kubecost.externalUrlRef" .) (include "mcp-kubecost.externalUrlRef" .) (include "mcp-kubecost.externalUrlHint" .) (include "mcp-kubecost.externalUrlRef" .)) -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+
+{{/* Framework allowlists: public routes plus explicit additional browser clients. */}}
+{{- define "mcp-kubecost.publicHosts" -}}
+{{- $hosts := list -}}
+{{- $external := include "mcp-kubecost.externalUrl" . -}}
+{{- if $external -}}{{- $hosts = append $hosts (trimPrefix "https://" $external) -}}{{- end -}}
+{{- if .Values.httpRoute.enabled -}}
+{{- $hosts = concat $hosts .Values.httpRoute.hostnames -}}
+{{- end -}}
+{{- if .Values.ingress.enabled -}}
+{{- range .Values.ingress.hosts -}}{{- $hosts = append $hosts .host -}}{{- end -}}
+{{- end -}}
+{{- $hosts | uniq | toJson -}}
+{{- end -}}
+
+{{- define "mcp-kubecost.allowedHosts" -}}
+{{- $service := include "mcp-kubecost.fullname" . -}}
+{{- $hosts := list $service (printf "%s.%s" $service .Release.Namespace) (printf "%s.%s.svc" $service .Release.Namespace) (printf "%s.%s.svc.cluster.local" $service .Release.Namespace) -}}
+{{- $hosts = concat $hosts (include "mcp-kubecost.publicHosts" . | fromJsonArray) -}}
+{{- if .Values.config.fastmcpHttpAllowedHosts -}}
+{{- $hosts = concat $hosts (.Values.config.fastmcpHttpAllowedHosts | mustFromJson) -}}
+{{- end -}}
+{{- $hosts | uniq | toJson -}}
+{{- end -}}
+
+{{- define "mcp-kubecost.allowedOrigins" -}}
+{{- $origins := list -}}
+{{- range (include "mcp-kubecost.publicHosts" . | fromJsonArray) -}}
+{{- $origins = append $origins (printf "https://%s" .) -}}
+{{- end -}}
+{{- if .Values.config.fastmcpHttpAllowedOrigins -}}
+{{- $origins = concat $origins (.Values.config.fastmcpHttpAllowedOrigins | mustFromJson) -}}
+{{- end -}}
+{{- $origins | uniq | toJson -}}
 {{- end -}}

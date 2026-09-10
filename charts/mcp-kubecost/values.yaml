@@ -270,13 +270,20 @@ config:
   # Ingress or HTTPRoute containing exactly one non-wildcard hostname.
   # The fixed public URLs are /mcp and /oauth/mcp on this origin.
   externalUrl: ""
+  # Optional comma-separated trusted proxy IPs or CIDRs for uvicorn's
+  # X-Forwarded-For / X-Forwarded-Proto handling. Empty disables header trust,
+  # including with Ingress or HTTPRoute enabled; no proxy IP knowledge is required.
+  # Example: "10.0.1.10,10.0.2.0/24". Use "*" only if every path to the pod
+  # passes through a proxy that overwrites client-supplied forwarded headers.
+  forwardedAllowIps: ""
 
-  # Enable FastMCP's Host/Origin request guard. "auto" protects local binds and
-  # activates strict checks when either allowlist below is configured.
-  fastmcpHttpHostOriginProtection: auto
-  # JSON array string of permitted HTTP Host headers.
+  # Strict FastMCP Host/Origin validation on every bind.
+  fastmcpHttpHostOriginProtection: true
+  # Additional permitted HTTP Host headers (JSON array string).
+  # Service names, externalUrl and chart route hosts are included automatically.
   fastmcpHttpAllowedHosts: ""
-  # JSON array string of permitted browser Origin headers.
+  # Additional browser Origin headers (JSON array string), e.g. MCP Inspector.
+  # Public HTTPS origins are included automatically.
   fastmcpHttpAllowedOrigins: ""
   # config.mcpServerName overrides the MCP server name exposed by FastMCP.
   mcpServerName: mcp-kubecost
@@ -310,8 +317,10 @@ config:
     # config.oidc.requiredScopes is a comma-separated list of OAuth scopes to request.
     requiredScopes: "openid,profile"
     # Optional JSON array of allowed downstream MCP-client redirect URI patterns.
-    # Leave empty for the Open default, which supports standards-compatible DCR/CIMD
-    # clients. This does not configure the upstream IdP callback.
+    # Applies to both DCR (Dynamic Client Registration) and CIMD (Client ID Metadata
+    # Document) clients. Leave empty for the Open default. This does not configure the
+    # upstream IdP callback. Client priority order: pre-registered → CIMD → DCR.
+    # DCR is deprecated in the 2026-07-28 MCP spec but still served for compatibility.
     # Example Restricted posture: '["http://localhost:*", "https://client.example/callback"]'
     allowedClientRedirectUris: ""
     # config.oidc.clientID is the OIDC client ID. Prefer existingSecret for production.
@@ -333,3 +342,12 @@ config:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# Requires a CNI that enforces Kubernetes NetworkPolicy. When enabled, both
+# directions default to deny; supply standard NetworkPolicy rules for your cluster.
+# See docs/examples/network-policies/ in the repository for Envoy Gateway,
+# DNS, Kubecost, OIDC, CIMD and telemetry examples.
+networkPolicy:
+  enabled: false
+  ingress: []
+  egress: []

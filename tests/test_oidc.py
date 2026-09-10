@@ -6,16 +6,20 @@ import base64
 import inspect
 import json
 import logging
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 from cryptography.fernet import Fernet
-from fastmcp.server.auth.oauth_proxy.models import ProxyDCRClient, UpstreamTokenSet
-from fastmcp.server.auth.oidc_proxy import OIDCProxy
+from fastmcp.server.auth.cimd import CIMDClientManager, CIMDDocument, CIMDFetchError
+from fastmcp.server.auth.oauth_proxy.models import InvalidRedirectUriError, ProxyDCRClient, UpstreamTokenSet
+from fastmcp.server.auth.oidc_proxy import OIDCConfiguration, OIDCProxy
 from fastmcp.server.auth.redirect_validation import validate_redirect_uri
 from key_value.aio.adapters.pydantic import PydanticAdapter
+from key_value.aio.errors.wrappers import DecryptionError
 from key_value.aio.stores.filetree import (
     FileTreeStore,
     FileTreeV1CollectionSanitizationStrategy,
@@ -28,6 +32,7 @@ from mcp.server.auth.provider import RegistrationError
 from mcp.server.auth.settings import ClientRegistrationOptions
 from mcp.shared.auth import OAuthClientInformationFull
 from pydantic import AnyUrl
+from starlette.applications import Starlette
 from starlette.routing import Route
 
 from mcp_kubecost.config.oidc import (
@@ -142,6 +147,8 @@ def _dcr_proxy(
     proxy._allowed_client_redirect_uris = allowed_redirect_uris
     proxy._default_scope_str = "openid profile"
     proxy._cimd_manager = None  # get_client skips CIMD refresh
+    proxy._upstream_client_id = "upstream-client-id"  # needed by OAuthProxy.get_client fallback
+    proxy._storage_dir = Path("/tmp/mcp-kubecost-test-oauth")  # named in DecryptionError logs
     proxy._client_store = PydanticAdapter[ProxyDCRClient](
         key_value=MemoryStore(),
         pydantic_model=ProxyDCRClient,
@@ -609,3 +616,244 @@ class TestAllowedClientRedirectUris:
 
     def test_empty_restricted_list_rejects_client_redirects(self):
         assert validate_redirect_uri("https://client.example/callback", []) is False
+
+
+# ---------------------------------------------------------------------------
+# CIMD coverage
+# ---------------------------------------------------------------------------
+
+_OIDC_DISCOVERY = {
+    "issuer": "https://idp.example",
+    "authorization_endpoint": "https://idp.example/auth",
+    "token_endpoint": "https://idp.example/token",
+    "jwks_uri": "https://idp.example/jwks",
+    "response_types_supported": ["code"],
+    "subject_types_supported": ["public"],
+    "id_token_signing_alg_values_supported": ["RS256"],
+}
+
+
+def _real_proxy(tmp_path, **overrides: Any) -> AdaptiveOidcProxy:
+    """Build a fully wired AdaptiveOidcProxy with the IdP discovery fetch stubbed out.
+
+    Unlike ``_dcr_proxy`` this runs the real ``__init__`` through
+    ``create_oidc_provider``, so the CIMD manager, storage, and routes are the
+    production ones.
+    """
+    config = OIDCConfiguration.model_validate(_OIDC_DISCOVERY)
+    settings = _settings(**{**_OIDC, "oidc_storage_path": str(tmp_path), **overrides})
+    with (
+        patch.object(AdaptiveOidcProxy, "get_oidc_configuration", return_value=config),
+        patch("mcp_kubecost.config.oidc.install_oauth_page_branding"),
+    ):
+        proxy = create_oidc_provider(settings)
+    assert isinstance(proxy, AdaptiveOidcProxy)
+    return proxy
+
+
+def _cimd_client(cimd_url: str, redirect: str = "https://client.example/callback") -> ProxyDCRClient:
+    return ProxyDCRClient(
+        client_id=cimd_url,
+        redirect_uris=[AnyUrl(redirect)],
+        cimd_document=CIMDDocument(client_id=cimd_url, redirect_uris=[redirect]),
+    )
+
+
+class TestCIMDClientResolution:
+    """CIMD client IDs are https URLs; DCR client IDs are UUID-shaped strings."""
+
+    async def test_cimd_url_is_resolved_via_cimd_manager(self):
+        proxy = _dcr_proxy()
+        cimd_url = "https://client.example/.well-known/mcp-client"
+        mgr = CIMDClientManager()
+        mgr.get_client = AsyncMock(return_value=_cimd_client(cimd_url))
+        proxy._cimd_manager = mgr
+
+        result = await proxy.get_client(cimd_url)
+        assert result is not None
+        assert result.client_id == cimd_url
+        mgr.get_client.assert_awaited_once_with(cimd_url)
+
+    async def test_cimd_fetch_failure_yields_none_not_500(self):
+        """A CIMDFetchError inside the manager must surface as a clean None.
+
+        FastMCP's CIMDClientManager.get_client catches CIMDFetchError itself and
+        returns None; drive the fetcher rather than the manager so that real
+        code path runs.
+        """
+        proxy = _dcr_proxy()
+        cimd_url = "https://client.example/.well-known/mcp-client"
+        mgr = CIMDClientManager()
+        mgr._fetcher.fetch = AsyncMock(side_effect=CIMDFetchError("connection refused"))
+        proxy._cimd_manager = mgr
+
+        assert await proxy.get_client(cimd_url) is None
+
+    async def test_decryption_error_on_stored_client_yields_none(self):
+        """The DecryptionError guard still applies when CIMD is active."""
+        proxy = _dcr_proxy()
+        proxy._cimd_manager = CIMDClientManager()
+        proxy._client_store = MagicMock()
+        proxy._client_store.get = AsyncMock(side_effect=DecryptionError("bad key"))
+
+        assert await proxy.get_client("https://client.example/mcp") is None
+
+
+class TestCIMDDocumentValidation:
+    """CIMD client-ID shape rules are enforced by FastMCP's CIMDClientManager."""
+
+    def test_non_https_url_is_not_a_cimd_client_id(self):
+        mgr = CIMDClientManager()
+        assert mgr.is_cimd_client_id("http://client.example/mcp-client") is False
+        assert mgr.is_cimd_client_id("https://client.example/.well-known/mcp-client") is True
+
+    def test_root_path_url_is_not_a_cimd_client_id(self):
+        mgr = CIMDClientManager()
+        assert mgr.is_cimd_client_id("https://client.example/") is False
+        assert mgr.is_cimd_client_id("https://client.example") is False
+
+    def test_uuid_dcr_id_is_not_a_cimd_client_id(self):
+        mgr = CIMDClientManager()
+        assert mgr.is_cimd_client_id(str(uuid4())) is False
+
+
+class TestCIMDRedirectValidation:
+    def test_oidc_allowed_redirect_uris_restricts_cimd_redirects(self):
+        """ProxyDCRClient.validate_redirect_uri applies the allowlist to CIMD clients too."""
+        cimd_url = "https://client.example/.well-known/mcp-client"
+        client = ProxyDCRClient(
+            client_id=cimd_url,
+            redirect_uris=None,
+            cimd_document=CIMDDocument(
+                client_id=cimd_url,
+                redirect_uris=["https://client.example/callback"],
+                token_endpoint_auth_method="none",
+                grant_types=["authorization_code"],
+            ),
+            allowed_redirect_uri_patterns=["https://allowed.example/callback"],
+        )
+        with pytest.raises(InvalidRedirectUriError):
+            client.validate_redirect_uri(AnyUrl("https://client.example/callback"))
+
+
+class TestAuthServerMetadataCIMDAdvertisement:
+    """The served authorization-server metadata must advertise CIMD support."""
+
+    async def test_metadata_route_advertises_cimd(self, tmp_path):
+        proxy = _real_proxy(tmp_path)
+        app = Starlette(routes=proxy.get_routes(MCP_PATH))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="https://mcp.example") as client:
+            response = await client.get(f"/.well-known/oauth-authorization-server{OAUTH_PREFIX}")
+
+        assert response.status_code == 200
+        metadata = response.json()
+        assert metadata["client_id_metadata_document_supported"] is True
+        assert "none" in metadata["token_endpoint_auth_methods_supported"]
+        assert "private_key_jwt" in metadata["token_endpoint_auth_methods_supported"]
+        assert metadata["registration_endpoint"] == f"https://mcp.example{OAUTH_PREFIX}/register"
+
+
+# ---------------------------------------------------------------------------
+# DCR hardening
+# ---------------------------------------------------------------------------
+
+
+class TestDCRRegistrationContractSnapshot:
+    """Snapshot the DCR 201 response shape so a FastMCP upgrade that changes it fails CI."""
+
+    async def test_registration_201_body_contains_expected_fields(self):
+        """The 201 response must carry the fields MCP clients read back."""
+        proxy = _dcr_proxy()
+        handler = RegistrationHandler(provider=proxy, options=ClientRegistrationOptions(enabled=True))
+        body = {
+            "redirect_uris": ["http://127.0.0.1:33418/callback"],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "scope": "openid profile",
+            "token_endpoint_auth_method": "none",
+        }
+
+        request = MagicMock()
+        request.json = AsyncMock(return_value=body)
+        response = await handler.handle(request)
+
+        assert response.status_code == 201, f"Expected 201, got {response.status_code}"
+        data = json.loads(bytes(response.body))
+        # These are the fields MCP clients read from the registration response.
+        for field in ("client_id", "redirect_uris", "grant_types", "scope", "token_endpoint_auth_method"):
+            assert field in data, f"DCR 201 response missing field: {field!r}"
+        # client_id must be UUID-shaped (our derived-id guarantee).
+        UUID(data["client_id"])
+
+    async def test_derived_id_inputs_are_stable(self):
+        """The same five fields must always produce the same derived client_id.
+
+        If FastMCP changes what register_client passes us, the id inputs change
+        and every registered client must re-register.  This test pins the
+        derivation inputs so a silent upstream change breaks CI.
+        """
+        proxy = _dcr_proxy(dcr_client_id_key="pinned-key-for-snapshot")
+        body = {
+            "redirect_uris": ["http://127.0.0.1:33418/callback"],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "scope": "openid profile",
+            "token_endpoint_auth_method": "none",
+        }
+
+        handler = RegistrationHandler(provider=proxy, options=ClientRegistrationOptions(enabled=True))
+        request = MagicMock()
+        request.json = AsyncMock(return_value=body)
+        response = await handler.handle(request)
+        data = json.loads(bytes(response.body))
+        # The exact UUID is computed from the HMAC of the sorted JSON of the five
+        # fields.  Pin it here; a FastMCP change that alters the object passed to
+        # register_client will produce a different UUID and fail this test.
+        proxy2 = _dcr_proxy(dcr_client_id_key="pinned-key-for-snapshot")
+        client_info = OAuthClientInformationFull(
+            client_id="unused",
+            redirect_uris=[AnyUrl("http://127.0.0.1:33418/callback")],
+            grant_types=["authorization_code", "refresh_token"],
+            response_types=["code"],
+            scope="openid profile",
+            token_endpoint_auth_method="none",
+        )
+        assert data["client_id"] == proxy2._derive_client_id(client_info)
+
+
+class TestDCRNativeApplicationType:
+    """The MCP client-registration spec says native clients send application_type: native.
+
+    The field itself comes from OpenID Connect Dynamic Client Registration 1.0.
+    """
+
+    async def test_native_application_type_with_loopback_redirect_succeeds(self):
+        """A DCR request carrying application_type='native' must be accepted.
+
+        The MCP SDK and FastMCP do not reject this field but they strip it from
+        the stored model (it is not in OAuthClientInformationFull).  The test
+        verifies that registration still returns 201 and the client can be looked
+        up by the derived id.
+        """
+        proxy = _dcr_proxy()
+        handler = RegistrationHandler(provider=proxy, options=ClientRegistrationOptions(enabled=True))
+        body = {
+            "redirect_uris": ["http://127.0.0.1:9876/callback"],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "scope": "openid profile",
+            "token_endpoint_auth_method": "none",
+            "application_type": "native",
+        }
+
+        request = MagicMock()
+        request.json = AsyncMock(return_value=body)
+        response = await handler.handle(request)
+
+        assert response.status_code == 201, f"native application_type should succeed; got {response.status_code}"
+        data = json.loads(bytes(response.body))
+        client_id = data["client_id"]
+        # Must be retrievable from storage.
+        stored = await proxy.get_client(client_id)
+        assert stored is not None
+        assert stored.client_id == client_id

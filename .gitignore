@@ -241,3 +241,4 @@ todo-list.md
 .bobtmp/
 .DS_STORE
 .kubeconfig
+*plan.md

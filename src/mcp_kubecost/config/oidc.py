@@ -86,7 +86,13 @@ class AdaptiveOidcProxy(OIDCProxy):
     Also makes Dynamic Client Registration idempotent — see ``register_client``.
     """
 
-    def __init__(self, *, dcr_client_id_key: str, storage_dir: Path, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        dcr_client_id_key: str,
+        storage_dir: Path,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self._dcr_client_id_key: bytes = dcr_client_id_key.encode()
         self._storage_dir = storage_dir
@@ -204,7 +210,7 @@ class AdaptiveOidcProxy(OIDCProxy):
         401 instead of a 500 traceback.
         """
         try:
-            return await super().get_client(client_id)
+            client = await super().get_client(client_id)
         except DecryptionError:
             logger.error(
                 "Failed to decrypt stored OAuth client %r — the storage was likely written "
@@ -215,6 +221,7 @@ class AdaptiveOidcProxy(OIDCProxy):
                 self._storage_dir,
             )
             return None
+        return client
 
     async def load_authorization_code(
         self,
@@ -344,6 +351,7 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
         MCP_PATH,
         OAUTH_PREFIX,
     )
+    logger.info("CIMD enabled — metadata validation and SSRF protection provided by FastMCP")
 
     try:
         storage_dir = Path(settings.oidc_storage_path)

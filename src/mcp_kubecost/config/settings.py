@@ -221,18 +221,23 @@ def _get_oidc_scopes() -> list[str]:
     return [s.strip() for s in raw.split(",") if s.strip()]
 
 
-def _get_oidc_allowed_client_redirect_uris() -> list[str] | None:
-    """Parse an optional JSON allowlist for downstream MCP-client redirects."""
-    raw = os.getenv("OIDC_ALLOWED_CLIENT_REDIRECT_URIS", "").strip()
+def _get_oidc_json_str_list(env_name: str) -> list[str] | None:
+    """Parse an optional JSON array of non-empty strings from an env var."""
+    raw = os.getenv(env_name, "").strip()
     if not raw:
         return None
     try:
         values = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ConfigError("OIDC_ALLOWED_CLIENT_REDIRECT_URIS must be a JSON array of non-empty strings") from exc
+        raise ConfigError(f"{env_name} must be a JSON array of non-empty strings") from exc
     if not isinstance(values, list) or not all(isinstance(value, str) and value.strip() for value in values):
-        raise ConfigError("OIDC_ALLOWED_CLIENT_REDIRECT_URIS must be a JSON array of non-empty strings")
+        raise ConfigError(f"{env_name} must be a JSON array of non-empty strings")
     return [value.strip() for value in values]
+
+
+def _get_oidc_allowed_client_redirect_uris() -> list[str] | None:
+    """Parse an optional JSON allowlist for downstream MCP-client redirects."""
+    return _get_oidc_json_str_list("OIDC_ALLOWED_CLIENT_REDIRECT_URIS")
 
 
 _DEFAULT_OIDC_STORAGE_PATH = "/var/lib/mcp-kubecost/oauth"
