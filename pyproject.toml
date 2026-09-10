@@ -25,6 +25,7 @@ otel = [
   "opentelemetry-instrumentation-starlette>=0.65b0",
 ]
 dev = [
+  "pre-commit>=4.6.2",
   "pyrefly",
   "pytest",
   "pytest-asyncio",

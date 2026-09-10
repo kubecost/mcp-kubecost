@@ -13,8 +13,12 @@ The config for CI [`.github/pre-commit-config-ci.yaml`](../../.github/pre-commit
 Run the CI version from the repository root with:
 
 ```sh
-pre-commit run --config .github/pre-commit-config-ci.yaml --all-files
+just auto-format
+# or:
+uv run pre-commit run --config .github/pre-commit-config-ci.yaml --all-files
 ```
+
+`just auto-format` refuses to run when there are unstaged changes, so the formatter's diff stays reviewable. `pre-commit` is a `dev` extra — install it with `uv sync --extra dev` rather than `uvx`.
 
 ## Benefits
 
@@ -27,13 +31,13 @@ pre-commit run --config .github/pre-commit-config-ci.yaml --all-files
 
 ```bash
 # Install hooks
-pre-commit install
+uv run pre-commit install
 
 # Run manually on all files
-pre-commit run --all-files
+uv run pre-commit run --all-files
 
 # Run on staged files
-pre-commit run
+uv run pre-commit run
 ```
 
 Run these commands from the repository root so the config paths above resolve correctly.
