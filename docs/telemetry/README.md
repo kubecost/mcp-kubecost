@@ -12,6 +12,7 @@ This feature is considered experimental.
 | `OTEL_SERVICE_NAME` | Service name on exported spans. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector endpoint. Required when telemetry is enabled (not set in the image). |
 | `OTEL_METRICS_EXPORTER` / `OTEL_LOGS_EXPORTER` | Set both to `none` when the endpoint is a traces-only backend — see below. |
+| `OTEL_PYTHON_EXCLUDED_URLS` | Comma-separated URL regexes excluded from HTTP server tracing. The chart defaults this to `health` (`config.otelExcludedUrls`) so kubelet probes do not flood the trace backend. |
 
 When enabled, traces include FastMCP MCP operation spans (tools, prompts, resources) plus HTTP client/server spans from auto-instrumentation. Set these in the Helm chart's `config` values or `.env` — see [`.env.example`](../../.env.example) and [`charts/mcp-kubecost/values.yaml`](../../charts/mcp-kubecost/values.yaml).
 

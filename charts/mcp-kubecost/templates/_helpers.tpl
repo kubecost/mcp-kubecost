@@ -348,6 +348,7 @@ FASTMCP_TELEMETRY_MODE={{ .Values.config.telemetryMode | quote }}
 OTEL_SERVICE_NAME={{ .Values.config.otelServiceName | quote }}
 OTEL_METRICS_EXPORTER={{ .Values.config.otelMetricsExporter | quote }}
 OTEL_LOGS_EXPORTER={{ .Values.config.otelLogsExporter | quote }}
+OTEL_PYTHON_EXCLUDED_URLS={{ .Values.config.otelExcludedUrls | quote }}
 KUBECOST_SSL_VERIFY={{ .Values.config.ssl.verify | quote }}
 FASTMCP_HTTP_HOST_ORIGIN_PROTECTION={{ .Values.config.fastmcpHttpHostOriginProtection | quote }}
 OIDC_STORAGE_PATH="/var/lib/mcp-kubecost/oauth"

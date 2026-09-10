@@ -287,7 +287,7 @@ config:
   fastmcpHttpAllowedOrigins: ""
   # config.mcpServerName overrides the MCP server name exposed by FastMCP.
   mcpServerName: mcp-kubecost
-  # config.telemetryMode controls the OpenTelemetry wrapper; off disables it.
+  # config.telemetryMode controls the OpenTelemetry wrapper; off disables it. native enables it.
   telemetryMode: "off"
   # config.otelServiceName is the OpenTelemetry service name.
   otelServiceName: mcp-kubecost
@@ -297,6 +297,9 @@ config:
   otelMetricsExporter: none
   # config.otelLogsExporter selects the OTEL logs exporter, such as none.
   otelLogsExporter: none
+  # config.otelExcludedUrls is a comma-separated list of URL regexes excluded from tracing.
+  # Defaults to the health probe so kubelet checks do not flood the trace backend.
+  otelExcludedUrls: health
   ssl:
     # config.ssl.verify controls Kubecost TLS certificate verification.
     verify: true
