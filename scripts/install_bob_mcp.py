@@ -9,7 +9,7 @@ into the output file (creates it if missing).
 
 Usage (run from a project that has a FastMCP config):
 
-uv run scripts/install_bob_mcp.py ./config/fastmcp.json \
+uv run scripts/install_bob_mcp.py ./fastmcp.json \
     --project "$PWD" \
     --env-file .env
 
