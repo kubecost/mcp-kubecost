@@ -208,7 +208,11 @@ def test_consent_page_keeps_the_security_critical_form_intact(branding_installed
 
 
 def test_consent_page_needs_no_csp_relaxation(branding_installed):
-    """The overlay adds an inline <style> and a data: image — both already permitted."""
+    """The overlay adds an inline <style> and a data: image — both already permitted.
+
+    The submit-once guard is the one extra source: a hashed inline script, not
+    ``script-src 'unsafe-inline'`` and not a webfont.
+    """
     html = _render_consent()
     csp = re.search(r'Content-Security-Policy" content="([^"]+)"', html)
     assert csp is not None
@@ -218,6 +222,35 @@ def test_consent_page_needs_no_csp_relaxation(branding_installed):
     assert "data:" in policy
     # No webfont is fetched, so the absent font-src directive is not a problem.
     assert "font-src" not in policy
+    assert "script-src 'unsafe-inline'" not in policy
+    assert f"script-src '{branding._CONSENT_SUBMIT_GUARD_CSP_HASH}'" in policy
+
+
+def test_consent_page_locks_the_form_after_the_first_submit(branding_installed):
+    """A second click while the IdP redirect is in flight must not POST again."""
+    html = _render_consent()
+    assert branding._CONSENT_SUBMIT_GUARD_JS in html
+    assert html.count(branding._CONSENT_SUBMIT_GUARD_JS) == 1
+    # Disabled submitters drop `action` from the POST; FastMCP needs it.
+    assert ".disabled" not in branding._CONSENT_SUBMIT_GUARD_JS
+    assert "data-submitting" in branding._CONSENT_SUBMIT_GUARD_JS
+    # CSS pressed / in-flight state must ride along with the script.
+    assert "form[data-submitting]" in html
+    assert ".btn-approve:active" in html
+
+
+def test_error_pages_do_not_get_the_consent_submit_guard(branding_installed):
+    html = fastmcp_proxy.create_error_html(
+        error_title="Authorization Failed",
+        error_message="Expired.",
+        server_name="mcp-kubecost",
+        server_icon_url=KUBECOST_LOGO_DATA_URI,
+    )
+    assert branding._CONSENT_SUBMIT_GUARD_JS not in html
+    csp = re.search(r'Content-Security-Policy" content="([^"]+)"', html)
+    if csp is not None:
+        policy = html_module.unescape(csp.group(1))
+        assert "script-src" not in policy
 
 
 def test_consent_page_declares_a_favicon(branding_installed):

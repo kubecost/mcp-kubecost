@@ -194,7 +194,7 @@ def _form_fields(html: str) -> tuple[str, str]:
 
 def run_checks(base: str) -> tuple[list[tuple[str, bool, str]], str]:
     """Return the (description, ok, detail) list plus the served consent HTML."""
-    from mcp_kubecost.branding import ACCENT, FONT_STACK, INK, KUBECOST_WEBSITE_URL
+    from mcp_kubecost.branding import _CONSENT_SUBMIT_GUARD_CSP_HASH, ACCENT, FONT_STACK, INK, KUBECOST_WEBSITE_URL
 
     results: list[tuple[str, bool, str]] = []
 
@@ -241,6 +241,14 @@ def run_checks(base: str) -> tuple[list[tuple[str, bool, str]], str]:
 
             policy = html_module.unescape(csp.group(1))
             check("CSP not relaxed for fonts", "font-src" not in policy, policy)
+            check(
+                "CSP allows the hashed submit-guard script",
+                f"script-src '{_CONSENT_SUBMIT_GUARD_CSP_HASH}'" in policy,
+                policy,
+            )
+            check("CSP still forbids unhashed scripts", "script-src 'unsafe-inline'" not in policy, policy)
+
+        check("submit guard is on the consent form", 'id="consentForm"' in html and "data-submitting" in html)
 
         # The flow must still work through the restyled page.
         txn, csrf = _form_fields(html)
