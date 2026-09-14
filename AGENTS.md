@@ -108,7 +108,7 @@ API call (broad fetch, large limit)
 | `get_kubecost_workload_costs` | `top_n=20` | `min_total_cost` | $1.00 |
 | `get_kubecost_cost_comparison` | `top_n=20` | (none — diff is already aggregated) | — |
 | `get_container_savings_recommendations` | `top_n=20` (per list) | `min_monthly_savings` (candidates only) | none (suggest $5.00) |
-| `get_abandoned_workloads` | `limit=20` | (API-side threshold) | 500 bytes/s |
+| `get_abandoned_workloads` | `limit=20` + `offset` | (API-side threshold) | 500 bytes/s |
 | `get_pv_sizing_recommendations` | `top_n=20` | `min_monthly_savings` | $1.00 |
 | `get_local_disk_savings` | `top_n=20` | `min_monthly_savings` | $1.00 |
 | `get_unclaimed_volumes` | `top_n=20` | `min_monthly_cost` | $1.00 |
@@ -118,6 +118,7 @@ Design rules:
 - Default to **20 rows** in every tool response — enough for an LLM to reason over without token bloat.
 - Always expose a `top_n` or `limit` parameter so callers can request more when needed.
 - Response metadata (`total_cost`, `row_count`, `truncated`) must describe the full filtered population, not just the sliced rows.
+- `get_abandoned_workloads` additionally returns `returned_count` / `returned_monthly_savings` for the page and `total_count` / `total_monthly_savings` for the population, plus `next_offset` when `truncated=True`. The Kubecost endpoint has working `limit`/`offset` but no totals in the payload, so the tool pages internally then slices.
 - When the Kubecost API has no server-side filter for a field (e.g. `totalCost`), apply the filter client-side after fetch.
 - Set `truncated=True` when rows are sliced so the caller knows more data exists.
 - Note that `get_container_savings_recommendations` takes `min_monthly_savings=None` as the default (no filter). Pass `5.0` to cut noise. Profiles do not change this filter.
@@ -179,7 +180,7 @@ uv run scripts/show_sizing_profiles.py --check  # invariants only, exit 1 on fai
 
 FastMCP serializes each returned Pydantic model **twice** — once as a JSON `TextContent` block and once as `structuredContent`. This is deliberate: the MCP specification (2025-11-25) says a tool returning structured content SHOULD also return the serialized JSON in a text block, for clients that do not read `structuredContent`. Do not "optimize" it away with `ToolResult` or middleware. To shrink a response, shrink the payload — fewer fields, lower `top_n`.
 
-`_VERSION` in `kubecost_tools.py` is a single module constant applied to **every** tool's `version=`, so bumping it relabels all 11. Bump on a breaking response-shape change and update the "Contract version" line in the module docstring to match. Currently **9.0**.
+`_VERSION` in `kubecost_tools.py` is a single module constant applied to **every** tool's `version=`, so bumping it relabels all 11. Bump on a breaking response-shape change and update the "Contract version" line in the module docstring to match. Currently **10.0**.
 
 ## Code Conventions
 

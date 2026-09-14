@@ -103,14 +103,17 @@ value.
 ### Abandoned workload discovery
 1. Invoke `explore_abandoned_workloads` prompt to walk the user through threshold and scope choices
 2. Call `get_abandoned_workloads` with defaults first (days=2, threshold=500) to get an initial picture
-3. Sort results by `monthlySavings` -- focus review on highest-cost idle pods
-4. Check `owner_kind` on every row. Network traffic is the only signal, so scheduled work is
+3. Compare `total_monthly_savings` / `total_count` with get_savings_overview —
+   `returned_monthly_savings` is this page only. While `truncated=True`, call again
+   with `offset=next_offset`
+4. Sort results by `monthlySavings` -- focus review on highest-cost idle pods
+5. Check `owner_kind` on every row. Network traffic is the only signal, so scheduled work is
    flagged by construction: a weekly job is silent on 5 of 7 days, and a 2-day lookback
    cannot tell it from a dead workload. Re-run with `days` past the job's interval (7 for
    weekly, 30+ for monthly) before drawing a conclusion. Queue consumers and pods writing
    only to local storage also register little traffic while doing real work
-5. Confirm with the owning team before decommissioning; do NOT suggest deletion without confirmation
-6. To widen the search: increase `days` (e.g. 7 or 30) or `threshold` (e.g. 1000 bytes/s)
+6. Confirm with the owning team before decommissioning; do NOT suggest deletion without confirmation
+7. To widen the search: increase `days` (e.g. 7 or 30) or `threshold` (e.g. 1000 bytes/s)
 
 ### Storage savings investigation
 1. Call `get_savings_overview` to confirm storage categories have meaningful savings

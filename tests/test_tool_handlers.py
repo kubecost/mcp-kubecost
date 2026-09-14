@@ -20,6 +20,7 @@ from pytest_httpx import HTTPXMock
 from mcp_kubecost.domain.kubecost.sizing_guidance import SIZING_MECHANICS
 from mcp_kubecost.middleware import TextContentSummaryMiddleware
 from mcp_kubecost.skills import register_all_skills
+from mcp_kubecost.tools import kubecost_tools as ktools
 from mcp_kubecost.tools.kubecost_tools import (
     MISSING_CLOUD_NODE_LABELS_NOTE,
     _default_wow_windows,
@@ -659,7 +660,12 @@ class TestGetAbandonedWorkloads:
         sc = _sc(result)
         assert sc["status"] == "ok"
         assert sc["workload_count"] == 2
+        assert sc["returned_count"] == 2
+        assert sc["total_count"] == 2
+        assert sc["returned_monthly_savings"] == pytest.approx(50.5)
         assert sc["total_monthly_savings"] == pytest.approx(50.5)
+        assert sc["truncated"] is False
+        assert sc["next_offset"] is None
 
     @pytest.mark.asyncio
     async def test_rows_sorted_by_savings_desc(self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response):
@@ -704,12 +710,142 @@ class TestGetAbandonedWorkloads:
         assert sc["threshold_bytes_per_second"] == 1000
 
     @pytest.mark.asyncio
-    async def test_truncated_flag_when_at_limit(self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response):
+    async def test_exactly_limit_rows_is_not_truncated(
+        self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response
+    ):
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
         tool = await mcp_app.get_tool("get_abandoned_workloads")
-        # limit=2 and response has exactly 2 rows → truncated=True
+        # Full population has 2 rows and limit=2 — that is the complete set, not a hint of more.
         result = await tool.run({"limit": 2})
-        assert _sc(result)["truncated"] is True
+        sc = _sc(result)
+        assert sc["truncated"] is False
+        assert sc["next_offset"] is None
+        assert sc["total_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_page_totals_split_when_truncated(self, httpx_mock: HTTPXMock, mcp_app):
+        payload = [
+            {
+                "pod": f"idle-{i}",
+                "namespace": "batch",
+                "node": "n1",
+                "clusterId": "c1",
+                "owners": [],
+                "ingressBytesPerSecond": 0.0,
+                "egressBytesPerSecond": 0.0,
+                "allocation": {"cpuCores": 0.1, "ramBytes": 1.0},
+                "monthlySavings": float(25 - i),
+            }
+            for i in range(25)
+        ]
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=payload)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        sc = _sc(await tool.run({"limit": 20}))
+        assert sc["truncated"] is True
+        assert sc["returned_count"] == 20
+        assert sc["workload_count"] == 20
+        assert sc["total_count"] == 25
+        assert sc["next_offset"] == 20
+        assert sc["offset"] == 0
+        assert sc["returned_monthly_savings"] == pytest.approx(sum(range(6, 26)))
+        assert sc["total_monthly_savings"] == pytest.approx(sum(range(1, 26)))
+        assert "pass offset=20" in sc["message"]
+        assert "Use next_offset" in sc["recommended_action"]
+
+    @pytest.mark.asyncio
+    async def test_offset_returns_next_page(self, httpx_mock: HTTPXMock, mcp_app):
+        payload = [
+            {
+                "pod": f"idle-{i}",
+                "namespace": "batch",
+                "node": "n1",
+                "clusterId": "c1",
+                "owners": [],
+                "ingressBytesPerSecond": 0.0,
+                "egressBytesPerSecond": 0.0,
+                "allocation": {"cpuCores": 0.1, "ramBytes": 1.0},
+                "monthlySavings": float(25 - i),
+            }
+            for i in range(25)
+        ]
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=payload)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        sc = _sc(await tool.run({"limit": 20, "offset": 20}))
+        assert sc["status"] == "ok"
+        assert sc["returned_count"] == 5
+        assert sc["total_count"] == 25
+        assert sc["truncated"] is False
+        assert sc["next_offset"] is None
+        assert sc["offset"] == 20
+        assert [r["pod"] for r in sc["rows"]] == [f"idle-{i}" for i in range(20, 25)]
+        assert sc["returned_monthly_savings"] == pytest.approx(sum(range(1, 6)))
+        assert sc["total_monthly_savings"] == pytest.approx(sum(range(1, 26)))
+
+    @pytest.mark.asyncio
+    async def test_offset_past_end_is_empty(self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response):
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        sc = _sc(await tool.run({"offset": 50}))
+        assert sc["status"] == "empty"
+        assert sc["total_count"] == 2
+        assert sc["total_monthly_savings"] == pytest.approx(50.5)
+        assert sc["rows"] == []
+
+    @pytest.mark.asyncio
+    async def test_internal_paging_walks_offset(self, httpx_mock: HTTPXMock, mcp_app, monkeypatch):
+        monkeypatch.setattr(ktools, "_ABANDONED_API_PAGE_SIZE", 2)
+        monkeypatch.setattr(ktools, "_ABANDONED_API_MAX_ROWS", 10)
+        page1 = [
+            {
+                "pod": "a",
+                "namespace": "ns",
+                "node": "n1",
+                "clusterId": "c1",
+                "owners": [],
+                "ingressBytesPerSecond": 0.0,
+                "egressBytesPerSecond": 0.0,
+                "allocation": {"cpuCores": 0.1, "ramBytes": 1.0},
+                "monthlySavings": 30.0,
+            },
+            {
+                "pod": "b",
+                "namespace": "ns",
+                "node": "n1",
+                "clusterId": "c1",
+                "owners": [],
+                "ingressBytesPerSecond": 0.0,
+                "egressBytesPerSecond": 0.0,
+                "allocation": {"cpuCores": 0.1, "ramBytes": 1.0},
+                "monthlySavings": 20.0,
+            },
+        ]
+        page2 = [
+            {
+                "pod": "c",
+                "namespace": "ns",
+                "node": "n1",
+                "clusterId": "c1",
+                "owners": [],
+                "ingressBytesPerSecond": 0.0,
+                "egressBytesPerSecond": 0.0,
+                "allocation": {"cpuCores": 0.1, "ramBytes": 1.0},
+                "monthlySavings": 10.0,
+            }
+        ]
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=page1)
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=page2)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        sc = _sc(await tool.run({"limit": 20}))
+        assert sc["total_count"] == 3
+        assert sc["returned_count"] == 3
+        assert sc["total_monthly_savings"] == pytest.approx(60.0)
+        assert sc["truncated"] is False
+        requests = httpx_mock.get_requests()
+        assert len(requests) == 2
+        assert requests[0].url.params["offset"] == "0"
+        assert requests[0].url.params["limit"] == "2"
+        assert requests[1].url.params["offset"] == "2"
+        assert requests[1].url.params["limit"] == "2"
 
 
 # ── get_savings_overview ─────────────────────────────────────────────────────
@@ -1562,7 +1698,7 @@ class TestScheduledWorkloadWarning:
         sc = _sc(await tool.run({}))
         assert sc["status"] == "ok"
         assert "scheduled work" in sc["message"].lower()
-        assert "1 row(s) are Job/CronJob-owned" in sc["message"]
+        assert "1 row(s) on this page are Job/CronJob-owned" in sc["message"]
 
     @pytest.mark.asyncio
     async def test_no_note_when_nothing_is_scheduled(self, httpx_mock: HTTPXMock, mcp_app):

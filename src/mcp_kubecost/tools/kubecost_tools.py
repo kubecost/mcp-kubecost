@@ -6,7 +6,7 @@ result sets are bounded via a ``top_n`` parameter with a ``truncated`` flag
 (client-side sort+slice), or true server-side ``limit``/``offset`` pagination
 where the upstream API supports it (e.g. ``get_resource_quota_recommendations``).
 
-Contract version: 9.0
+Contract version: 10.0
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ from mcp_kubecost.tools._common import (
 
 logger = logging.getLogger(__name__)
 
-_VERSION = "9.0"
+_VERSION = "10.0"
 
 # ---------------------------------------------------------------------------
 # API path segments — combined with get_settings().kubecost_api_base_path at call time
@@ -767,6 +767,11 @@ def _diff_allocation_rows(
 # ---------------------------------------------------------------------------
 
 _SAVINGS_API_FETCH_LIMIT = 1000  # Maximum rows to request from the Kubecost API per call
+# abandonedWorkloads returns a bare array (no itemCount / totalMonthlySavings), so
+# totals require paging until a short page. Page size matches the other savings
+# fetches; the cap bounds a runaway cluster without dropping typical populations.
+_ABANDONED_API_PAGE_SIZE = _SAVINGS_API_FETCH_LIMIT
+_ABANDONED_API_MAX_ROWS = 10_000
 
 # Algorithms that require a minimum window of MIN_QUANTILE_WINDOW days.
 _QUANTILE_ALGORITHMS: frozenset[str] = frozenset({"quantileofaverages", "quantileofmaxes"})
@@ -1756,22 +1761,52 @@ class AbandonedWorkloadsResponse(BaseToolResponse):
         default="",
         description="Cluster filter applied. Empty string means all clusters.",
     )
-    workload_count: int = Field(default=0, description="Number of abandoned workloads returned.")
+    workload_count: int = Field(
+        default=0,
+        description="Number of abandoned workloads in this page (same as returned_count / len(rows)).",
+    )
+    returned_count: int = Field(
+        default=0,
+        description="Number of abandoned workloads in this page.",
+    )
+    total_count: int = Field(
+        default=0,
+        description=(
+            "Number of abandoned workloads in the full population matching days/threshold/cluster. "
+            "Exceeds returned_count when truncated=True."
+        ),
+    )
+    returned_monthly_savings: float = Field(
+        default=0.0,
+        description="Sum of monthly_savings for the rows in this page (USD).",
+    )
     total_monthly_savings: float = Field(
         default=0.0,
-        description="Total estimated monthly savings if all returned workloads are decommissioned (USD).",
+        description=(
+            "Sum of monthly_savings across the full matching population (USD). "
+            "This is the figure to compare with get_savings_overview's abandonedWorkloads "
+            "category; returned_monthly_savings is only this page."
+        ),
     )
+    offset: int = Field(default=0, description="Pagination offset applied to the sorted population.")
     rows: list[AbandonedWorkloadRow] = Field(
         default_factory=list,
         description=(
-            "Abandoned workloads sorted by monthly_savings descending. "
-            "Each row has pod/namespace/cluster identity, network traffic rates, "
-            "and the estimated monthly cost if decommissioned."
+            "Abandoned workloads sorted by monthly_savings descending, then sliced to "
+            "[offset, offset+limit). Each row has pod/namespace/cluster identity, "
+            "network traffic rates, and the estimated monthly cost if decommissioned."
         ),
     )
     truncated: bool = Field(
         default=False,
-        description="True when the API returned exactly 'limit' rows — more may exist. Raise limit to retrieve all.",
+        description="True when more matching workloads exist after this page.",
+    )
+    next_offset: int | None = Field(
+        default=None,
+        description=(
+            "The offset value to pass in the next call to retrieve the following page. "
+            "Null when truncated=False (no further pages exist)."
+        ),
     )
 
 
@@ -2665,11 +2700,24 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         limit: Annotated[
             int,
             Field(
-                description="Maximum workloads to return. Default 20.",
+                description=(
+                    "Page size. Default 20. The full matching population is still fetched so "
+                    "total_count and total_monthly_savings describe every hit; only 'rows' is sliced."
+                ),
                 ge=1,
                 le=10000,
             ),
         ] = 20,
+        offset: Annotated[
+            int,
+            Field(
+                description=(
+                    "0-based index into the savings-sorted population. Default 0. "
+                    "When truncated=True, pass next_offset from the previous response to continue."
+                ),
+                ge=0,
+            ),
+        ] = 0,
     ) -> AbandonedWorkloadsResponse:
         """Return pods with abnormally low network traffic — possible abandoned workloads.
 
@@ -2677,6 +2725,13 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         below 'threshold' bytes/second over the lookback period. These workloads are
         still consuming compute and memory costs despite appearing idle. Results include
         estimated monthly savings per pod.
+
+        PAGINATION: The Kubecost endpoint returns a bare array (no totals), so this tool
+        pages the API internally, then slices the sorted population to [offset, offset+limit).
+        total_count / total_monthly_savings cover the full match; returned_count /
+        returned_monthly_savings cover this page. Follow next_offset while truncated=True
+        rather than raising limit. Compare total_monthly_savings with
+        get_savings_overview's abandonedWorkloads category — not the page sum.
 
         IMPORTANT — network traffic is the ONLY signal, so scheduled and queue-driven
         work is flagged by construction rather than because it is abandoned:
@@ -2701,11 +2756,10 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         resolved_window = _resolve_window_defensively(f"{days}d")
         window_display = resolved_window.display if resolved_window else f"{days} days"
         try:
-            raw = await _fetch_abandoned_workloads(
+            raw, fetch_capped = await _fetch_abandoned_workloads(
                 days=days,
                 threshold=threshold,
                 cluster=cluster,
-                limit=limit,
             )
         except McpToolError as exc:
             _err_msg, _err_action = mcp_error_response_fields(exc)
@@ -2716,9 +2770,19 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 days=days,
                 threshold_bytes_per_second=threshold,
                 cluster_filter=cluster,
+                offset=offset,
             )
 
         rows = _parse_abandoned_workloads_response(raw)
+        total_count = len(rows)
+        total_savings = round(sum(r.get("monthlySavings", 0.0) or 0.0 for r in rows), 2)
+        sliced = rows[offset : offset + limit]
+        returned_count = len(sliced)
+        returned_savings = round(sum(r.get("monthlySavings", 0.0) or 0.0 for r in sliced), 2)
+        more_in_hand = offset + returned_count < total_count
+        truncated = more_in_hand or fetch_capped
+        next_offset = (offset + returned_count) if more_in_hand else None
+
         if not rows:
             return AbandonedWorkloadsResponse(
                 status=QueryStatus.EMPTY,
@@ -2731,29 +2795,62 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 resolved_window=resolved_window,
                 threshold_bytes_per_second=threshold,
                 cluster_filter=cluster,
+                offset=offset,
             )
 
-        total_savings = round(sum(r.get("monthlySavings", 0.0) or 0.0 for r in rows), 2)
-        truncated = len(rows) >= limit
+        if not sliced:
+            return AbandonedWorkloadsResponse(
+                status=QueryStatus.EMPTY,
+                message=(
+                    f"offset={offset} is past the end of {total_count} matching workload(s) "
+                    f"(${total_savings:,.2f}/month)."
+                ),
+                recommended_action="Pass offset=0 (or a smaller offset) to see the savings-ranked list.",
+                days=days,
+                resolved_window=resolved_window,
+                threshold_bytes_per_second=threshold,
+                cluster_filter=cluster,
+                total_count=total_count,
+                total_monthly_savings=total_savings,
+                offset=offset,
+                truncated=False,
+                next_offset=None,
+            )
 
         # Scheduled work is silent between runs, so a short lookback flags it regardless of
         # health. Surface the count so the caller does not read these as dead workloads.
-        scheduled = [r for r in rows if str(r.get("owner_kind", "")).lower() in _SCHEDULED_OWNER_KINDS]
+        scheduled = [r for r in sliced if str(r.get("owner_kind", "")).lower() in _SCHEDULED_OWNER_KINDS]
         scheduled_note = (
-            f" {len(scheduled)} row(s) are Job/CronJob-owned — scheduled work is expected to be "
+            f" {len(scheduled)} row(s) on this page are Job/CronJob-owned — scheduled work is expected to be "
             f"silent between runs, so verify the lookback ({days}d) exceeds their interval."
             if scheduled
             else ""
         )
+        cap_note = (
+            f" Population capped at {total_count} rows while paging the API; totals may be incomplete."
+            if fetch_capped
+            else ""
+        )
+        page_note = ""
+        if next_offset is not None:
+            page_note = (
+                f" — showing {returned_count} totaling ${returned_savings:,.2f}; "
+                f"pass offset={next_offset} for the next page."
+            )
+        elif offset > 0:
+            page_note = f" (page offset={offset}, showing {returned_count})."
+        else:
+            page_note = "."
 
         return AbandonedWorkloadsResponse(
             status=QueryStatus.OK,
             message=(
-                f"Found {len(rows)} low-traffic workload(s) with estimated monthly savings "
+                f"Found {total_count} low-traffic workload(s) with estimated monthly savings "
                 f"of ${total_savings:,.2f}"
                 + (f" in cluster '{cluster}'" if cluster else " across all clusters")
                 + f" (threshold={threshold} bytes/s, {window_display})"
-                + (" — result may be truncated, increase limit for more." if truncated else ".")
+                + page_note
+                + cap_note
                 + scheduled_note
             ),
             recommended_action=(
@@ -2761,15 +2858,21 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 "the only evidence here — it does not prove a workload is unused. Check owner_kind "
                 f"for scheduled work, confirm the {days}d lookback covers the workload's cycle, and "
                 "confirm with the owning team before decommissioning anything."
+                + (" Use next_offset to retrieve further pages." if next_offset is not None else "")
             ),
             days=days,
             resolved_window=resolved_window,
             threshold_bytes_per_second=threshold,
             cluster_filter=cluster,
-            workload_count=len(rows),
+            workload_count=returned_count,
+            returned_count=returned_count,
+            total_count=total_count,
+            returned_monthly_savings=returned_savings,
             total_monthly_savings=total_savings,
-            rows=[AbandonedWorkloadRow.model_validate(r, from_attributes=False) for r in rows],
+            offset=offset,
+            rows=[AbandonedWorkloadRow.model_validate(r, from_attributes=False) for r in sliced],
             truncated=truncated,
+            next_offset=next_offset,
         )
 
     # ── Savings overview and new savings tools ───────────────────────────────
@@ -3837,6 +3940,9 @@ Pods with average network traffic (both ingress AND egress) below this value are
 ---
 
 Once you've answered, call `get_abandoned_workloads` with your choices.
+Compare **total_monthly_savings** (full population) with get_savings_overview —
+**returned_monthly_savings** is only the current page. While truncated=True, call
+again with offset=next_offset rather than raising limit.
 Present a summary table sorted by monthly savings, highlight the top 3 candidates, and
 suggest next steps (confirm with owning team before decommissioning).
 """
@@ -3915,32 +4021,78 @@ async def _fetch_allocation(
     return await call_get_api(path, params=params)
 
 
-async def _fetch_abandoned_workloads(
-    days: int,
-    threshold: int,
-    cluster: str,
-    limit: int,
-) -> list[dict[str, Any]]:
-    """Fetch abandoned workloads from the Kubecost savings API."""
-    params: dict[str, Any] = {
-        "days": days,
-        "threshold": threshold,
-        "offset": "",
-        "limit": limit,
-        "filter": f'cluster:"{cluster}"' if cluster else "",
-    }
-    path = f"{get_settings().kubecost_api_base_path}{_SEG_ABANDONED_WORKLOADS}"
-    logger.debug("Kubecost abandoned workloads: path=%s days=%s threshold=%s", path, days, threshold)
-    result = await call_get_api(path, params=params)
-    # API returns a bare JSON array
+def _unwrap_abandoned_workloads_payload(result: Any) -> list[dict[str, Any]]:
+    """Normalize the abandonedWorkloads payload to a list of row dicts.
+
+    The API returns a bare JSON array. A dict wrapper is accepted defensively.
+    """
     if isinstance(result, list):
-        return result
-    # Defensive: handle unexpected dict wrapper
+        return [row for row in result if isinstance(row, dict)]
     if isinstance(result, dict):
         wrapped_rows = result.get("data", result.get("workloads", []))
         if isinstance(wrapped_rows, list):
             return [row for row in wrapped_rows if isinstance(row, dict)]
     return []
+
+
+async def _fetch_abandoned_workloads_page(
+    days: int,
+    threshold: int,
+    cluster: str,
+    limit: int,
+    offset: int,
+) -> list[dict[str, Any]]:
+    """Fetch one page from GET .../savings/abandonedWorkloads."""
+    params: dict[str, Any] = {
+        "days": days,
+        "threshold": threshold,
+        "offset": offset,
+        "limit": limit,
+        "filter": f'cluster:"{cluster}"' if cluster else "",
+    }
+    path = f"{get_settings().kubecost_api_base_path}{_SEG_ABANDONED_WORKLOADS}"
+    logger.debug(
+        "Kubecost abandoned workloads: path=%s days=%s threshold=%s offset=%s limit=%s",
+        path,
+        days,
+        threshold,
+        offset,
+        limit,
+    )
+    return _unwrap_abandoned_workloads_payload(await call_get_api(path, params=params))
+
+
+async def _fetch_abandoned_workloads(
+    days: int,
+    threshold: int,
+    cluster: str,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Page the abandonedWorkloads API until exhausted or ``_ABANDONED_API_MAX_ROWS``.
+
+    The endpoint has working ``limit``/``offset`` but no totals in the payload, so a
+    single short page cannot distinguish "exactly ``limit`` hits" from "more exist",
+    and cannot produce ``total_monthly_savings`` for comparison with the overview.
+    """
+    rows: list[dict[str, Any]] = []
+    fetch_offset = 0
+    while True:
+        remaining_cap = _ABANDONED_API_MAX_ROWS - len(rows)
+        if remaining_cap <= 0:
+            return rows, True
+        page_limit = min(_ABANDONED_API_PAGE_SIZE, remaining_cap)
+        page = await _fetch_abandoned_workloads_page(
+            days=days,
+            threshold=threshold,
+            cluster=cluster,
+            limit=page_limit,
+            offset=fetch_offset,
+        )
+        rows.extend(page)
+        if len(page) < page_limit:
+            return rows, False
+        fetch_offset += len(page)
+        if len(rows) >= _ABANDONED_API_MAX_ROWS:
+            return rows, True
 
 
 def _parse_abandoned_workloads_response(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
