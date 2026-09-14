@@ -788,6 +788,38 @@ def _cap_raw_rows(rows: list[dict[str, Any]], resource: str) -> tuple[list[dict[
     return rows, False
 
 
+MISSING_CLOUD_NODE_LABELS_NOTE = (
+    "note that cluster and node group sizing depend on cloud provider node labels. "
+    "Invalid results are expected for on-prem and clusters missing these labels."
+)
+
+_MISSING_INSTANCE_TYPE_WARNING_MARKERS = (
+    "failed to get change instance type",
+    "failed to get current instance type",
+)
+
+
+def _rewrite_node_group_sizing_warnings(warnings: list[str] | None) -> list[str]:
+    """Replace Kubecost's missing-instance-type errors with a labels/on-prem note.
+
+    ``GET /savings/nodeGroupSizing/recommendations`` emits
+    ``failed to get change instance type ... instance type __empty__`` when the
+    cluster has no cloud-provider node labels (typical on-prem). Those strings
+    are not actionable; rewrite them (once) and leave any other warnings intact.
+    """
+    rewritten: list[str] = []
+    injected = False
+    for warning in warnings or []:
+        lowered = warning.lower()
+        if any(marker in lowered for marker in _MISSING_INSTANCE_TYPE_WARNING_MARKERS):
+            if not injected:
+                rewritten.append(MISSING_CLOUD_NODE_LABELS_NOTE)
+                injected = True
+            continue
+        rewritten.append(warning)
+    return rewritten
+
+
 def _classify_node_recommendation(rec_str: str, before_state: NodeGroupState, after_state: NodeGroupState) -> str:
     """Classify a node group recommendation as ``'cost_saving'`` or ``'capacity'``.
 
@@ -3102,7 +3134,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             )
 
         recs_raw, was_capped = _cap_raw_rows(raw.get("recommendations", []), "node group sizing")
-        warnings: list[str] = raw.get("warnings") or []
+        warnings = _rewrite_node_group_sizing_warnings(raw.get("warnings") or [])
         window_info = raw.get("window", {})
         window_str = window_info.get("start", window) if isinstance(window_info, dict) else window
 

@@ -21,6 +21,7 @@ from mcp_kubecost.domain.kubecost.sizing_guidance import SIZING_MECHANICS
 from mcp_kubecost.middleware import TextContentSummaryMiddleware
 from mcp_kubecost.skills import register_all_skills
 from mcp_kubecost.tools.kubecost_tools import (
+    MISSING_CLOUD_NODE_LABELS_NOTE,
     _default_wow_windows,
     _diff_allocation_rows,
     _validate_comparison_windows,
@@ -933,6 +934,20 @@ class TestGetClusterRightsizingRecommendations:
         tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
         result = await tool.run({"cluster": "kc-demo-prod"})
         assert "warnings" in _sc(result)
+
+    @pytest.mark.asyncio
+    async def test_empty_instance_type_warning_rewritten(
+        self, httpx_mock: HTTPXMock, mcp_app, node_group_sizing_api_response
+    ):
+        payload = node_group_sizing_api_response
+        payload["data"]["warnings"] = [
+            "failed to get change instance type for node group __empty__/__empty__ err: "
+            "failed to get current instance type __empty__ for nodegroup: __empty__/__empty__"
+        ]
+        httpx_mock.add_response(method="GET", url=_node_group_url(), json=payload)
+        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        result = await tool.run({"cluster": "kcmocp2"})
+        assert _sc(result)["warnings"] == [MISSING_CLOUD_NODE_LABELS_NOTE]
 
     @pytest.mark.asyncio
     async def test_empty_recommendations(self, httpx_mock: HTTPXMock, mcp_app):
