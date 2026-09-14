@@ -28,6 +28,8 @@ Palette and font stack are taken from the Kubecost demo UI's stylesheet
 from __future__ import annotations
 
 import base64
+import hashlib
+import html as html_module
 import re
 from collections.abc import Callable
 from functools import wraps
@@ -288,6 +290,37 @@ _THEME_CSS = f"""
         box-shadow: 0 4px 6px -1px rgba(2, 57, 39, .18);
     }}
 
+    button:focus-visible {{
+        outline: 2px solid {ACCENT_TEXT};
+        outline-offset: 2px;
+    }}
+
+    /* Pressed + in-flight: ink fill so Allow Access does not look idle while
+       the POST is in flight. Undo the hover lift so the control stays down. */
+    .btn-approve:active, .btn-primary:active,
+    form[data-submitting] .btn-approve {{
+        background: {INK};
+        color: {ACCENT_BRIGHT};
+        transform: translateY(1px);
+        box-shadow: inset 0 2px 4px rgba(2, 57, 39, .35);
+    }}
+
+    .btn-deny:active, .btn-secondary:active,
+    form[data-submitting] .btn-deny {{
+        background: {SURFACE_SUNK};
+        transform: translateY(1px);
+        box-shadow: inset 0 2px 4px rgba(2, 57, 39, .12);
+    }}
+
+    form[data-submitting] {{
+        pointer-events: none;
+        cursor: wait;
+    }}
+
+    form[data-submitting] .btn-deny {{
+        opacity: 0.5;
+    }}
+
     /* CIMD verified-domain badge */
     .cimd-badge {{
         background: {SUCCESS_BG};
@@ -356,6 +389,29 @@ _COPY_SUBSTITUTIONS: tuple[tuple[str, str], ...] = (
 )
 
 _HEAD_CLOSE = re.compile(r"</head>", re.IGNORECASE)
+_BODY_CLOSE = re.compile(r"</body>", re.IGNORECASE)
+_CSP_CONTENT = re.compile(r'(Content-Security-Policy" content=")([^"]+)(")', re.IGNORECASE)
+
+# FastMCP's consent form has no submit-once guard. A second click while the
+# IdP redirect is in flight can POST with a consumed CSRF cookie and land on
+# "Invalid or expired consent token". CSS :active only covers mouse-down, so
+# a tiny inline listener locks the form after the first submit.
+#
+# Do not disable the clicked button: disabled controls are omitted from the
+# POST, and FastMCP reads `action` off the submitter (`approve` / `deny`).
+# Hash the exact source (not 'unsafe-inline') so default-src 'none' still
+# blocks anything else.
+_CONSENT_SUBMIT_GUARD_JS = (
+    '(function(){var f=document.getElementById("consentForm");if(!f)return;'
+    'f.addEventListener("submit",function(e){if(f.getAttribute("data-submitting"))'
+    '{e.preventDefault();return;}f.setAttribute("data-submitting","1");'
+    'var s=e.submitter;if(s&&s.classList.contains("btn-approve"))'
+    's.textContent="Allowing access...";'
+    'else if(s&&s.classList.contains("btn-deny"))s.textContent="Denying...";});})();'
+)
+_CONSENT_SUBMIT_GUARD_CSP_HASH = "sha256-" + base64.b64encode(
+    hashlib.sha256(_CONSENT_SUBMIT_GUARD_JS.encode("utf-8")).digest()
+).decode("ascii")
 
 # FastMCP's create_page() declares no icon, so a browser falls back to requesting
 # /favicon.ico at the origin root — a 404 in the access log on every fresh visit.
@@ -371,6 +427,39 @@ _FAVICON_LINK = f'<link rel="icon" href="{KUBECOST_LOGO_DATA_URI}">'
 _KUBECOST_BRANDED = "_kubecost_branded"
 
 
+def _install_consent_submit_guard(html: str) -> str:
+    """Lock FastMCP's consent form after the first submit, if this page has one.
+
+    Adds a hashed inline script and the matching ``script-src 'sha256-...'``
+    source to the CSP meta tag. Leaves error pages and fragments untouched.
+    Skips the script if the CSP meta cannot be patched, so we never emit JS
+    that ``default-src 'none'`` would then block.
+    """
+    if 'id="consentForm"' not in html:
+        return html
+    if f"<script>{_CONSENT_SUBMIT_GUARD_JS}</script>" in html:
+        return html
+    patched = False
+
+    def add_hash(match: re.Match[str]) -> str:
+        nonlocal patched
+        policy = html_module.unescape(match.group(2))
+        if _CONSENT_SUBMIT_GUARD_CSP_HASH in policy:
+            patched = True
+            return match.group(0)
+        if "script-src" in policy:
+            return match.group(0)  # unknown script-src; do not emit a blocked script
+        policy = f"{policy.rstrip()}; script-src '{_CONSENT_SUBMIT_GUARD_CSP_HASH}'"
+        patched = True
+        return f"{match.group(1)}{html_module.escape(policy, quote=True)}{match.group(3)}"
+
+    html = _CSP_CONTENT.sub(add_hash, html, count=1)
+    if not patched or not _BODY_CLOSE.search(html):
+        return html
+    script = f"<script>{_CONSENT_SUBMIT_GUARD_JS}</script></body>"
+    return _BODY_CLOSE.sub(lambda _match: script, html, count=1)
+
+
 def apply_kubecost_branding(html: str) -> str:
     """Return ``html`` restyled as Kubecost.
 
@@ -378,6 +467,8 @@ def apply_kubecost_branding(html: str) -> str:
     few strings in FastMCP's copy that name FastMCP to the reader, and replaces
     the FastMCP fallback logo URL with the Kubecost PNG data URI so callback
     error pages (which omit ``server_icon_url``) never fetch an external asset.
+    On the consent screen, also installs a hashed submit-once guard so Allow
+    Access cannot be double-posted while the IdP redirect is in flight.
     Returns the input unchanged if there is no ``<head>`` to extend — FastMCP
     emits a few bare HTML fragments, which is what the ``/favicon.ico`` route covers.
     """
@@ -391,7 +482,8 @@ def apply_kubecost_branding(html: str) -> str:
     # backslash-escape handling (\1, \g<name>, ...) — CSS is full of backslash
     # escapes that would otherwise be at the mercy of what re.sub thinks they mean.
     injected = f"{_FAVICON_LINK}<style>{_THEME_CSS}</style></head>"
-    return _HEAD_CLOSE.sub(lambda _match: injected, html, count=1)
+    html = _HEAD_CLOSE.sub(lambda _match: injected, html, count=1)
+    return _install_consent_submit_guard(html)
 
 
 def _brand_html_builder(builder: Callable[..., str]) -> Callable[..., str]:
