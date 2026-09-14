@@ -1225,6 +1225,99 @@ class TestGetResourceQuotaRecommendations:
         # totalMonthlySavings is 0 in the fixture — that's expected for this correctness tool
         assert _sc(result)["total_monthly_savings"] == pytest.approx(0.0)
 
+    @pytest.mark.asyncio
+    async def test_duplicate_cluster_namespace_category_removed(self, httpx_mock: HTTPXMock, mcp_app):
+        """Duplicate (cluster, namespace, category) rows from the API are deduplicated."""
+        payload = {
+            "code": 200,
+            "data": {
+                "window": {"start": "2026-08-31T00:00:00Z", "end": "2026-09-15T00:00:00Z"},
+                "itemCount": 4,
+                "totalMonthlySavings": 10.0,
+                "recommendations": [
+                    {
+                        "cluster": "c1",
+                        "namespace": "ns-a",
+                        "category": "compute",
+                        "isNewResourceQuota": False,
+                        "resources": [
+                            {
+                                "resourceType": "requests.cpu",
+                                "category": "compute",
+                                "used": "100m",
+                                "recommended": "150m",
+                                "isNewResource": False,
+                                "isDownsize": False,
+                            }
+                        ],
+                    },
+                    # exact duplicate of the first row
+                    {
+                        "cluster": "c1",
+                        "namespace": "ns-a",
+                        "category": "compute",
+                        "isNewResourceQuota": False,
+                        "resources": [
+                            {
+                                "resourceType": "requests.cpu",
+                                "category": "compute",
+                                "used": "100m",
+                                "recommended": "150m",
+                                "isNewResource": False,
+                                "isDownsize": False,
+                            }
+                        ],
+                    },
+                    {
+                        "cluster": "c1",
+                        "namespace": "ns-b",
+                        "category": "compute",
+                        "isNewResourceQuota": True,
+                        "resources": [
+                            {
+                                "resourceType": "requests.cpu",
+                                "category": "compute",
+                                "used": "200m",
+                                "recommended": "300m",
+                                "isNewResource": True,
+                                "isDownsize": False,
+                            }
+                        ],
+                    },
+                    # duplicate of ns-b
+                    {
+                        "cluster": "c1",
+                        "namespace": "ns-b",
+                        "category": "compute",
+                        "isNewResourceQuota": True,
+                        "resources": [
+                            {
+                                "resourceType": "requests.cpu",
+                                "category": "compute",
+                                "used": "200m",
+                                "recommended": "300m",
+                                "isNewResource": True,
+                                "isDownsize": False,
+                            }
+                        ],
+                    },
+                ],
+            },
+        }
+        httpx_mock.add_response(method="GET", url=_resource_quota_url(), json=payload)
+        tool = await mcp_app.get_tool("get_resource_quota_recommendations")
+        result = await tool.run({})
+        sc = _sc(result)
+        assert sc["status"] == "ok"
+        # 4 raw rows → 2 unique after dedup
+        assert len(sc["recommendations"]) == 2
+        namespaces = [r["namespace"] for r in sc["recommendations"]]
+        assert namespaces == ["ns-a", "ns-b"]
+        # item_count adjusted: 4 raw - 2 dupes = 2
+        assert sc["item_count"] == 2
+        # integrity warning present in message
+        assert "removed" in sc["message"]
+
 
 # ── _validate_comparison_windows (Task 1) ────────────────────────────────────
 

@@ -3548,20 +3548,27 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 "these may be unattributed recommendations from the Kubecost API."
             )
 
-        # P0: Dedupe check — warn on duplicate (cluster, namespace, category) keys.
+        # P0: Dedupe — drop duplicate (cluster, namespace, category) rows returned by the API.
+        # The API occasionally sends the same (cluster, namespace, category) triple multiple times
+        # within a single page; keep the first occurrence and adjust item_count accordingly.
         seen_keys: set[tuple[str, str, str]] = set()
-        dupe_count = 0
+        deduped: list[dict[str, Any]] = []
         for r in recs_raw:
             key = (r.get("cluster", ""), r.get("namespace", ""), r.get("category", ""))
-            if key in seen_keys:
-                dupe_count += 1
-            else:
+            if key not in seen_keys:
                 seen_keys.add(key)
+                deduped.append(r)
+        dupe_count = len(recs_raw) - len(deduped)
         if dupe_count:
-            logger.warning("ResourceQuota API returned %d duplicate (cluster, namespace, category) key(s)", dupe_count)
-            integrity_warnings.append(
-                f"{dupe_count} duplicate (cluster, namespace, category) combination(s) detected in API response."
+            logger.warning(
+                "ResourceQuota API returned %d duplicate (cluster, namespace, category) key(s); removing them",
+                dupe_count,
             )
+            integrity_warnings.append(
+                f"{dupe_count} duplicate (cluster, namespace, category) combination(s) removed from API response."
+            )
+            recs_raw = deduped
+            item_count = max(0, item_count - dupe_count)
 
         if not recs_raw:
             return ResourceQuotaResponse(
