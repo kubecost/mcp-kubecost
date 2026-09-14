@@ -3241,6 +3241,23 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         window_info = raw.get("window", {})
         window_str = window_info.get("start", window) if isinstance(window_info, dict) else window
 
+        # Missing instance-type labels make Kubecost invent __empty__ groups and prices.
+        # Do not present those as recommendations; the text summary is the warning alone.
+        if MISSING_CLOUD_NODE_LABELS_NOTE in warnings:
+            return ClusterRightsizingResponse(
+                status=QueryStatus.EMPTY,
+                message=MISSING_CLOUD_NODE_LABELS_NOTE,
+                recommended_action=(
+                    "Skip node-group sizing on on-prem clusters, or ensure cloud-provider "
+                    "instance-type labels are present on nodes before retrying."
+                ),
+                cluster=cluster,
+                profile=profile,
+                window=window_str,
+                resolved_window=resolved_window,
+                warnings=warnings,
+            )
+
         recs_raw_sorted = sorted(recs_raw, key=lambda r: float(r.get("savingsPerMonth", 0.0) or 0.0), reverse=True)
 
         def _resource_metrics(res: dict[str, Any]) -> ResourceMetrics:

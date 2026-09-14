@@ -1083,7 +1083,15 @@ class TestGetClusterRightsizingRecommendations:
         httpx_mock.add_response(method="GET", url=_node_group_url(), json=payload)
         tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
         result = await tool.run({"cluster": "kcmocp2"})
-        assert _sc(result)["warnings"] == [MISSING_CLOUD_NODE_LABELS_NOTE]
+        sc = _sc(result)
+        assert sc["warnings"] == [MISSING_CLOUD_NODE_LABELS_NOTE]
+        assert sc["status"] == "empty"
+        assert sc["message"] == MISSING_CLOUD_NODE_LABELS_NOTE
+        assert sc["recommendations"] == []
+        assert sc["recommendation_count"] == 0
+        assert sc["total_savings_per_month"] == 0.0
+        assert "Found" not in _text(result)
+        assert MISSING_CLOUD_NODE_LABELS_NOTE in _text(result)
 
     @pytest.mark.asyncio
     async def test_empty_recommendations(self, httpx_mock: HTTPXMock, mcp_app):
