@@ -81,6 +81,15 @@ call TOOL:
 call-json TOOL INPUT:
     fastmcp call {{MCP_CONFIG}} {{TOOL}} --input-json '{{INPUT}}'
 
+# Call every configured tool and prompt; CLUSTER overrides automatic cluster discovery.
+call-all CLUSTER="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    .venv/bin/python scripts/call_all_mcp.py \
+        --config "{{MCP_CONFIG}}" \
+        --cluster "{{CLUSTER}}" \
+        2>/dev/null
+
 # Run get_kubecost_cost_comparison for yesterday-vs-day-before and last-7-days-vs-month-ago
 cost-comparison AGGREGATE="namespace":
     scripts/cost_comparison-day.sh {{MCP_CONFIG}} {{AGGREGATE}}
@@ -127,20 +136,22 @@ update-dependencies:
     ./scripts/update_dependencies.py
     uv sync --all-extras --active --upgrade
 
+build:
+    uv sync --extra dev
 
-# Unit tests only (integration marker is deselected by default)
-test:
-    uv run pytest
+# Run tests
+test: build
+    uv run --frozen pytest -xvs tests
 
 # Full pytest suite, same selector CI uses (`-m ""`)
-test-all:
+test-all: build
     #!/usr/bin/env bash
     set -euo pipefail
     export KUBECOST_BASE_URL="${KUBECOST_BASE_URL:-https://demo.kubecost.xyz}"
-    uv run pytest -m ""
+    uv run pytest -m "" -xvs
 
 # Live integration tests only. Default target is tests/mcp-demo.json (same as the CI `integration` job).
-test-integration:
+test-integration: build
     #!/usr/bin/env bash
     set -euo pipefail
     export KUBECOST_BASE_URL="${KUBECOST_BASE_URL:-https://demo.kubecost.xyz}"
