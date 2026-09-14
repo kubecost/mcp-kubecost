@@ -131,19 +131,47 @@ def check_invariants() -> list[dict[str, Any]]:
     if missing:
         add("target ladder", False, f"profile(s) missing from SIZING_PROFILES: {', '.join(missing)}")
     else:
-        for key in TARGET_KEYS:
-            values = [SIZING_PROFILES[n][key] for n in LADDER_ORDER]
-            ok = values[0] < values[1] < values[2]
-            shown = " < ".join(f"{n} {v}" for n, v in zip(LADDER_ORDER, values, strict=True))
-            add(f"target ladder ({key})", ok, shown if ok else f"expected ascending, got {shown}")
+        # CPU ladder is strict: each profile must actually trade away more CPU headroom than
+        # the one before it, or the profile name promises something it does not deliver.
+        cpu_values = [SIZING_PROFILES[n]["target_cpu_utilization"] for n in LADDER_ORDER]
+        cpu_ok = cpu_values[0] < cpu_values[1] < cpu_values[2]
+        cpu_shown = " < ".join(f"{n} {v}" for n, v in zip(LADDER_ORDER, cpu_values, strict=True))
+        add(
+            "target ladder (target_cpu_utilization)",
+            cpu_ok,
+            cpu_shown if cpu_ok else f"expected strictly ascending, got {cpu_shown}",
+        )
+
+        # RAM ladder only has to be non-decreasing. `development` deliberately holds RAM at
+        # the production target instead of squeezing it, so equality here is correct.
+        ram_values = [SIZING_PROFILES[n]["target_ram_utilization"] for n in LADDER_ORDER]
+        ram_ok = ram_values[0] <= ram_values[1] <= ram_values[2]
+        ram_shown = " <= ".join(f"{n} {v}" for n, v in zip(LADDER_ORDER, ram_values, strict=True))
+        add(
+            "target ladder (target_ram_utilization)",
+            ram_ok,
+            ram_shown if ram_ok else f"expected non-decreasing, got {ram_shown}",
+        )
 
     offenders = [n for n, p in SIZING_PROFILES.items() if p["target_ram_utilization"] > p["target_cpu_utilization"]]
     add(
         "RAM target never exceeds CPU target",
         not offenders,
-        "memory is not compressible — an undersized RAM request OOM-kills rather than throttles"
+        "memory is not compressible — an under-provisioned RAM request invites eviction rather than throttling"
         if not offenders
         else f"squeezes RAM harder than CPU: {', '.join(offenders)}",
+    )
+
+    # The rule above is satisfied vacuously when every profile sets the two targets equal,
+    # which is how the principle stayed documented but unimplemented for several releases.
+    conservative = [n for n, p in SIZING_PROFILES.items() if p["target_ram_utilization"] < p["target_cpu_utilization"]]
+    add(
+        "at least one profile treats RAM more conservatively than CPU",
+        bool(conservative),
+        f"RAM given more headroom than CPU in: {', '.join(conservative)}"
+        if conservative
+        else "every profile sets target_ram_utilization == target_cpu_utilization, so the "
+        '"memory is not compressible" principle is documented but not implemented',
     )
 
     expected_keys = set(DEFAULT_SIZING_PARAMS)

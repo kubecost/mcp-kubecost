@@ -344,14 +344,22 @@ class TestIntegrationGetContainerSavingsRecommendations:
         )
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
 
-    def test_profiles_echo_increasing_target_utilization(self, savings_by_profile):
-        """HA 0.50 < production 0.65 < development 0.80 — the utilization axis."""
+    def test_profiles_echo_increasing_cpu_target_utilization(self, savings_by_profile):
+        """HA 0.50 < production 0.65 < development 0.80 on CPU.
+
+        RAM does not follow the same ladder: `development` holds memory at the production
+        target rather than squeezing it, because an under-provisioned memory request invites
+        eviction instead of merely slowing the workload down.
+        """
         for profile, expected in _EXPECTED_CPU_TARGETS.items():
             params = savings_by_profile[profile].get("parameters") or {}
             assert params.get("target_cpu_utilization") == expected, (
                 f"{profile} should send target_cpu_utilization={expected}, got {params.get('target_cpu_utilization')}"
             )
-            assert params.get("target_ram_utilization") == expected
+            ram = params.get("target_ram_utilization")
+            assert ram is not None and ram <= expected, (
+                f"{profile} target_ram_utilization must never exceed the CPU target, got {ram} vs {expected}"
+            )
 
     def test_profile_recommendations_are_directionally_correct(self, savings_by_profile):
         """Lower target utilization must produce a larger request and less CPU savings.
@@ -414,9 +422,11 @@ class TestIntegrationGetAbandonedWorkloads:
         result = _fastmcp("call", mcp_target, "get_abandoned_workloads", "--input-json", "{}")
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
         output = result.stdout
-        # Default limit is 20 — message should reflect a bounded workload count
+        # Default limit is 20 — message should reflect a bounded workload count.
+        # "low-traffic" rather than "abandoned": network silence is the only evidence, and
+        # scheduled work is silent between runs.
         if '"ok"' in output:
-            assert re.search(r"Found \d+ abandoned workload", output), f"Expected workload count in output:\n{output}"
+            assert re.search(r"Found \d+ low-traffic workload", output), f"Expected workload count in output:\n{output}"
 
 
 _RFC3339_RANGE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T00:00:00Z,\d{4}-\d{2}-\d{2}T00:00:00Z$")

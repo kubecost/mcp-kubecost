@@ -6,7 +6,7 @@ result sets are bounded via a ``top_n`` parameter with a ``truncated`` flag
 (client-side sort+slice), or true server-side ``limit``/``offset`` pagination
 where the upstream API supports it (e.g. ``get_resource_quota_recommendations``).
 
-Contract version: 8.0
+Contract version: 9.0
 """
 
 from __future__ import annotations
@@ -27,10 +27,15 @@ from mcp_kubecost.domain.kubecost.sizing_guidance import (
     CONTAINER_SIZING_REFERENCE,
     FIELD_DESCRIPTIONS,
     PROFILE_DESCRIPTIONS,
+    SIZING_MECHANICS,
     ProfileName,
+    SortBy,
     build_result_interpretation,
     format_profiles_resource,
+    is_undersized,
+    pct_change,
     resolve_sizing_params,
+    shortfall,
 )
 from mcp_kubecost.errors import ErrorCode
 from mcp_kubecost.tools._common import (
@@ -42,6 +47,7 @@ from mcp_kubecost.tools._common import (
     QueryStatus,
     ResolvedWindow,
     call_get_api,
+    float_field,
     mcp_error_response_fields,
     normalize_window_order,
     parse_api_timestamp,
@@ -54,7 +60,7 @@ from mcp_kubecost.tools._common import (
 
 logger = logging.getLogger(__name__)
 
-_VERSION = "8.0"
+_VERSION = "9.0"
 
 # ---------------------------------------------------------------------------
 # API path segments — combined with get_settings().kubecost_api_base_path at call time
@@ -69,6 +75,10 @@ _SEG_LOCAL_DISKS = "/savings/localLowDisks"
 _SEG_NODE_GROUP_SIZING = "/savings/nodeGroupSizing/recommendations"
 _SEG_UNCLAIMED_VOLUMES = "/savings/unclaimedVolumes"
 _SEG_RESOURCE_QUOTA = "/savings/resourceQuotaSizing/recommendations"
+
+# Controller kinds whose workloads run on a schedule and are legitimately silent between
+# runs. Kubecost lowercases owner kinds in the abandonedWorkloads response.
+_SCHEDULED_OWNER_KINDS: frozenset[str] = frozenset({"job", "cronjob"})
 
 
 def _read_only(title: str) -> ToolAnnotations:
@@ -111,21 +121,37 @@ _WINDOW_RFC3339_NOTE = "Also accepts an RFC3339 range, e.g. '2026-05-01T00:00:00
 
 _SAVINGS_FILTER_CLARIFICATION = """\
 FILTER PREFERENCES
-Description of the filtering of results. Ask for clarification or use this detail to explain results as needed:
+How the results are trimmed. Use this to explain results, or ask which the user wants:
 
 ---
-**Container savings filter (`min_monthly_savings`):**
+**Savings threshold (`min_monthly_savings`)** — keeps reduction candidates where
+`monthlySavings_total >= min_monthly_savings`.
 
-Keeps rows where `monthlySavings_total >= min_monthly_savings`.
+- **Omit / null (default)** — every reduction candidate.
+- **`5.0` (recommended for noise reduction)** — material opportunities only.
 
-- **Omit / null (default)** — return every recommendation, including undersized (negative savings).
-- **`5.0` (recommended for noise reduction)** — focus on material savings opportunities.
-- **Negative value** (e.g. `-100`) — also keep undersized workloads whose rightsizing would
-  increase cost by up to that amount.
+This threshold never touches `undersized_rows`. Under-provisioned workloads are returned
+separately and stay visible no matter how the savings list is filtered — they are
+reliability findings, not savings.
 
-Profiles do not change this filter — every profile is filter-free unless you pass a value.
+**Ranking (`sort_by`)** — `monthly_savings` (default) ranks by dollars.
+`pct_change_cpu` / `pct_change_memory` rank by the deepest proportional cut, which
+surfaces small badly-oversized workloads that dollars bury beneath large workloads that
+are only slightly oversized.
+
+**Scope (`filter_str`)** — a Kubecost query filter that narrows which containers are
+considered at all, e.g. `namespace:"prod"`. Not a savings threshold.
+
+Profiles change none of these — every profile is filter-free unless you pass a value.
 ---
 """
+
+_KUBECOST_FILTER_DESCRIPTION = (
+    "Optional Kubecost server-side filter restricting which containers are analyzed, e.g. "
+    'namespace:"prod" or cluster:"cluster-one". Narrows the population before sizing. This is '
+    "NOT a savings threshold — use min_monthly_savings for that, and sort_by to rank results. "
+    "Leave empty (default) to cover all workloads."
+)
 
 _CONTAINER_SAVINGS_WINDOW_CLARIFICATION = f"""\
 15 days is used by default.
@@ -249,6 +275,17 @@ def _resolve_window_defensively(window: str) -> ResolvedWindow | None:
         return None
 
 
+def _normalize_and_resolve(window: str) -> tuple[str, ResolvedWindow | None]:
+    """Normalize window order and resolve it for display in one step.
+
+    Returns the normalized window string alongside a ``ResolvedWindow``
+    (or ``None`` when resolution fails but should not block an upstream query).
+    This is the standard preamble for every single-window tool handler.
+    """
+    normalized = normalize_window_order(window)
+    return normalized, _resolve_window_defensively(normalized)
+
+
 def _window_from_allocation(response: dict[str, Any], source_expression: str) -> ResolvedWindow | None:
     """Read the window Kubecost actually queried out of an allocation response.
 
@@ -304,7 +341,7 @@ def _parse_allocation_response(
     if not isinstance(data, list):
         return [], []
 
-    all_entries: list[dict] = []
+    all_entries: list[dict[str, Any]] = []
     for bucket in data:
         if not isinstance(bucket, dict):
             continue
@@ -328,9 +365,9 @@ def _parse_allocation_response(
 
     dimension_cols = [col for col, _ in columns]
 
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     for entry in all_entries:
-        row: dict = {}
+        row: dict[str, Any] = {}
         props = entry.get("properties", {})
         name_parts = entry.get("name", "").split("/")
         # Positional fallback only lines up when the name has one part per column.
@@ -360,7 +397,7 @@ def _parse_allocation_response(
     return dimension_cols, rows
 
 
-def _aggregate_by_dimensions(rows: list[dict], dimension_cols: list[str]) -> list[dict]:
+def _aggregate_by_dimensions(rows: list[dict[str, Any]], dimension_cols: list[str]) -> list[dict[str, Any]]:
     """Sum cost fields across rows sharing the same dimension values *and* window.
 
     The window is part of the grouping key so a non-accumulated response keeps
@@ -385,7 +422,7 @@ def _aggregate_by_dimensions(rows: list[dict], dimension_cols: list[str]) -> lis
             groups[key][dim] = row.get(dim, "")
         groups[key]["window_start"], groups[key]["window_end"] = window
 
-    aggregated: list[dict] = []
+    aggregated: list[dict[str, Any]] = []
     for values in groups.values():
         row = dict(values)
 
@@ -776,15 +813,10 @@ SAVINGS_METADATA_FIELDS: list[str] = [
 NOTE_MEM_RECOMMENDATION_LESS_THAN_MAX = "memRecommendationLessThanMax"
 
 
-def _float_field(row: dict, key: str) -> float:
-    """Safely coerce a row field to float, returning 0.0 on any failure."""
-    try:
-        return float(row.get(key, 0) or 0)
-    except (TypeError, ValueError):
-        return 0.0
+_float_field = float_field
 
 
-def compute_savings_notes(row: dict) -> str:
+def compute_savings_notes(row: dict[str, Any]) -> str:
     """Build a semicolon-separated notes string for a savings recommendation row."""
     notes: list[str] = []
     if _float_field(row, "Recommended_memoryInMiB") < _float_field(row, "MaxUsage_memoryInMiB"):
@@ -792,7 +824,26 @@ def compute_savings_notes(row: dict) -> str:
     return ";".join(notes)
 
 
-def aggregate_savings_by(rows: list[dict], group_key: str) -> list[dict]:
+def _pct_sort_key(row: dict[str, Any], field: str) -> tuple[bool, float]:
+    """Sort key ranking the largest proportional reduction first, nulls last.
+
+    ``pct_change_*`` is signed, so ascending order puts the deepest cut on top. Rows with
+    no current request to compare against carry ``None`` and sort to the end.
+    """
+    value = row.get(field)
+    if value is None:
+        return (True, 0.0)
+    return (False, float(value))
+
+
+def sort_savings_rows(rows: list[dict[str, Any]], sort_by: str) -> list[dict[str, Any]]:
+    """Rank reduction candidates by dollars or by proportional change."""
+    if sort_by == "monthly_savings":
+        return sorted(rows, key=lambda r: _float_field(r, "monthlySavings_total"), reverse=True)
+    return sorted(rows, key=lambda r: _pct_sort_key(r, sort_by))
+
+
+def aggregate_savings_by(rows: list[dict[str, Any]], group_key: str) -> list[dict[str, Any]]:
     """Aggregate savings rows by a single dimension, summing ``monthlySavings_total``.
 
     Returns rows sorted by ``monthlySavings_total`` descending.  Each output row
@@ -811,7 +862,7 @@ def aggregate_savings_by(rows: list[dict], group_key: str) -> list[dict]:
             if note:
                 groups[key_val]["notes_set"].add(note)
 
-    aggregated: list[dict] = []
+    aggregated: list[dict[str, Any]] = []
     for values in groups.values():
         values["monthlySavings_total"] = _format_number(values["monthlySavings_total"])
         values["notes"] = ";".join(sorted(values.pop("notes_set")))
@@ -822,8 +873,8 @@ def aggregate_savings_by(rows: list[dict], group_key: str) -> list[dict]:
 
 
 def parse_request_sizing_response(
-    response: dict,
-) -> tuple[float, int, list[dict]]:
+    response: dict[str, Any],
+) -> tuple[float, int, list[dict[str, Any]]]:
     """Parse a Kubecost requestSizingV2 response into flat rows.
 
     Returns:
@@ -833,16 +884,16 @@ def parse_request_sizing_response(
     """
     total_monthly_savings: float = float(response.get("TotalMonthlySavings", 0.0))
     count: int = int(response.get("Count", 0))
-    recommendations: list[dict] = response.get("Recommendations", [])
+    recommendations: list[dict[str, Any]] = response.get("Recommendations", [])
 
-    def _nest(rec: dict, row: dict, obj_key: str, sub_key: str, col: str) -> None:
+    def _nest(rec: dict[str, Any], row: dict[str, Any], obj_key: str, sub_key: str, col: str) -> None:
         obj = rec.get(obj_key, {}) or {}
         val = obj.get(sub_key, 0.0)
         row[col] = _format_number(float(val)) if isinstance(val, (int, float)) else val
 
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     for rec in recommendations:
-        row: dict = {}
+        row: dict[str, Any] = {}
 
         for field in SAVINGS_METADATA_FIELDS:
             row[field] = rec.get(field, "")
@@ -861,6 +912,17 @@ def parse_request_sizing_response(
         _nest(rec, row, "normalizedAverageUsage", "memoryInMiB", "AvgUsage_memoryInMiB")
         _nest(rec, row, "normalizedMaxUsage", "cpuInMilliCores", "MaxUsage_cpuInMilliCores")
         _nest(rec, row, "normalizedMaxUsage", "memoryInMiB", "MaxUsage_memoryInMiB")
+
+        # Relative change is the other half of the materiality question — dollars alone rank a
+        # small trim on a large workload above a drastic trim on a small one.
+        row["pct_change_cpu"] = pct_change(
+            _float_field(row, "current_cpuInMilliCores"),
+            _float_field(row, "Recommended_cpuInMilliCores"),
+        )
+        row["pct_change_memory"] = pct_change(
+            _float_field(row, "current_memoryInMiB"),
+            _float_field(row, "Recommended_memoryInMiB"),
+        )
 
         row["notes"] = compute_savings_notes(row)
         rows.append(row)
@@ -1139,6 +1201,22 @@ class ContainerSavingsRow(BaseModel):
         alias="MaxUsage_memoryInMiB",
         description="Peak memory usage over the window in MiB.",
     )
+    pct_change_cpu: float | None = Field(
+        default=None,
+        description=(
+            "Signed percent change from the current CPU request to the recommended one. "
+            "Negative means the request would shrink. Null when there is no current request "
+            "to compare against."
+        ),
+    )
+    pct_change_memory: float | None = Field(
+        default=None,
+        description=(
+            "Signed percent change from the current memory request to the recommended one. "
+            "Negative means the request would shrink. Null when there is no current request "
+            "to compare against."
+        ),
+    )
     notes: str = Field(
         default="",
         description=(
@@ -1169,16 +1247,20 @@ class ContainerSavingsResponse(BaseToolResponse):
     )
     total_monthly_savings: float = Field(
         description=(
-            "Total monthly savings across the FILTERED recommendations (USD) — the same "
+            "Total monthly savings across the FILTERED reduction candidates (USD) — the same "
             "population described by 'summary' and 'container_count'. Excludes rows removed "
-            "by the min_monthly_savings filter (when set)."
+            "by the min_monthly_savings filter (when set) and excludes 'undersized_rows'. "
+            "This is REQUEST OPPORTUNITY, not an invoice reduction: lowering requests frees "
+            "reserved capacity, and the bill changes only once that freed capacity lets pods "
+            "pack onto fewer nodes and a node is removed. Call "
+            "get_cluster_rightsizing_recommendations to see whether it can be realized."
         )
     )
     container_count: int = Field(
         description=(
-            "Number of container recommendations in the FILTERED result set. This is the "
+            "Number of reduction candidates in the FILTERED result set. This is the "
             "full filtered count and may exceed len(rows) when the result is truncated to "
-            "top_n (see 'truncated')."
+            "top_n (see 'truncated'). Does not include 'undersized_rows'."
         )
     )
     summary_aggregate: str = Field(description="Dimension the inline summary is grouped by.")
@@ -1193,20 +1275,40 @@ class ContainerSavingsResponse(BaseToolResponse):
     rows: list[ContainerSavingsRow] = Field(
         default_factory=list,
         description=(
-            "Per-container rightsizing recommendations (filtered) sorted by "
-            "monthly_savings_total descending, capped at the first top_n entries. "
-            "Unlike 'summary', this list is limited by top_n — when more exist, "
-            "truncated=True. Each row has recommended CPU/memory, current usage, "
-            "efficiency, and advisory notes."
+            "Reduction candidates (filtered) ranked by 'sort_by', capped at the first top_n "
+            "entries. Unlike 'summary', this list is limited by top_n — when more exist, "
+            "truncated=True. Each row has recommended CPU/memory, current usage, efficiency, "
+            "percent change, and advisory notes. Under-provisioned containers are NOT here; "
+            "see 'undersized_rows'."
+        ),
+    )
+    undersized_rows: list[ContainerSavingsRow] = Field(
+        default_factory=list,
+        description=(
+            "Containers whose CPU or memory request is less than the recommendation based on "
+            "the sizing profile used, worst shortfall first, capped at top_n. Shortfall is the "
+            "sum of the negative per-resource savings — a saving available on one resource does "
+            "not offset a shortfall on the other, so ranking here differs from "
+            "monthly_savings_total. These are reliability findings, not savings: rightsizing "
+            "them raises cost. They are never removed by min_monthly_savings, so they stay "
+            "visible no matter how the savings list is filtered. Do not reduce these requests."
+        ),
+    )
+    undersized_count: int = Field(
+        default=0,
+        description=(
+            "Total number of under-provisioned containers found, before the top_n cap on "
+            "'undersized_rows'. Counted across the full API population, not the filtered set."
         ),
     )
     truncated: bool = Field(
         default=False,
         description=(
-            "True when the filtered result has more than top_n containers. Only 'rows' is "
-            "capped at top_n; 'summary', 'total_monthly_savings', and 'container_count' "
-            "still reflect the full filtered set. Raise top_n or narrow the filter to see "
-            "more per-container detail."
+            "True when the filtered result has more than top_n reduction candidates, or when "
+            "more than top_n under-provisioned containers were found. Only 'rows' and "
+            "'undersized_rows' are capped at top_n; 'summary', 'total_monthly_savings', "
+            "'container_count', and 'undersized_count' still reflect the full populations. "
+            "Raise top_n or narrow the filter to see more per-container detail."
         ),
     )
     parameters: dict[str, Any] = Field(
@@ -1240,7 +1342,16 @@ class SavingsOverviewResponse(BaseToolResponse):
         default_factory=list, description="All savings categories, ranked by savings_per_month."
     )
     total_savings_per_month: float = Field(
-        default=0.0, description="Sum of savings_per_month across all categories (USD)."
+        default=0.0,
+        description=(
+            "Arithmetic sum of savings_per_month across all categories (USD). NOT an achievable "
+            "target — the categories overlap. containerRequestSizing measures reserved capacity "
+            "that could be released; nodeGroupSizing measures the smaller infrastructure that "
+            "released capacity makes possible. They are largely the same dollars counted at two "
+            "stages, so adding them double-counts. Present categories individually, and treat "
+            "container/quota sizing as the first step and node consolidation as where the "
+            "invoice actually moves."
+        ),
     )
     category_count: int = Field(default=0, description="Number of categories returned.")
 
@@ -1864,8 +1975,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 aggregate=aggregate,
             )
 
-        window = normalize_window_order(window)
-        resolved_window = _resolve_window_defensively(window)
+        window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
 
         try:
@@ -2224,7 +2334,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         ] = None,
         filter_str: Annotated[
             str,
-            Field(description=_SAVINGS_FILTER_CLARIFICATION),
+            Field(description=_KUBECOST_FILTER_DESCRIPTION),
         ] = "",
         top_n: Annotated[
             int,
@@ -2244,6 +2354,10 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 description=FIELD_DESCRIPTIONS["min_monthly_savings"],
             ),
         ] = None,
+        sort_by: Annotated[
+            SortBy,
+            Field(description=FIELD_DESCRIPTIONS["sort_by"]),
+        ] = "monthly_savings",
         summary_aggregate: Annotated[
             Literal["containerName", "namespace", "clusterID"],
             Field(
@@ -2255,18 +2369,28 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             ),
         ] = "containerName",
     ) -> ContainerSavingsResponse:
-        """Return Kubernetes container rightsizing recommendations and potential savings.
+        """Return Kubernetes container request-sizing candidates and request opportunity.
 
-        WHAT: Which workloads are over-provisioned and how much can be saved by
-        rightsizing them. Structured rows are returned directly in the response —
-        no separate resource read required. Supports named profiles (production,
-        high-availability, development) that bundle recommended quantile/window
-        and target-utilization settings; explicit parameters override profile values.
+        WHAT: Which workloads reserve more CPU/memory than they use, and how much
+        reserved capacity could be released. Results split two ways: 'rows' are
+        reduction candidates, 'undersized_rows' are workloads reserving too little
+        (reliability findings, never hidden by min_monthly_savings). Supports named
+        profiles (production, high-availability, development) that bundle
+        quantile/window and target-utilization settings; explicit parameters override
+        profile values.
+
+        IMPORTANT: these are REQUESTS, not limits, and the savings figures are request
+        opportunity rather than an invoice reduction — freed capacity becomes money only
+        once pods repack and a node is removed. The recommendation cannot see CPU
+        throttling, out-of-memory history, quality-of-service class, or workload
+        revision, so treat each row as a candidate rather than a verified safe value.
+        The response 'interpretation' names the checks to run first.
 
         WHEN TO USE: For Kubernetes container savings, over-provisioned pods/namespaces,
         or rightsizing recommendations. If the user asks HOW to rightsize (methodology,
         quantiles, CPU vs memory strategy), invoke the container_rightsizing_guide
-        prompt first.
+        prompt first. To walk a full review including the realization step, invoke the
+        rightsizing_review prompt.
 
         WHEN NOT TO USE: For raw Kubernetes spend by cluster/namespace/pod, use
         get_kubecost_workload_costs.
@@ -2342,7 +2466,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 summary_aggregate=summary_aggregate,
             )
 
-        total_savings, count, all_rows = parse_request_sizing_response(response)
+        # The API's own total and count describe the unfiltered, unsplit population. Both are
+        # recomputed below over the reduction candidates the caller actually receives.
+        _api_total_savings, _api_count, all_rows = parse_request_sizing_response(response)
 
         if not all_rows:
             return ContainerSavingsResponse(
@@ -2356,11 +2482,18 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 summary_aggregate=summary_aggregate,
             )
 
-        rows = all_rows
+        # Split before filtering. An under-provisioned workload is a reliability finding, so
+        # the savings threshold must never be able to hide it.
+        undersized_all = [r for r in all_rows if is_undersized(r)]
+        # Rank by shortfall, not monthlySavings_total — a large saving on one resource would
+        # otherwise offset a large shortfall on the other and bury it.
+        undersized_all.sort(key=shortfall)
+
+        rows = [r for r in all_rows if not is_undersized(r)]
         if resolved_min_monthly_savings is not None:
             rows = [r for r in rows if float(r.get("monthlySavings_total", 0) or 0) >= resolved_min_monthly_savings]
 
-        if not rows:
+        if not rows and not undersized_all:
             threshold_label = (
                 f"${resolved_min_monthly_savings:,.2f}" if resolved_min_monthly_savings is not None else "(none)"
             )
@@ -2368,8 +2501,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 status=QueryStatus.EMPTY,
                 message=(f"No recommendations matched the filters (minimum monthly savings {threshold_label})."),
                 recommended_action=(
-                    "Omit min_monthly_savings to return all recommendations, "
-                    "lower the threshold, or pass a negative value to include undersized workloads."
+                    "Omit min_monthly_savings to return every reduction candidate, or lower the threshold."
                 ),
                 window=resolved_window,
                 resolved_window=resolved_window_display,
@@ -2377,6 +2509,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 container_count=0,
                 summary_aggregate=summary_aggregate,
             )
+
+        rows = sort_savings_rows(rows, sort_by)
 
         aggregated_summary = aggregate_savings_by(rows, summary_aggregate)
         summary_rows = [
@@ -2395,7 +2529,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
         # Build typed per-container rows using model_validate for field coercion
         typed_rows = [ContainerSavingsRow.model_validate(r) for r in rows]
-        truncated = len(typed_rows) > top_n
+        typed_undersized = [ContainerSavingsRow.model_validate(r) for r in undersized_all]
+        truncated = len(typed_rows) > top_n or len(typed_undersized) > top_n
 
         caveat = (
             " Same-named containers across clusters/namespaces are combined in the summary; "
@@ -2403,10 +2538,18 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             if summary_aggregate == "containerName"
             else ""
         )
-        # Preserve the unfiltered API figure so the caller still sees how much was
-        # excluded by the min_monthly_savings filter.
+        # Show how many candidates the savings threshold removed. Under-provisioned rows are
+        # split off rather than filtered, so they are excluded from this comparison.
+        candidates_before_filter = len(all_rows) - len(undersized_all)
         filtered_note = (
-            f" (filtered from {count} recommendations returned by the API)" if filtered_count != count else ""
+            f" (filtered from {candidates_before_filter} candidates)"
+            if filtered_count != candidates_before_filter
+            else ""
+        )
+        undersized_note = (
+            f" {len(undersized_all)} container(s) are under-provisioned and listed separately in 'undersized_rows'."
+            if undersized_all
+            else ""
         )
 
         interpretation = build_result_interpretation(sizing, all_rows, filtered_rows=rows)
@@ -2414,9 +2557,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         return ContainerSavingsResponse(
             status=QueryStatus.OK,
             message=(
-                f"Total monthly savings ${filtered_total_savings:,.2f} across "
-                f"{filtered_count} containers for {window_display}{filtered_note}, "
-                f"summarized by {summary_aggregate}.{caveat}"
+                f"Request opportunity ${filtered_total_savings:,.2f}/month across "
+                f"{filtered_count} reduction candidate(s) for {window_display}{filtered_note}, "
+                f"summarized by {summary_aggregate}.{undersized_note}{caveat}"
             ),
             recommended_action=("Increase top_n to retrieve more per-container rows." if truncated else None),
             window=resolved_window,
@@ -2426,6 +2569,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             summary_aggregate=summary_aggregate,
             summary=summary_rows,
             rows=typed_rows[:top_n],
+            undersized_rows=typed_undersized[:top_n],
+            undersized_count=len(undersized_all),
             truncated=truncated,
             parameters={
                 "profile": profile or "production (default)",
@@ -2437,6 +2582,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 "target_cpu_utilization": resolved_target_cpu,
                 "target_ram_utilization": resolved_target_ram,
                 "min_monthly_savings": resolved_min_monthly_savings,
+                "sort_by": sort_by,
                 "filter": filter_str or "(none)",
             },
             interpretation=interpretation,
@@ -2452,7 +2598,10 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             Field(
                 description=(
                     "Lookback window in days. Pods with average network traffic below "
-                    "'threshold' over this many days are flagged as abandoned. Default 2."
+                    "'threshold' over this many days are flagged. Default 2. Must exceed the "
+                    "interval of any scheduled workload you want to judge fairly — use 7 for "
+                    "weekly jobs and 30 or more for monthly ones, otherwise a healthy batch "
+                    "job looks identical to a dead one."
                 ),
                 ge=1,
                 le=90,
@@ -2490,12 +2639,24 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             ),
         ] = 20,
     ) -> AbandonedWorkloadsResponse:
-        """Return pods with abnormally low network traffic — likely abandoned workloads.
+        """Return pods with abnormally low network traffic — possible abandoned workloads.
 
         WHAT: Surfaces running pods whose average network ingress AND egress are both
         below 'threshold' bytes/second over the lookback period. These workloads are
-        still consuming compute and memory costs despite appearing idle, and are
-        candidates for decommissioning. Results include estimated monthly savings per pod.
+        still consuming compute and memory costs despite appearing idle. Results include
+        estimated monthly savings per pod.
+
+        IMPORTANT — network traffic is the ONLY signal, so scheduled and queue-driven
+        work is flagged by construction rather than because it is abandoned:
+        - A weekly or monthly job is silent on most days. The default 2-day lookback
+          cannot tell it apart from a dead workload. Raise 'days' beyond the job's
+          interval (7 for weekly, 30+ for monthly) before concluding anything.
+        - A short job can start and finish between metric samples and register no traffic.
+        - A worker polling an in-cluster queue, or one writing only to local storage, can
+          do real work with negligible network traffic.
+        Check owner_kind on every row: Job and CronJob rows are almost always scheduled
+        work. Treat results as candidates for a conversation with the owning team, not as
+        decommissioning decisions.
 
         WHEN TO USE: When investigating wasted spend from dormant or forgotten workloads,
         or when a user asks about idle pods, unused deployments, or cleanup opportunities.
@@ -2543,18 +2704,31 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         total_savings = round(sum(r.get("monthlySavings", 0.0) or 0.0 for r in rows), 2)
         truncated = len(rows) >= limit
 
+        # Scheduled work is silent between runs, so a short lookback flags it regardless of
+        # health. Surface the count so the caller does not read these as dead workloads.
+        scheduled = [r for r in rows if str(r.get("owner_kind", "")).lower() in _SCHEDULED_OWNER_KINDS]
+        scheduled_note = (
+            f" {len(scheduled)} row(s) are Job/CronJob-owned — scheduled work is expected to be "
+            f"silent between runs, so verify the lookback ({days}d) exceeds their interval."
+            if scheduled
+            else ""
+        )
+
         return AbandonedWorkloadsResponse(
             status=QueryStatus.OK,
             message=(
-                f"Found {len(rows)} abandoned workload(s) with estimated monthly savings "
+                f"Found {len(rows)} low-traffic workload(s) with estimated monthly savings "
                 f"of ${total_savings:,.2f}"
                 + (f" in cluster '{cluster}'" if cluster else " across all clusters")
                 + f" (threshold={threshold} bytes/s, {window_display})"
                 + (" — result may be truncated, increase limit for more." if truncated else ".")
+                + scheduled_note
             ),
             recommended_action=(
-                "Review the pods with the highest monthly_savings first. "
-                "Confirm the pod is truly idle before decommissioning — check with the owning team."
+                "Review the pods with the highest monthly_savings first. Low network traffic is "
+                "the only evidence here — it does not prove a workload is unused. Check owner_kind "
+                f"for scheduled work, confirm the {days}d lookback covers the workload's cycle, and "
+                "confirm with the owning team before decommissioning anything."
             ),
             days=days,
             resolved_window=resolved_window,
@@ -2637,11 +2811,15 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         return SavingsOverviewResponse(
             status=QueryStatus.OK,
             message=(
-                f"Found {len(categories)} savings categories with estimated total monthly savings of ${total:,.2f}."
+                f"Found {len(categories)} savings categories summing to ${total:,.2f}/month. "
+                "These categories overlap — see total_savings_per_month before quoting the figure."
             ),
             recommended_action=(
-                "Drill into the highest-savings category first. "
-                + (f"Available drill-down tools: {', '.join(actionable)}." if actionable else "")
+                "Drill into the highest-savings category first. Do not present the sum as an "
+                "achievable target: containerRequestSizing frees reserved capacity, and "
+                "nodeGroupSizing is how that capacity turns into a smaller bill, so the two "
+                "describe overlapping money. Same for persistentVolumeSizing and "
+                "unclaimedVolumes. " + (f"Available drill-down tools: {', '.join(actionable)}." if actionable else "")
             ),
             categories=categories,
             total_savings_per_month=total,
@@ -2695,8 +2873,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN NOT TO USE: For unclaimed (unbound) volumes, use get_unclaimed_volumes.
         For node-level local disk savings, use get_local_disk_savings.
         """
-        window = normalize_window_order(window)
-        resolved_window = _resolve_window_defensively(window)
+        window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
         try:
             raw = await _fetch_pv_sizing(window=window, overhead_percent=overhead_percent)
@@ -2796,8 +2973,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         use get_pv_sizing_recommendations.
         For unclaimed volumes, use get_unclaimed_volumes.
         """
-        window = normalize_window_order(window)
-        resolved_window = _resolve_window_defensively(window)
+        window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
         try:
             raw = await _fetch_local_disks(window=window, overhead_percent=overhead_percent)
@@ -2909,8 +3085,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 ),
             )
 
-        window = normalize_window_order(window)
-        resolved_window = _resolve_window_defensively(window)
+        window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
         try:
             raw = await _fetch_node_group_sizing(cluster=cluster, window=window, profile=profile)
@@ -2933,7 +3108,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
         recs_raw_sorted = sorted(recs_raw, key=lambda r: float(r.get("savingsPerMonth", 0.0) or 0.0), reverse=True)
 
-        def _resource_metrics(res: dict) -> ResourceMetrics:
+        def _resource_metrics(res: dict[str, Any]) -> ResourceMetrics:
             cap = res.get("capacity", {}) or {}
             usage = res.get("usage", {}) or {}
             return ResourceMetrics(
@@ -2943,7 +3118,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 usage_p95=round(float(usage.get("p95", 0.0) or 0.0), 4) if usage.get("p95") is not None else None,
             )
 
-        def _node_group_state(state: dict) -> NodeGroupState:
+        def _node_group_state(state: dict[str, Any]) -> NodeGroupState:
             resources = state.get("resources", {}) or {}
             cpu_res = resources.get("cpu", {}) or {}
             ram_res = resources.get("ram", {}) or {}
@@ -3059,8 +3234,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN NOT TO USE: For over-provisioned PVCs that ARE in use, use
         get_pv_sizing_recommendations. For node-local disk savings, use get_local_disk_savings.
         """
-        window = normalize_window_order(window)
-        resolved_window = _resolve_window_defensively(window)
+        window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
         try:
             raw = await _fetch_unclaimed_volumes(window=window)
@@ -3180,8 +3354,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         get_container_savings_recommendations. For node-level savings, use
         get_cluster_rightsizing_recommendations.
         """
-        window = normalize_window_order(window)
-        resolved_window = _resolve_window_defensively(window)
+        window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
         try:
             raw = await _fetch_resource_quota_recommendations(
@@ -3341,6 +3514,14 @@ totalEfficiency  — utilization ratio 0–1 (request vs actual use)
         """Full container request sizing reference for CPU and memory reservations."""
         return CONTAINER_SIZING_REFERENCE
 
+    @mcp.resource("kubecost://guides/sizing-mechanics")
+    def sizing_mechanics_resource() -> str:
+        """Why the sizing advice is what it is: requests vs limits, quality-of-service class,
+        eviction order, CPU throttling, and exclusive CPUs. Read before applying a
+        recommendation to a workload that cannot afford disruption.
+        """
+        return SIZING_MECHANICS
+
     # ── Prompts (Rule #17) ────────────────────────────────────────────────────
 
     @mcp.prompt()
@@ -3366,7 +3547,9 @@ Let's find container rightsizing opportunities. I'll walk you through a few choi
 ---
 
 **Step 1 — Sizing profile**
-What environment are these workloads running in?
+If one of these workloads got slower or restarted, what would it cost you? Pick on
+consequence of failure, not on which environment it runs in — a staging cluster that
+gates releases deserves more headroom than a forgotten production batch job.
 
 {profile_menu}
 
@@ -3386,6 +3569,82 @@ Pick a profile or describe your preferences.
 
 Once you've answered all three, call `get_container_savings_recommendations` with your choices.
 Present the Executive Summary with a chart, the interpretation block, and a summary table.
+"""
+
+    @mcp.prompt()
+    def rightsizing_review() -> str:
+        """Run a full container rightsizing review — candidates, reliability risks, what would
+        actually reduce the bill, and the checks to clear before anything is applied.
+
+        Use when the user wants to act on rightsizing rather than just see numbers.
+        """
+        return """\
+Let's review rightsizing properly — from candidates through to what would actually
+change the invoice. Five steps.
+
+---
+
+**Step 1 — Get the candidates**
+Call `get_container_savings_recommendations` with `profile="production"`. If the user has
+told you which workloads matter, pass `filter_str` to scope it (e.g. `namespace:"prod"`).
+
+Present the `summary` first, then the top `rows`. Rank by dollars by default; re-run with
+`sort_by="pct_change_cpu"` if the user wants the worst-oversized workloads rather than the
+biggest-dollar ones — small services that are 90% oversized never reach the top of a
+dollar-ranked list.
+
+**Step 2 — Read the reliability findings**
+Check `undersized_rows` and `undersized_count`. These workloads reserve less than their
+observed usage justifies. They are the opposite of a savings opportunity: leaving them
+alone risks eviction and restarts, and "fixing" them costs money. Raise them explicitly —
+a review that only reports savings is not a review.
+
+**Step 3 — Establish what would actually reduce the bill**
+Reducing requests frees reserved capacity. It does not lower the invoice on its own. Call
+`get_cluster_rightsizing_recommendations` for the affected cluster and look for `ScaleIn`
+or `ChangeInstanceType`. If nothing there can consolidate, say so plainly: the request
+opportunity is real, but it buys scheduling headroom and deferred capacity purchases
+rather than an immediate saving.
+
+**Step 4 — Name what the evidence does not cover**
+The recommendation is built from CPU and memory usage alone. Before proposing any change,
+state which of these are unknown and worth checking:
+
+- **CPU throttling** — low CPU usage can be the symptom of a tight limit, not spare
+  headroom. Check the ratio of throttled to total enforcement periods.
+- **Quality-of-service class** — if a pod is Guaranteed (request equals limit), changing
+  the request alone demotes it to Burstable and weakens its protection under node memory
+  pressure. `kubectl get pod -n NS POD -o jsonpath='{.status.qosClass}'`
+- **Out-of-memory history** — a workload killed for memory in the past needs more than a
+  usage percentile suggests.
+- **Workload identity** — replicas and successive revisions are pooled into one
+  distribution, so the number may describe no single version precisely. Worth flagging if
+  the workload deployed recently.
+- **Managed runtimes** — JVM, Go, Node.js, and Python hold memory the application has
+  finished with, and they size their own worker counts from visible CPU. A CPU change is
+  also a memory change for these.
+
+Details: `kubecost://guides/sizing-mechanics`.
+
+**Step 5 — Close on four questions**
+Before recommending that anything be applied, confirm the user can answer all four. If any
+is missing, that gap is the next piece of work, not the resize.
+
+1. **Evidence** — which window, which sizing parameters, and does the window cover this
+   workload's real cycle (month-end, weekly batch, seasonal peak)? Quote `parameters` and
+   `resolved_window` so the decision can be traced later.
+2. **Policy** — is there a floor this workload must not go below, from a load test or a
+   past incident? A recommendation cannot know about one that was never written down.
+3. **Authority** — who owns this workload, where does its request actually live (Git values
+   file, Helm chart, overlay — not the live object if GitOps manages it), and who approves?
+4. **Rollback** — what signal stops the change and restores the previous request? Decide
+   the threshold before applying, not after latency degrades.
+
+---
+
+Close with a short summary: request opportunity, whether it is realizable, the reliability
+findings, and the specific checks still outstanding. Do not describe any row as safe — the
+data supports a candidate value, not a verdict on application safety.
 """
 
     @mcp.prompt()
@@ -3556,6 +3815,17 @@ suggest next steps (confirm with owning team before decommissioning).
 # ---------------------------------------------------------------------------
 
 
+def _unwrap_data(result: Any) -> dict[str, Any]:
+    """Unwrap the ``{ code, data }`` envelope that most Kubecost savings endpoints return.
+
+    Returns ``result["data"]`` when present, the dict itself when there is no
+    ``"data"`` key, or ``{}`` when the result is not a dict at all.
+    """
+    if isinstance(result, dict) and "data" in result:
+        return result["data"]
+    return result if isinstance(result, dict) else {}
+
+
 async def _fetch_request_sizing(
     window: str,
     algorithm_cpu: str,
@@ -3651,10 +3921,10 @@ def _parse_abandoned_workloads_response(raw: list[dict[str, Any]]) -> list[dict[
     rows: list[dict[str, Any]] = []
     for item in raw:
         # Flatten owner info — take the first owner if present
-        owners: list[dict] = item.get("owners") or []
+        owners: list[dict[str, Any]] = item.get("owners") or []
         first_owner = owners[0] if owners else {}
 
-        allocation: dict = item.get("allocation") or {}
+        allocation: dict[str, Any] = item.get("allocation") or {}
 
         row: dict[str, Any] = {
             "pod": item.get("pod", ""),
@@ -3680,10 +3950,7 @@ async def _fetch_savings_overview() -> dict[str, Any]:
     path = f"{get_settings().kubecost_api_base_path}{_SEG_SAVINGS_OVERVIEW}"
     logger.debug("Kubecost savings overview: path=%s", path)
     result = await call_get_api(path, params={})
-    # API returns { code, data, meta } — unwrap data
-    if isinstance(result, dict) and "data" in result:
-        return result["data"]
-    return result if isinstance(result, dict) else {}
+    return _unwrap_data(result)
 
 
 async def _fetch_pv_sizing(window: str, overhead_percent: int) -> dict[str, Any]:
@@ -3697,9 +3964,7 @@ async def _fetch_pv_sizing(window: str, overhead_percent: int) -> dict[str, Any]
     path = f"{get_settings().kubecost_api_base_path}{_SEG_PV_SIZING}"
     logger.debug("Kubecost PV sizing: path=%s window=%s", path, window)
     result = await call_get_api(path, params=params)
-    if isinstance(result, dict) and "data" in result:
-        return result["data"]
-    return result if isinstance(result, dict) else {}
+    return _unwrap_data(result)
 
 
 async def _fetch_local_disks(window: str, overhead_percent: int) -> dict[str, Any]:
@@ -3727,9 +3992,7 @@ async def _fetch_node_group_sizing(cluster: str, window: str, profile: str) -> d
     path = f"{get_settings().kubecost_api_base_path}{_SEG_NODE_GROUP_SIZING}"
     logger.debug("Kubecost node group sizing: path=%s cluster=%s", path, cluster)
     result = await call_get_api(path, params=params)
-    if isinstance(result, dict) and "data" in result:
-        return result["data"]
-    return result if isinstance(result, dict) else {}
+    return _unwrap_data(result)
 
 
 async def _fetch_unclaimed_volumes(window: str) -> dict[str, Any]:
@@ -3738,9 +4001,7 @@ async def _fetch_unclaimed_volumes(window: str) -> dict[str, Any]:
     path = f"{get_settings().kubecost_api_base_path}{_SEG_UNCLAIMED_VOLUMES}"
     logger.debug("Kubecost unclaimed volumes: path=%s window=%s", path, window)
     result = await call_get_api(path, params=params)
-    if isinstance(result, dict) and "data" in result:
-        return result["data"]
-    return result if isinstance(result, dict) else {}
+    return _unwrap_data(result)
 
 
 async def _fetch_resource_quota_recommendations(
@@ -3760,6 +4021,4 @@ async def _fetch_resource_quota_recommendations(
     path = f"{get_settings().kubecost_api_base_path}{_SEG_RESOURCE_QUOTA}"
     logger.debug("Kubecost resource quota: path=%s window=%s", path, window)
     result = await call_get_api(path, params=params)
-    if isinstance(result, dict) and "data" in result:
-        return result["data"]
-    return result if isinstance(result, dict) else {}
+    return _unwrap_data(result)
