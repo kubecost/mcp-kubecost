@@ -190,6 +190,7 @@ test-ci-locally *args:
         esac
     done
     export KUBECOST_BASE_URL="${KUBECOST_BASE_URL:-https://demo.kubecost.xyz}"
+    export MCP_KUBECOST_TARGET="${MCP_KUBECOST_TARGET:-tests/mcp-demo.json}"
     uv sync --extra dev
 
     if [[ "$skip_auto_format" -eq 1 ]]; then
