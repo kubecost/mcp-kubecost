@@ -48,7 +48,7 @@ by namespace/service/label, or any workload-level spend breakdown.
 - `false`: Daily breakdown — use only for trend analysis and time-series visualization
 
 ### top_n parameter
-- Controls how many rows appear in the inline summary (default: 15)
+- Controls how many rows appear in the inline summary (default: 20)
 
 """
 

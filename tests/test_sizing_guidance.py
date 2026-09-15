@@ -45,10 +45,17 @@ class TestResolveSizingParams:
         assert params["target_cpu_utilization"] == 0.50
         assert params["target_ram_utilization"] == 0.50
 
-    def test_profile_development_raises_target_utilization(self):
+    def test_profile_development_raises_cpu_target_only(self):
+        """development trades CPU headroom for savings but leaves memory at production.
+
+        Memory is not compressible: an under-provisioned memory request moves the pod up the
+        eviction order under node pressure rather than merely slowing it down. No profile
+        should buy savings on that axis.
+        """
         params = resolve_sizing_params("development")
         assert params["target_cpu_utilization"] == 0.80
-        assert params["target_ram_utilization"] == 0.80
+        assert params["target_ram_utilization"] == 0.65
+        assert params["target_ram_utilization"] == resolve_sizing_params("production")["target_ram_utilization"]
 
     @pytest.mark.parametrize("profile", [None, "high-availability", "production", "development"])
     def test_min_monthly_savings_is_null_for_every_profile(self, profile: ProfileName | None):
@@ -59,8 +66,26 @@ class TestResolveSizingParams:
         ha = resolve_sizing_params("high-availability")
         prod = resolve_sizing_params("production")
         dev = resolve_sizing_params("development")
+        # CPU is a strict ladder — each profile must actually deliver the trade its name implies.
         assert ha["target_cpu_utilization"] < prod["target_cpu_utilization"] < dev["target_cpu_utilization"]
-        assert ha["target_ram_utilization"] < prod["target_ram_utilization"] < dev["target_ram_utilization"]
+        # RAM only has to be non-decreasing; development deliberately holds at production.
+        assert ha["target_ram_utilization"] <= prod["target_ram_utilization"] <= dev["target_ram_utilization"]
+
+    @pytest.mark.parametrize("profile", ["high-availability", "production", "development"])
+    def test_ram_target_never_exceeds_cpu_target(self, profile: ProfileName):
+        params = resolve_sizing_params(profile)
+        assert params["target_ram_utilization"] <= params["target_cpu_utilization"]
+
+    def test_some_profile_gives_ram_more_headroom_than_cpu(self):
+        """Guards the invariant above from passing vacuously.
+
+        Every profile once set the two targets equal, which satisfies "RAM never exceeds CPU"
+        while leaving "memory is not compressible" documented but unimplemented.
+        """
+        assert any(
+            SIZING_PROFILES[name]["target_ram_utilization"] < SIZING_PROFILES[name]["target_cpu_utilization"]
+            for name in SIZING_PROFILES
+        )
 
     def test_higher_target_utilization_produces_smaller_recommended_request(self):
         """Kubecost formula: recommended = usage / targetUtilization."""
@@ -156,7 +181,36 @@ class TestBuildResultInterpretation:
         result = build_result_interpretation(params, [undersized])
         assert "leaky-app" in result
         assert "under-provisioned" in result.lower()
-        assert "min_monthly_savings" in result
+        assert "undersized_rows" in result
+
+    def test_undersized_cpu_also_warns(self):
+        """A CPU shortfall is a reliability finding too, not just a memory one."""
+        params = resolve_sizing_params()
+        starved = self._make_row(containerName="cpu-starved", monthlySavings_cpu=-8.0)
+        result = build_result_interpretation(params, [starved])
+        assert "cpu-starved" in result
+        assert "under-provisioned" in result.lower()
+
+    def test_no_safety_claim_language(self):
+        """A usage percentile cannot support a safety claim.
+
+        Low observed CPU may be the symptom of throttling rather than spare headroom, so the
+        interpretation must offer candidates, never verdicts.
+        """
+        params = resolve_sizing_params()
+        row = self._make_row(currentEfficiency_cpu=0.05, currentEfficiency_memory=0.05)
+        result = build_result_interpretation(params, [row]).lower()
+        for banned in ("safe to downsize", "safe to pursue", "savings are safe"):
+            assert banned not in result
+
+    def test_pre_apply_checks_are_stated(self):
+        params = resolve_sizing_params()
+        result = build_result_interpretation(params, [self._make_row()])
+        assert "before applying" in result.lower()
+        assert "throttl" in result.lower()  # verify CPU is not already throttled
+        assert "guaranteed" in result.lower()  # QoS class changes on a request-only edit
+        assert "request opportunity" in result.lower()  # not an invoice reduction
+        assert "kubecost://guides/sizing-mechanics" in result
 
     def test_cpu_spike_warning_appears(self):
         params = resolve_sizing_params()
@@ -247,3 +301,104 @@ class TestReadmeProfileTable:
     def test_row_order_matches_menu_order(self):
         """README order must match the menu users actually see in the explore prompt."""
         assert [row["name"] for row in _readme_profile_rows()] == list(PROFILE_DESCRIPTIONS)
+
+
+class TestRowLabel:
+    """A container name is not an identity — the same name recurs across clusters and
+    namespaces, so listing it bare reads like a repeat rather than distinct workloads.
+    """
+
+    def test_label_qualifies_with_cluster_and_namespace(self):
+        row = {"clusterID": "prod", "namespace": "shop", "containerName": "api"}
+        assert sg.row_label(row) == "prod/shop/api"
+
+    def test_label_falls_back_to_available_parts(self):
+        assert sg.row_label({"containerName": "api"}) == "api"
+        assert sg.row_label({"namespace": "shop", "containerName": "api"}) == "shop/api"
+        assert sg.row_label({}) == "unknown"
+
+    def test_label_ignores_blank_parts(self):
+        row = {"clusterID": "", "namespace": "  ", "containerName": "api"}
+        assert sg.row_label(row) == "api"
+
+    def test_unique_labels_dedupes_and_preserves_order(self):
+        rows = [
+            {"clusterID": "a", "namespace": "n", "containerName": "x"},
+            {"clusterID": "a", "namespace": "n", "containerName": "x"},  # duplicate
+            {"clusterID": "b", "namespace": "n", "containerName": "x"},
+        ]
+        assert sg.unique_labels(rows, 5) == ["a/n/x", "b/n/x"]
+
+    def test_unique_labels_respects_the_limit(self):
+        rows = [{"containerName": f"c{i}"} for i in range(10)]
+        assert sg.unique_labels(rows, 3) == ["c0", "c1", "c2"]
+
+    def test_same_named_containers_are_distinguishable_in_the_interpretation(self):
+        """Regression: three different finops-agent containers rendered as one name, repeated."""
+        params = sg.resolve_sizing_params()
+        rows = [
+            {
+                "clusterID": cluster,
+                "namespace": "kubecost",
+                "containerName": "finops-agent",
+                "monthlySavings_memory": -5.0,
+            }
+            for cluster in ("dev", "prod")
+        ]
+        result = sg.build_result_interpretation(params, rows)
+        assert "dev/kubecost/finops-agent" in result
+        assert "prod/kubecost/finops-agent" in result
+
+
+class TestShortfall:
+    """`monthlySavings_total` nets CPU against memory, so it cannot rank under-provisioning."""
+
+    @staticmethod
+    def _row(name: str, cpu: float, memory: float) -> dict:
+        return {
+            "containerName": name,
+            "monthlySavings_cpu": cpu,
+            "monthlySavings_memory": memory,
+            "monthlySavings_total": cpu + memory,
+        }
+
+    def test_sums_only_the_negative_components(self):
+        assert sg.shortfall(self._row("x", -10.0, -15.0)) == -25.0
+        assert sg.shortfall(self._row("x", 30.0, -20.0)) == -20.0
+        assert sg.shortfall(self._row("x", -5.0, 40.0)) == -5.0
+
+    def test_zero_when_nothing_is_undersized(self):
+        assert sg.shortfall(self._row("x", 10.0, 20.0)) == 0.0
+
+    def test_is_undersized_agrees_with_shortfall(self):
+        for cpu, memory in ((-1.0, 0.0), (0.0, -1.0), (-1.0, -1.0), (30.0, -20.0)):
+            row = self._row("x", cpu, memory)
+            assert sg.is_undersized(row) is True
+            assert sg.shortfall(row) < 0
+        healthy = self._row("x", 5.0, 5.0)
+        assert sg.is_undersized(healthy) is False
+        assert sg.shortfall(healthy) == 0.0
+
+    def test_a_saving_on_one_resource_does_not_offset_a_shortfall_on_the_other(self):
+        """Regression: sorting by monthlySavings_total inverted worst-first order.
+
+        `big_mem` is short $20 on memory but saves $30 on CPU, so its total is +$10 and it
+        sorted behind `tiny`, which is short only $2 on each. Ranking by shortfall fixes it.
+        """
+        tiny = self._row("tiny", -2.0, -2.0)  # total -4.0, shortfall -4.0
+        big_mem = self._row("big_mem", 30.0, -20.0)  # total +10.0, shortfall -20.0
+
+        by_total = sorted([tiny, big_mem], key=lambda r: r["monthlySavings_total"])
+        assert [r["containerName"] for r in by_total] == ["tiny", "big_mem"]  # the old, wrong order
+
+        by_shortfall = sorted([tiny, big_mem], key=sg.shortfall)
+        assert [r["containerName"] for r in by_shortfall] == ["big_mem", "tiny"]
+
+    def test_interpretation_names_the_worst_shortfalls_first(self):
+        params = sg.resolve_sizing_params()
+        rows = [
+            self._row("mild", -1.0, 0.0),
+            self._row("severe", 50.0, -99.0),
+        ]
+        result = sg.build_result_interpretation(params, rows)
+        assert result.index("severe") < result.index("mild")

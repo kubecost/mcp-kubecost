@@ -18,7 +18,11 @@ from fastmcp.exceptions import ToolError as FastMcpToolError
 from mcp.types import TextContent
 from pytest_httpx import HTTPXMock
 
+from mcp_kubecost.domain.kubecost.sizing_guidance import SIZING_MECHANICS
+from mcp_kubecost.skills import register_all_skills
+from mcp_kubecost.tools import kubecost_tools as ktools
 from mcp_kubecost.tools.kubecost_tools import (
+    MISSING_CLOUD_NODE_LABELS_NOTE,
     _default_wow_windows,
     _diff_allocation_rows,
     _validate_comparison_windows,
@@ -36,6 +40,42 @@ SAVINGS_PATH = "/model/savings/requestSizingV2"
 def _allocation_url() -> re.Pattern:
     """Match any request to the allocation path, regardless of query params."""
     return re.compile(re.escape(f"{BASE_URL}{ALLOCATION_PATH}"))
+
+
+def _savings_rec(
+    container: str,
+    *,
+    cpu: float = 0.0,
+    memory: float = 0.0,
+    current_cpu: float = 500.0,
+    current_ram: float = 512.0,
+    rec_cpu: float = 200.0,
+    rec_ram: float = 256.0,
+    eff_cpu: float = 0.3,
+    eff_ram: float = 0.4,
+) -> dict:
+    """Build one requestSizingV2 recommendation. Negative cpu/memory savings = undersized."""
+    return {
+        "clusterID": "c1",
+        "namespace": "default",
+        "controllerKind": "Deployment",
+        "controllerName": container,
+        "containerName": container,
+        "monthlySavings": {"cpu": cpu, "memory": memory, "total": cpu + memory},
+        "normalizedRecommendedRequest": {"cpuInMilliCores": rec_cpu, "memoryInMiB": rec_ram},
+        "normalizedLatestKnownRequest": {"cpuInMilliCores": current_cpu, "memoryInMiB": current_ram},
+        "currentEfficiency": {"cpu": eff_cpu, "memory": eff_ram, "total": (eff_cpu + eff_ram) / 2},
+        "normalizedAverageUsage": {"cpuInMilliCores": 150.0, "memoryInMiB": 200.0},
+        "normalizedMaxUsage": {"cpuInMilliCores": 600.0, "memoryInMiB": 300.0},
+    }
+
+
+def _savings_payload(*recs: dict) -> dict:
+    return {
+        "TotalMonthlySavings": sum(r["monthlySavings"]["total"] for r in recs),
+        "Count": len(recs),
+        "Recommendations": list(recs),
+    }
 
 
 def _savings_url() -> re.Pattern:
@@ -396,7 +436,7 @@ class TestGetContainerSavingsRecommendations:
         assert request.url.params["targetCPUUtilization"] == "0.5"
 
     @pytest.mark.asyncio
-    async def test_profile_development_sends_higher_target_utilization(
+    async def test_profile_development_sends_higher_cpu_target_only(
         self, httpx_mock: HTTPXMock, mcp_app, savings_api_response
     ):
         httpx_mock.add_response(
@@ -407,12 +447,14 @@ class TestGetContainerSavingsRecommendations:
         tool = await mcp_app.get_tool("get_container_savings_recommendations")
         result = await tool.run({"profile": "development"})
         assert _sc(result)["parameters"]["target_cpu_utilization"] == 0.80
-        assert _sc(result)["parameters"]["target_ram_utilization"] == 0.80
+        # RAM stays at the production target — no profile buys savings on the axis that
+        # cannot be compressed.
+        assert _sc(result)["parameters"]["target_ram_utilization"] == 0.65
         assert _sc(result)["parameters"]["min_monthly_savings"] is None
         request = httpx_mock.get_request()
         assert request is not None
         assert request.url.params["targetCPUUtilization"] == "0.8"
-        assert request.url.params["targetRAMUtilization"] == "0.8"
+        assert request.url.params["targetRAMUtilization"] == "0.65"
 
     @pytest.mark.asyncio
     async def test_min_monthly_savings_filter_to_empty(self, httpx_mock: HTTPXMock, mcp_app, savings_api_response):
@@ -426,132 +468,101 @@ class TestGetContainerSavingsRecommendations:
         assert _sc(result)["status"] == "empty"
 
     @pytest.mark.asyncio
-    async def test_default_keeps_undersized_negative_total_rows(self, httpx_mock: HTTPXMock, mcp_app):
-        """Null min_monthly_savings returns undersized (negative total) recommendations."""
-        payload = {
-            "TotalMonthlySavings": 20.0,
-            "Count": 2,
-            "Recommendations": [
-                {
-                    "clusterID": "c1",
-                    "namespace": "default",
-                    "controllerKind": "Deployment",
-                    "controllerName": "api",
-                    "containerName": "api",
-                    "monthlySavings": {"cpu": 25.0, "memory": 0.0, "total": 25.0},
-                    "normalizedRecommendedRequest": {"cpuInMilliCores": 200.0, "memoryInMiB": 256.0},
-                    "normalizedLatestKnownRequest": {"cpuInMilliCores": 500.0, "memoryInMiB": 512.0},
-                    "currentEfficiency": {"cpu": 0.3, "memory": 0.4, "total": 0.35},
-                    "normalizedAverageUsage": {"cpuInMilliCores": 150.0, "memoryInMiB": 200.0},
-                    "normalizedMaxUsage": {"cpuInMilliCores": 600.0, "memoryInMiB": 300.0},
-                },
-                {
-                    "clusterID": "c1",
-                    "namespace": "default",
-                    "controllerKind": "Deployment",
-                    "controllerName": "leaky",
-                    "containerName": "leaky",
-                    "monthlySavings": {"cpu": 5.0, "memory": -20.0, "total": -15.0},
-                    "normalizedRecommendedRequest": {"cpuInMilliCores": 200.0, "memoryInMiB": 1024.0},
-                    "normalizedLatestKnownRequest": {"cpuInMilliCores": 500.0, "memoryInMiB": 512.0},
-                    "currentEfficiency": {"cpu": 0.3, "memory": 0.9, "total": 0.6},
-                    "normalizedAverageUsage": {"cpuInMilliCores": 150.0, "memoryInMiB": 900.0},
-                    "normalizedMaxUsage": {"cpuInMilliCores": 600.0, "memoryInMiB": 1000.0},
-                },
-            ],
-        }
+    async def test_undersized_rows_split_from_reduction_candidates(self, httpx_mock: HTTPXMock, mcp_app):
+        """Under-provisioned workloads are reliability findings, so they get their own list."""
+        payload = _savings_payload(
+            _savings_rec("api", cpu=25.0, memory=0.0),
+            _savings_rec("leaky", cpu=5.0, memory=-20.0),
+        )
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
         tool = await mcp_app.get_tool("get_container_savings_recommendations")
         result = await tool.run({"window": "15d"})
         sc = _sc(result)
         assert sc["status"] == "ok"
-        assert sc["parameters"]["min_monthly_savings"] is None
-        names = {r["containerName"] for r in sc["rows"]}
-        assert names == {"api", "leaky"}
+        assert {r["containerName"] for r in sc["rows"]} == {"api"}
+        assert {r["containerName"] for r in sc["undersized_rows"]} == {"leaky"}
+        assert sc["undersized_count"] == 1
+        # Totals describe the reduction candidates only — an undersized row is not a saving.
+        assert sc["total_monthly_savings"] == 25.0
+        assert sc["container_count"] == 1
 
     @pytest.mark.asyncio
-    async def test_positive_min_monthly_savings_drops_undersized(self, httpx_mock: HTTPXMock, mcp_app):
-        payload = {
-            "TotalMonthlySavings": 20.0,
-            "Count": 2,
-            "Recommendations": [
-                {
-                    "clusterID": "c1",
-                    "namespace": "default",
-                    "controllerKind": "Deployment",
-                    "controllerName": "api",
-                    "containerName": "api",
-                    "monthlySavings": {"cpu": 25.0, "memory": 0.0, "total": 25.0},
-                    "normalizedRecommendedRequest": {"cpuInMilliCores": 200.0, "memoryInMiB": 256.0},
-                    "normalizedLatestKnownRequest": {"cpuInMilliCores": 500.0, "memoryInMiB": 512.0},
-                    "currentEfficiency": {"cpu": 0.3, "memory": 0.4, "total": 0.35},
-                    "normalizedAverageUsage": {"cpuInMilliCores": 150.0, "memoryInMiB": 200.0},
-                    "normalizedMaxUsage": {"cpuInMilliCores": 600.0, "memoryInMiB": 300.0},
-                },
-                {
-                    "clusterID": "c1",
-                    "namespace": "default",
-                    "controllerKind": "Deployment",
-                    "controllerName": "leaky",
-                    "containerName": "leaky",
-                    "monthlySavings": {"cpu": 5.0, "memory": -20.0, "total": -15.0},
-                    "normalizedRecommendedRequest": {"cpuInMilliCores": 200.0, "memoryInMiB": 1024.0},
-                    "normalizedLatestKnownRequest": {"cpuInMilliCores": 500.0, "memoryInMiB": 512.0},
-                    "currentEfficiency": {"cpu": 0.3, "memory": 0.9, "total": 0.6},
-                    "normalizedAverageUsage": {"cpuInMilliCores": 150.0, "memoryInMiB": 900.0},
-                    "normalizedMaxUsage": {"cpuInMilliCores": 600.0, "memoryInMiB": 1000.0},
-                },
-            ],
-        }
+    async def test_cpu_shortfall_also_counts_as_undersized(self, httpx_mock: HTTPXMock, mcp_app):
+        """A CPU shortfall is a reliability finding too, not only a memory one."""
+        payload = _savings_payload(
+            _savings_rec("api", cpu=25.0, memory=0.0),
+            _savings_rec("starved", cpu=-8.0, memory=3.0),
+        )
+        httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
+        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        result = await tool.run({"window": "15d"})
+        sc = _sc(result)
+        assert {r["containerName"] for r in sc["undersized_rows"]} == {"starved"}
+
+    @pytest.mark.asyncio
+    async def test_savings_filter_never_hides_undersized_rows(self, httpx_mock: HTTPXMock, mcp_app):
+        payload = _savings_payload(
+            _savings_rec("api", cpu=25.0, memory=0.0),
+            _savings_rec("small", cpu=1.0, memory=0.0),
+            _savings_rec("leaky", cpu=5.0, memory=-20.0),
+        )
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
         tool = await mcp_app.get_tool("get_container_savings_recommendations")
         result = await tool.run({"window": "15d", "min_monthly_savings": 5.0})
         sc = _sc(result)
         assert sc["status"] == "ok"
-        names = {r["containerName"] for r in sc["rows"]}
-        assert names == {"api"}
+        assert {r["containerName"] for r in sc["rows"]} == {"api"}  # 'small' trimmed
+        assert {r["containerName"] for r in sc["undersized_rows"]} == {"leaky"}  # never trimmed
 
     @pytest.mark.asyncio
-    async def test_negative_min_monthly_savings_keeps_undersized_within_floor(self, httpx_mock: HTTPXMock, mcp_app):
-        payload = {
-            "TotalMonthlySavings": 20.0,
-            "Count": 2,
-            "Recommendations": [
-                {
-                    "clusterID": "c1",
-                    "namespace": "default",
-                    "controllerKind": "Deployment",
-                    "controllerName": "api",
-                    "containerName": "api",
-                    "monthlySavings": {"cpu": 25.0, "memory": 0.0, "total": 25.0},
-                    "normalizedRecommendedRequest": {"cpuInMilliCores": 200.0, "memoryInMiB": 256.0},
-                    "normalizedLatestKnownRequest": {"cpuInMilliCores": 500.0, "memoryInMiB": 512.0},
-                    "currentEfficiency": {"cpu": 0.3, "memory": 0.4, "total": 0.35},
-                    "normalizedAverageUsage": {"cpuInMilliCores": 150.0, "memoryInMiB": 200.0},
-                    "normalizedMaxUsage": {"cpuInMilliCores": 600.0, "memoryInMiB": 300.0},
-                },
-                {
-                    "clusterID": "c1",
-                    "namespace": "default",
-                    "controllerKind": "Deployment",
-                    "controllerName": "leaky",
-                    "containerName": "leaky",
-                    "monthlySavings": {"cpu": 5.0, "memory": -20.0, "total": -15.0},
-                    "normalizedRecommendedRequest": {"cpuInMilliCores": 200.0, "memoryInMiB": 1024.0},
-                    "normalizedLatestKnownRequest": {"cpuInMilliCores": 500.0, "memoryInMiB": 512.0},
-                    "currentEfficiency": {"cpu": 0.3, "memory": 0.9, "total": 0.6},
-                    "normalizedAverageUsage": {"cpuInMilliCores": 150.0, "memoryInMiB": 900.0},
-                    "normalizedMaxUsage": {"cpuInMilliCores": 600.0, "memoryInMiB": 1000.0},
-                },
-            ],
-        }
+    async def test_filter_removing_every_candidate_still_reports_undersized(self, httpx_mock: HTTPXMock, mcp_app):
+        """A threshold that empties the savings list must not suppress reliability findings."""
+        payload = _savings_payload(
+            _savings_rec("api", cpu=25.0, memory=0.0),
+            _savings_rec("leaky", cpu=5.0, memory=-20.0),
+        )
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
         tool = await mcp_app.get_tool("get_container_savings_recommendations")
-        result = await tool.run({"window": "15d", "min_monthly_savings": -100.0})
+        result = await tool.run({"window": "15d", "min_monthly_savings": 1_000_000.0})
         sc = _sc(result)
         assert sc["status"] == "ok"
-        names = {r["containerName"] for r in sc["rows"]}
-        assert names == {"api", "leaky"}
+        assert sc["rows"] == []
+        assert {r["containerName"] for r in sc["undersized_rows"]} == {"leaky"}
+        assert sc["undersized_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_pct_change_is_signed_and_null_without_a_current_request(self, httpx_mock: HTTPXMock, mcp_app):
+        payload = _savings_payload(
+            _savings_rec("shrink", cpu=25.0, current_cpu=1000.0, rec_cpu=250.0, current_ram=800.0, rec_ram=400.0),
+            _savings_rec("unset", cpu=5.0, current_cpu=0.0, rec_cpu=50.0, current_ram=0.0, rec_ram=50.0),
+        )
+        httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
+        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        result = await tool.run({"window": "15d"})
+        by_name = {r["containerName"]: r for r in _sc(result)["rows"]}
+        assert by_name["shrink"]["pct_change_cpu"] == -75.0
+        assert by_name["shrink"]["pct_change_memory"] == -50.0
+        # No current request means percent change is undefined, not -100%.
+        assert by_name["unset"]["pct_change_cpu"] is None
+        assert by_name["unset"]["pct_change_memory"] is None
+
+    @pytest.mark.asyncio
+    async def test_sort_by_pct_change_outranks_dollars(self, httpx_mock: HTTPXMock, mcp_app):
+        """Dollar ranking buries small workloads that are drastically oversized."""
+        payload = _savings_payload(
+            _savings_rec("big-slight", cpu=60.0, current_cpu=1000.0, rec_cpu=900.0),
+            _savings_rec("small-drastic", cpu=5.0, current_cpu=200.0, rec_cpu=20.0),
+        )
+        httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
+        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+
+        by_dollars = await tool.run({"window": "15d"})
+        assert [r["containerName"] for r in _sc(by_dollars)["rows"]] == ["big-slight", "small-drastic"]
+
+        httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
+        by_pct = await tool.run({"window": "15d", "sort_by": "pct_change_cpu"})
+        assert [r["containerName"] for r in _sc(by_pct)["rows"]] == ["small-drastic", "big-slight"]
+        assert _sc(by_pct)["parameters"]["sort_by"] == "pct_change_cpu"
 
     @pytest.mark.asyncio
     async def test_summary_aggregate_namespace(self, httpx_mock: HTTPXMock, mcp_app, savings_api_response):
@@ -641,7 +652,12 @@ class TestGetAbandonedWorkloads:
         sc = _sc(result)
         assert sc["status"] == "ok"
         assert sc["workload_count"] == 2
+        assert sc["returned_count"] == 2
+        assert sc["total_count"] == 2
+        assert sc["returned_monthly_savings"] == pytest.approx(50.5)
         assert sc["total_monthly_savings"] == pytest.approx(50.5)
+        assert sc["truncated"] is False
+        assert sc["next_offset"] is None
 
     @pytest.mark.asyncio
     async def test_rows_sorted_by_savings_desc(self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response):
@@ -686,12 +702,142 @@ class TestGetAbandonedWorkloads:
         assert sc["threshold_bytes_per_second"] == 1000
 
     @pytest.mark.asyncio
-    async def test_truncated_flag_when_at_limit(self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response):
+    async def test_exactly_limit_rows_is_not_truncated(
+        self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response
+    ):
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
         tool = await mcp_app.get_tool("get_abandoned_workloads")
-        # limit=2 and response has exactly 2 rows → truncated=True
+        # Full population has 2 rows and limit=2 — that is the complete set, not a hint of more.
         result = await tool.run({"limit": 2})
-        assert _sc(result)["truncated"] is True
+        sc = _sc(result)
+        assert sc["truncated"] is False
+        assert sc["next_offset"] is None
+        assert sc["total_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_page_totals_split_when_truncated(self, httpx_mock: HTTPXMock, mcp_app):
+        payload = [
+            {
+                "pod": f"idle-{i}",
+                "namespace": "batch",
+                "node": "n1",
+                "clusterId": "c1",
+                "owners": [],
+                "ingressBytesPerSecond": 0.0,
+                "egressBytesPerSecond": 0.0,
+                "allocation": {"cpuCores": 0.1, "ramBytes": 1.0},
+                "monthlySavings": float(25 - i),
+            }
+            for i in range(25)
+        ]
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=payload)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        sc = _sc(await tool.run({"limit": 20}))
+        assert sc["truncated"] is True
+        assert sc["returned_count"] == 20
+        assert sc["workload_count"] == 20
+        assert sc["total_count"] == 25
+        assert sc["next_offset"] == 20
+        assert sc["offset"] == 0
+        assert sc["returned_monthly_savings"] == pytest.approx(sum(range(6, 26)))
+        assert sc["total_monthly_savings"] == pytest.approx(sum(range(1, 26)))
+        assert "pass offset=20" in sc["message"]
+        assert "Use next_offset" in sc["recommended_action"]
+
+    @pytest.mark.asyncio
+    async def test_offset_returns_next_page(self, httpx_mock: HTTPXMock, mcp_app):
+        payload = [
+            {
+                "pod": f"idle-{i}",
+                "namespace": "batch",
+                "node": "n1",
+                "clusterId": "c1",
+                "owners": [],
+                "ingressBytesPerSecond": 0.0,
+                "egressBytesPerSecond": 0.0,
+                "allocation": {"cpuCores": 0.1, "ramBytes": 1.0},
+                "monthlySavings": float(25 - i),
+            }
+            for i in range(25)
+        ]
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=payload)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        sc = _sc(await tool.run({"limit": 20, "offset": 20}))
+        assert sc["status"] == "ok"
+        assert sc["returned_count"] == 5
+        assert sc["total_count"] == 25
+        assert sc["truncated"] is False
+        assert sc["next_offset"] is None
+        assert sc["offset"] == 20
+        assert [r["pod"] for r in sc["rows"]] == [f"idle-{i}" for i in range(20, 25)]
+        assert sc["returned_monthly_savings"] == pytest.approx(sum(range(1, 6)))
+        assert sc["total_monthly_savings"] == pytest.approx(sum(range(1, 26)))
+
+    @pytest.mark.asyncio
+    async def test_offset_past_end_is_empty(self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response):
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        sc = _sc(await tool.run({"offset": 50}))
+        assert sc["status"] == "empty"
+        assert sc["total_count"] == 2
+        assert sc["total_monthly_savings"] == pytest.approx(50.5)
+        assert sc["rows"] == []
+
+    @pytest.mark.asyncio
+    async def test_internal_paging_walks_offset(self, httpx_mock: HTTPXMock, mcp_app, monkeypatch):
+        monkeypatch.setattr(ktools, "_ABANDONED_API_PAGE_SIZE", 2)
+        monkeypatch.setattr(ktools, "_ABANDONED_API_MAX_ROWS", 10)
+        page1 = [
+            {
+                "pod": "a",
+                "namespace": "ns",
+                "node": "n1",
+                "clusterId": "c1",
+                "owners": [],
+                "ingressBytesPerSecond": 0.0,
+                "egressBytesPerSecond": 0.0,
+                "allocation": {"cpuCores": 0.1, "ramBytes": 1.0},
+                "monthlySavings": 30.0,
+            },
+            {
+                "pod": "b",
+                "namespace": "ns",
+                "node": "n1",
+                "clusterId": "c1",
+                "owners": [],
+                "ingressBytesPerSecond": 0.0,
+                "egressBytesPerSecond": 0.0,
+                "allocation": {"cpuCores": 0.1, "ramBytes": 1.0},
+                "monthlySavings": 20.0,
+            },
+        ]
+        page2 = [
+            {
+                "pod": "c",
+                "namespace": "ns",
+                "node": "n1",
+                "clusterId": "c1",
+                "owners": [],
+                "ingressBytesPerSecond": 0.0,
+                "egressBytesPerSecond": 0.0,
+                "allocation": {"cpuCores": 0.1, "ramBytes": 1.0},
+                "monthlySavings": 10.0,
+            }
+        ]
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=page1)
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=page2)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        sc = _sc(await tool.run({"limit": 20}))
+        assert sc["total_count"] == 3
+        assert sc["returned_count"] == 3
+        assert sc["total_monthly_savings"] == pytest.approx(60.0)
+        assert sc["truncated"] is False
+        requests = httpx_mock.get_requests()
+        assert len(requests) == 2
+        assert requests[0].url.params["offset"] == "0"
+        assert requests[0].url.params["limit"] == "2"
+        assert requests[1].url.params["offset"] == "2"
+        assert requests[1].url.params["limit"] == "2"
 
 
 # ── get_savings_overview ─────────────────────────────────────────────────────
@@ -918,6 +1064,75 @@ class TestGetClusterRightsizingRecommendations:
         assert "warnings" in _sc(result)
 
     @pytest.mark.asyncio
+    async def test_empty_instance_type_groups_suppressed(
+        self, httpx_mock: HTTPXMock, mcp_app, node_group_sizing_api_response
+    ):
+        payload = {
+            "code": 200,
+            "data": {
+                **node_group_sizing_api_response["data"],
+                "warnings": [
+                    "failed to get change instance type for node group __empty__/__empty__ err: "
+                    "failed to get current instance type __empty__ for nodegroup: __empty__/__empty__"
+                ],
+                "recommendations": [
+                    {
+                        "nodeGroup": "__empty__/__empty__",
+                        "recommendation": "ChangeInstanceType",
+                        "before": {
+                            "instanceType": "__empty__",
+                            "nodeCount": 1,
+                            "pricePerMonth": 0.0,
+                            "resources": {},
+                        },
+                        "after": {
+                            "instanceType": "__empty__",
+                            "nodeCount": 1,
+                            "pricePerMonth": 0.0,
+                            "resources": {},
+                        },
+                        "savingsPerMonth": 0.0,
+                    }
+                ],
+            },
+        }
+        httpx_mock.add_response(method="GET", url=_node_group_url(), json=payload)
+        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        result = await tool.run({"cluster": "kcmocp2"})
+        sc = _sc(result)
+        assert sc["warnings"] == [MISSING_CLOUD_NODE_LABELS_NOTE]
+        assert sc["status"] == "empty"
+        assert sc["message"] == MISSING_CLOUD_NODE_LABELS_NOTE
+        assert sc["recommendations"] == []
+        assert sc["recommendation_count"] == 0
+        assert sc["total_savings_per_month"] == 0.0
+        assert "Found" not in _text(result)
+        assert MISSING_CLOUD_NODE_LABELS_NOTE in _text(result)
+
+    @pytest.mark.asyncio
+    async def test_labeled_groups_kept_when_empty_warning_present(
+        self, httpx_mock: HTTPXMock, mcp_app, node_group_sizing_api_response
+    ):
+        payload = {
+            "code": 200,
+            "data": {
+                **node_group_sizing_api_response["data"],
+                "warnings": [
+                    "failed to get change instance type for node group __empty__/__empty__ err: "
+                    "failed to get current instance type __empty__ for nodegroup: __empty__/__empty__"
+                ],
+            },
+        }
+        httpx_mock.add_response(method="GET", url=_node_group_url(), json=payload)
+        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        result = await tool.run({"cluster": "kc-demo-prod"})
+        sc = _sc(result)
+        assert sc["status"] == "ok"
+        assert sc["warnings"] == [MISSING_CLOUD_NODE_LABELS_NOTE]
+        assert sc["recommendation_count"] == 2
+        assert sc["recommendations"][0]["node_group"] == "aws-usw2-demo-ng8"
+
+    @pytest.mark.asyncio
     async def test_empty_recommendations(self, httpx_mock: HTTPXMock, mcp_app):
         empty = {"code": 200, "data": {"recommendations": [], "totalSavingsPerMonth": 0.0, "warnings": []}}
         httpx_mock.add_response(method="GET", url=_node_group_url(), json=empty)
@@ -1048,6 +1263,99 @@ class TestGetResourceQuotaRecommendations:
         result = await tool.run({})
         # totalMonthlySavings is 0 in the fixture — that's expected for this correctness tool
         assert _sc(result)["total_monthly_savings"] == pytest.approx(0.0)
+
+    @pytest.mark.asyncio
+    async def test_duplicate_cluster_namespace_category_removed(self, httpx_mock: HTTPXMock, mcp_app):
+        """Duplicate (cluster, namespace, category) rows from the API are deduplicated."""
+        payload = {
+            "code": 200,
+            "data": {
+                "window": {"start": "2026-08-31T00:00:00Z", "end": "2026-09-15T00:00:00Z"},
+                "itemCount": 4,
+                "totalMonthlySavings": 10.0,
+                "recommendations": [
+                    {
+                        "cluster": "c1",
+                        "namespace": "ns-a",
+                        "category": "compute",
+                        "isNewResourceQuota": False,
+                        "resources": [
+                            {
+                                "resourceType": "requests.cpu",
+                                "category": "compute",
+                                "used": "100m",
+                                "recommended": "150m",
+                                "isNewResource": False,
+                                "isDownsize": False,
+                            }
+                        ],
+                    },
+                    # exact duplicate of the first row
+                    {
+                        "cluster": "c1",
+                        "namespace": "ns-a",
+                        "category": "compute",
+                        "isNewResourceQuota": False,
+                        "resources": [
+                            {
+                                "resourceType": "requests.cpu",
+                                "category": "compute",
+                                "used": "100m",
+                                "recommended": "150m",
+                                "isNewResource": False,
+                                "isDownsize": False,
+                            }
+                        ],
+                    },
+                    {
+                        "cluster": "c1",
+                        "namespace": "ns-b",
+                        "category": "compute",
+                        "isNewResourceQuota": True,
+                        "resources": [
+                            {
+                                "resourceType": "requests.cpu",
+                                "category": "compute",
+                                "used": "200m",
+                                "recommended": "300m",
+                                "isNewResource": True,
+                                "isDownsize": False,
+                            }
+                        ],
+                    },
+                    # duplicate of ns-b
+                    {
+                        "cluster": "c1",
+                        "namespace": "ns-b",
+                        "category": "compute",
+                        "isNewResourceQuota": True,
+                        "resources": [
+                            {
+                                "resourceType": "requests.cpu",
+                                "category": "compute",
+                                "used": "200m",
+                                "recommended": "300m",
+                                "isNewResource": True,
+                                "isDownsize": False,
+                            }
+                        ],
+                    },
+                ],
+            },
+        }
+        httpx_mock.add_response(method="GET", url=_resource_quota_url(), json=payload)
+        tool = await mcp_app.get_tool("get_resource_quota_recommendations")
+        result = await tool.run({})
+        sc = _sc(result)
+        assert sc["status"] == "ok"
+        # 4 raw rows → 2 unique after dedup
+        assert len(sc["recommendations"]) == 2
+        namespaces = [r["namespace"] for r in sc["recommendations"]]
+        assert namespaces == ["ns-a", "ns-b"]
+        # item_count adjusted: 4 raw - 2 dupes = 2
+        assert sc["item_count"] == 2
+        # integrity warning present in message
+        assert "removed" in sc["message"]
 
 
 # ── _validate_comparison_windows (Task 1) ────────────────────────────────────
@@ -1501,3 +1809,145 @@ class TestDefaultWowWindows:
         """The computed defaults must survive _validate_comparison_windows without raising."""
         current, baseline = _default_wow_windows()
         _validate_comparison_windows(current, baseline)  # should not raise
+
+
+class TestScheduledWorkloadWarning:
+    """get_abandoned_workloads infers idleness from network traffic alone, so scheduled work
+    is flagged by construction. The response must say so rather than implying the pods are dead.
+    """
+
+    @staticmethod
+    def _pod(pod: str, owner_kind: str, savings: float = 10.0) -> dict:
+        return {
+            "pod": pod,
+            "namespace": "default",
+            "node": "n1",
+            "clusterId": "c1",
+            "owners": [{"name": f"{pod}-owner", "kind": owner_kind}],
+            "ingressBytesPerSecond": 0.0,
+            "egressBytesPerSecond": 0.0,
+            "allocation": {"cpuCores": 0.5, "ramBytes": 1024.0},
+            "monthlySavings": savings,
+        }
+
+    @pytest.mark.asyncio
+    async def test_cronjob_rows_trigger_a_scheduled_work_note(self, httpx_mock: HTTPXMock, mcp_app):
+        payload = [self._pod("nightly", "cronjob"), self._pod("web", "deployment")]
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=payload)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        sc = _sc(await tool.run({}))
+        assert sc["status"] == "ok"
+        assert "scheduled work" in sc["message"].lower()
+        assert "1 row(s) on this page are Job/CronJob-owned" in sc["message"]
+
+    @pytest.mark.asyncio
+    async def test_no_note_when_nothing_is_scheduled(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=[self._pod("web", "deployment")])
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        sc = _sc(await tool.run({}))
+        assert "Job/CronJob-owned" not in sc["message"]
+
+    @pytest.mark.asyncio
+    async def test_recommended_action_does_not_assert_the_pod_is_unused(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=[self._pod("web", "deployment")])
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        action = _sc(await tool.run({}))["recommended_action"].lower()
+        assert "does not prove" in action
+        assert "owner_kind" in action
+
+
+class TestSavingsOverviewOverlap:
+    """Container request sizing and node-group sizing describe the same money at two stages,
+    so the summed total must not be presented as an achievable target.
+    """
+
+    @pytest.mark.asyncio
+    async def test_overlap_is_flagged(self, httpx_mock: HTTPXMock, mcp_app):
+        payload = {
+            "code": 200,
+            "data": {
+                "containerRequestSizing": {"savingsPerMonth": 100.0, "lastRefresh": "2026-01-01T00:00:00Z"},
+                "nodeGroupSizing": {"savingsPerMonth": 80.0, "lastRefresh": "2026-01-01T00:00:00Z"},
+            },
+        }
+        httpx_mock.add_response(method="GET", url=_savings_overview_url(), json=payload)
+        tool = await mcp_app.get_tool("get_savings_overview")
+        sc = _sc(await tool.run({}))
+        assert sc["status"] == "ok"
+        assert sc["total_savings_per_month"] == pytest.approx(180.0)
+        assert "overlap" in sc["message"].lower()
+        action = sc["recommended_action"].lower()
+        assert "do not present the sum" in action
+
+
+class TestMcpSurface:
+    """Guards the advertised surface. AGENTS.md and the README both quote these counts."""
+
+    @pytest.mark.asyncio
+    async def test_surface_counts(self, mcp_app):
+        """mcp_app registers tools only. Skills add the last two prompts (see below), which is
+        what makes the advertised total 12.
+        """
+        assert len(await mcp_app.list_tools()) == 11
+        assert len(await mcp_app.list_prompts()) == 10
+        assert len(await mcp_app.list_resources()) == 5
+
+    @pytest.mark.asyncio
+    async def test_skills_bring_the_advertised_prompt_total_to_twelve(self):
+        app = FastMCP("surface-check")
+        register_kubecost_tools(app)
+        register_all_skills(app)
+        assert len(await app.list_tools()) == 11
+        assert len(await app.list_prompts()) == 12
+        assert len(await app.list_resources()) == 5
+
+    @pytest.mark.asyncio
+    async def test_sizing_mechanics_resource_registered(self, mcp_app):
+        uris = {str(r.uri) for r in await mcp_app.list_resources()}
+        assert "kubecost://guides/sizing-mechanics" in uris
+
+    @pytest.mark.asyncio
+    async def test_sizing_mechanics_covers_the_gaps_kubecost_cannot_see(self, mcp_app):
+        body = SIZING_MECHANICS.lower()
+        # Each of these is a mechanism a usage-percentile recommendation is blind to.
+        for topic in ("quality of service", "guaranteed", "eviction", "throttl", "exclusive cpus"):
+            assert topic in body, topic
+        # The concrete checks a reader is meant to run, per the "name the check" decision.
+        assert "container_cpu_cfs_throttled_periods_total" in SIZING_MECHANICS
+        assert "jsonpath='{.status.qosClass}'" in SIZING_MECHANICS
+
+    @pytest.mark.asyncio
+    async def test_rightsizing_review_prompt_registered(self, mcp_app):
+        assert "rightsizing_review" in {p.name for p in await mcp_app.list_prompts()}
+
+    @pytest.mark.asyncio
+    async def test_rightsizing_review_covers_the_four_closing_questions(self, mcp_app):
+        rendered = await mcp_app.get_prompt("rightsizing_review")
+        body = "".join(m.content.text for m in (await rendered.render({})).messages).lower()
+        for question in ("evidence", "policy", "authority", "rollback"):
+            assert question in body, question
+        # It must route to the realization step, not stop at request opportunity.
+        assert "get_cluster_rightsizing_recommendations" in body
+        assert "undersized_rows" in body
+        assert "do not describe any row as safe" in body
+
+
+class TestUndersizedRanking:
+    @pytest.mark.asyncio
+    async def test_worst_shortfall_first_even_when_the_total_is_positive(self, httpx_mock: HTTPXMock, mcp_app):
+        """A large CPU saving must not bury a large memory shortfall.
+
+        'big-mem' saves $30 on CPU while short $20 on memory, so monthlySavings_total is
+        +$10. Ranking by that total put it behind 'tiny', short only $2 on each.
+        """
+        payload = _savings_payload(
+            _savings_rec("tiny", cpu=-2.0, memory=-2.0),
+            _savings_rec("big-mem", cpu=30.0, memory=-20.0),
+        )
+        httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
+        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        sc = _sc(await tool.run({"window": "15d"}))
+        assert [r["containerName"] for r in sc["undersized_rows"]] == ["big-mem", "tiny"]
+        assert sc["undersized_count"] == 2
+        # Neither belongs in the reduction candidates.
+        assert sc["rows"] == []

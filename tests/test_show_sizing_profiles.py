@@ -14,7 +14,7 @@ PROFILE_NAMES = ("production", "high-availability", "development")
 class TestCheckMode:
     def test_shipped_profiles_pass(self, capsys: pytest.CaptureFixture[str]):
         assert sps.main(["--check"]) == 0
-        assert "All 9 invariants hold" in capsys.readouterr().out
+        assert "All 10 invariants hold" in capsys.readouterr().out
 
     def test_check_json_reports_ok(self, capsys: pytest.CaptureFixture[str]):
         assert sps.main(["--check", "--json"]) == 0
@@ -39,6 +39,24 @@ class TestCheckMode:
         failed = {r["name"] for r in payload["invariants"] if not r["ok"]}
         assert "RAM target never exceeds CPU target" in failed
         assert "target ladder (target_cpu_utilization)" in failed
+
+    def test_detects_ram_and_cpu_targets_equal_everywhere(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ):
+        """ "RAM never exceeds CPU" passes vacuously when every profile sets them equal.
+
+        That is exactly how the principle stayed documented but unimplemented, so a second
+        invariant requires at least one profile to actually give memory more headroom.
+        """
+        broken = _mutated_profiles(development={"target_ram_utilization": 0.80})
+        monkeypatch.setattr(sps, "SIZING_PROFILES", broken)
+
+        assert sps.main(["--check", "--json"]) == 1
+        payload = json.loads(capsys.readouterr().out)
+        failed = {r["name"] for r in payload["invariants"] if not r["ok"]}
+        assert "at least one profile treats RAM more conservatively than CPU" in failed
+        # The weaker rule is satisfied by the same profiles, which is the point.
+        assert "RAM target never exceeds CPU target" not in failed
 
     def test_detects_window_below_quantile_minimum(self, monkeypatch: pytest.MonkeyPatch):
         broken = _mutated_profiles(production={"window": "7d"})
@@ -69,10 +87,16 @@ class TestJsonMode:
         derived = json.loads(capsys.readouterr().out)["derived"]
         assert derived["high-availability"]["example_cpu_millicores"] == 200.0  # 100 / 0.50
         assert derived["high-availability"]["cpu_headroom_multiplier"] == 2.0
-        assert derived["development"]["example_ram_mib"] == 640.0  # 512 / 0.80
-        # Lower target must yield the larger request, on both axes.
-        for axis in ("example_cpu_millicores", "example_ram_mib"):
-            assert derived["high-availability"][axis] > derived["production"][axis] > derived["development"][axis]
+        # development holds RAM at the production target, so it gets production's RAM request.
+        assert derived["development"]["example_ram_mib"] == 787.6923  # 512 / 0.65
+        assert derived["development"]["example_ram_mib"] == derived["production"]["example_ram_mib"]
+
+        # Lower target must yield the larger request. CPU is a strict ladder; RAM only has to
+        # be non-decreasing, because development declines to squeeze memory at all.
+        cpu = "example_cpu_millicores"
+        assert derived["high-availability"][cpu] > derived["production"][cpu] > derived["development"][cpu]
+        ram = "example_ram_mib"
+        assert derived["high-availability"][ram] > derived["production"][ram] >= derived["development"][ram]
 
     def test_api_params_use_kubecost_wire_names(self, capsys: pytest.CaptureFixture[str]):
         assert sps.main(["--json"]) == 0

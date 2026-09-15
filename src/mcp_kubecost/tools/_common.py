@@ -47,6 +47,7 @@ __all__ = [
     "call_get_api",
     "call_post_api",
     "extract_list",
+    "float_field",
     "format_tool_error",
     "mcp_error_response_fields",
     "normalize_window_order",
@@ -60,6 +61,15 @@ __all__ = [
     "to_api_window",
     "validate_response",
 ]
+
+
+def float_field(row: dict[str, Any], key: str) -> float:
+    """Safely coerce a row field to float, returning 0.0 on any failure."""
+    try:
+        return float(row.get(key, 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
 
 # Default query window used by all tools unless the caller overrides it.
 DEFAULT_WINDOW: str = get_settings().default_window
