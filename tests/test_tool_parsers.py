@@ -630,10 +630,17 @@ class TestRewriteNodeGroupSizingWarnings:
             ktools.MISSING_CLOUD_NODE_LABELS_NOTE
         ]
 
-    def test_dedupes_multiple_instance_type_failures(self):
+    def test_dedupes_multiple_empty_instance_type_failures(self):
+        second = "failed to get current instance type __empty__ for nodegroup: __empty__/worker"
+        assert _rewrite_node_group_sizing_warnings([_KUBECOST_EMPTY_INSTANCE_TYPE_WARNING, second]) == [
+            ktools.MISSING_CLOUD_NODE_LABELS_NOTE
+        ]
+
+    def test_preserves_real_instance_type_failures(self):
         other = "failed to get current instance type m5.large for nodegroup: ng-a/ng-a"
         assert _rewrite_node_group_sizing_warnings([_KUBECOST_EMPTY_INSTANCE_TYPE_WARNING, other]) == [
-            ktools.MISSING_CLOUD_NODE_LABELS_NOTE
+            ktools.MISSING_CLOUD_NODE_LABELS_NOTE,
+            other,
         ]
 
     def test_preserves_unrelated_warnings(self):

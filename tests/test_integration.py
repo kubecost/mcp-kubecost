@@ -261,6 +261,8 @@ _EXPECTED_CPU_TARGETS = {
 }
 # Kubecost floors tiny CPU recommendations (~10m). Below this, equal recs are expected.
 _CPU_FLOOR_M = 15.0
+# monthlySavings_cpu is reported in USD cents. A 1¢ "inversion" is rounding, not the formula.
+_SAVINGS_TOLERANCE_USD = 0.01
 
 
 def _row_get(row: dict[str, Any], *keys: str, default: Any = "") -> Any:
@@ -367,6 +369,8 @@ class TestIntegrationGetContainerSavingsRecommendations:
         Shared containers only. Tiny recs sit on Kubecost's ~10m floor and may
         tie; anything above the floor must never invert, and at least one
         container must show the strict HA > production > development order.
+        Dollar savings are compared within a cent so API rounding cannot fail
+        the ladder when the millicores themselves are ordered correctly.
         """
         indexed = {
             profile: {_container_key(row): row for row in (response.get("rows") or [])}
@@ -387,7 +391,7 @@ class TestIntegrationGetContainerSavingsRecommendations:
             label = "/".join(key)
             if ha_cpu < prod_cpu or prod_cpu < dev_cpu:
                 inverted_cpu.append(f"{label}: HA={ha_cpu} prod={prod_cpu} dev={dev_cpu}")
-            if ha_sav > prod_sav or prod_sav > dev_sav:
+            if ha_sav > prod_sav + _SAVINGS_TOLERANCE_USD or prod_sav > dev_sav + _SAVINGS_TOLERANCE_USD:
                 inverted_savings.append(f"{label}: HA=${ha_sav:.2f} prod=${prod_sav:.2f} dev=${dev_sav:.2f}")
             if prod_cpu >= _CPU_FLOOR_M:
                 above_floor += 1

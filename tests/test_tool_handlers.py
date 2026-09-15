@@ -1064,14 +1064,38 @@ class TestGetClusterRightsizingRecommendations:
         assert "warnings" in _sc(result)
 
     @pytest.mark.asyncio
-    async def test_empty_instance_type_warning_rewritten(
+    async def test_empty_instance_type_groups_suppressed(
         self, httpx_mock: HTTPXMock, mcp_app, node_group_sizing_api_response
     ):
-        payload = node_group_sizing_api_response
-        payload["data"]["warnings"] = [
-            "failed to get change instance type for node group __empty__/__empty__ err: "
-            "failed to get current instance type __empty__ for nodegroup: __empty__/__empty__"
-        ]
+        payload = {
+            "code": 200,
+            "data": {
+                **node_group_sizing_api_response["data"],
+                "warnings": [
+                    "failed to get change instance type for node group __empty__/__empty__ err: "
+                    "failed to get current instance type __empty__ for nodegroup: __empty__/__empty__"
+                ],
+                "recommendations": [
+                    {
+                        "nodeGroup": "__empty__/__empty__",
+                        "recommendation": "ChangeInstanceType",
+                        "before": {
+                            "instanceType": "__empty__",
+                            "nodeCount": 1,
+                            "pricePerMonth": 0.0,
+                            "resources": {},
+                        },
+                        "after": {
+                            "instanceType": "__empty__",
+                            "nodeCount": 1,
+                            "pricePerMonth": 0.0,
+                            "resources": {},
+                        },
+                        "savingsPerMonth": 0.0,
+                    }
+                ],
+            },
+        }
         httpx_mock.add_response(method="GET", url=_node_group_url(), json=payload)
         tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
         result = await tool.run({"cluster": "kcmocp2"})
@@ -1084,6 +1108,29 @@ class TestGetClusterRightsizingRecommendations:
         assert sc["total_savings_per_month"] == 0.0
         assert "Found" not in _text(result)
         assert MISSING_CLOUD_NODE_LABELS_NOTE in _text(result)
+
+    @pytest.mark.asyncio
+    async def test_labeled_groups_kept_when_empty_warning_present(
+        self, httpx_mock: HTTPXMock, mcp_app, node_group_sizing_api_response
+    ):
+        payload = {
+            "code": 200,
+            "data": {
+                **node_group_sizing_api_response["data"],
+                "warnings": [
+                    "failed to get change instance type for node group __empty__/__empty__ err: "
+                    "failed to get current instance type __empty__ for nodegroup: __empty__/__empty__"
+                ],
+            },
+        }
+        httpx_mock.add_response(method="GET", url=_node_group_url(), json=payload)
+        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        result = await tool.run({"cluster": "kc-demo-prod"})
+        sc = _sc(result)
+        assert sc["status"] == "ok"
+        assert sc["warnings"] == [MISSING_CLOUD_NODE_LABELS_NOTE]
+        assert sc["recommendation_count"] == 2
+        assert sc["recommendations"][0]["node_group"] == "aws-usw2-demo-ng8"
 
     @pytest.mark.asyncio
     async def test_empty_recommendations(self, httpx_mock: HTTPXMock, mcp_app):

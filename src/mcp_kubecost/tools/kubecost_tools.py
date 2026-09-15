@@ -804,6 +804,20 @@ _MISSING_INSTANCE_TYPE_WARNING_MARKERS = (
 )
 
 
+def _is_empty_instance_type_warning(warning: str) -> bool:
+    """True when Kubecost failed to resolve instance type ``__empty__`` (missing node labels)."""
+    lowered = warning.lower()
+    return "__empty__" in lowered and any(marker in lowered for marker in _MISSING_INSTANCE_TYPE_WARNING_MARKERS)
+
+
+def _is_invented_empty_node_group(rec: dict[str, Any]) -> bool:
+    """True when a node-group row is the placeholder Kubecost invents without instance-type labels."""
+    node_group = str(rec.get("nodeGroup") or "")
+    before_type = str((rec.get("before") or {}).get("instanceType") or "")
+    after_type = str((rec.get("after") or {}).get("instanceType") or "")
+    return any("__empty__" in part for part in (node_group, before_type, after_type))
+
+
 def _rewrite_node_group_sizing_warnings(warnings: list[str] | None) -> list[str]:
     """Replace Kubecost's missing-instance-type errors with a labels/on-prem note.
 
@@ -811,12 +825,12 @@ def _rewrite_node_group_sizing_warnings(warnings: list[str] | None) -> list[str]
     ``failed to get change instance type ... instance type __empty__`` when the
     cluster has no cloud-provider node labels (typical on-prem). Those strings
     are not actionable; rewrite them (once) and leave any other warnings intact.
+    Failures for a real instance type (e.g. ``m5.large``) are kept as-is.
     """
     rewritten: list[str] = []
     injected = False
     for warning in warnings or []:
-        lowered = warning.lower()
-        if any(marker in lowered for marker in _MISSING_INSTANCE_TYPE_WARNING_MARKERS):
+        if _is_empty_instance_type_warning(warning):
             if not injected:
                 rewritten.append(MISSING_CLOUD_NODE_LABELS_NOTE)
                 injected = True
@@ -3242,8 +3256,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         window_str = window_info.get("start", window) if isinstance(window_info, dict) else window
 
         # Missing instance-type labels make Kubecost invent __empty__ groups and prices.
-        # Do not present those as recommendations; the text summary is the warning alone.
-        if MISSING_CLOUD_NODE_LABELS_NOTE in warnings:
+        # Drop those rows; keep any labeled groups. If nothing real remains, the note is the result.
+        recs_raw = [r for r in recs_raw if not _is_invented_empty_node_group(r)]
+        if MISSING_CLOUD_NODE_LABELS_NOTE in warnings and not recs_raw:
             return ClusterRightsizingResponse(
                 status=QueryStatus.EMPTY,
                 message=MISSING_CLOUD_NODE_LABELS_NOTE,
@@ -3525,32 +3540,14 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         window_display = resolved_window.display if resolved_window else window
 
         recs_raw: list[dict[str, Any]] = raw.get("recommendations", [])
-        # P0: Cap oversized upstream responses — this endpoint lacks a top_n client-side guard
-        # that every other row-returning tool has. At ~900 bytes/row, 1,873 rows ≈ 1.7MB, which
-        # exceeds typical MCP client response-size limits and produces "no visible payload".
-        recs_raw, was_capped = _cap_raw_rows(recs_raw, "resource quota")
         item_count = int(raw.get("itemCount", len(recs_raw)) or len(recs_raw))
         total_monthly_savings = round(float(raw.get("totalMonthlySavings", 0.0) or 0.0), 2)
-        truncated = was_capped or item_count > offset + len(recs_raw)
-        next_offset = (offset + len(recs_raw)) if truncated else None
-
-        # P0: Integrity check — warn when rows carry blank cluster/namespace but have resources.
-        # Blank dimensions indicate an unattributed row from the API, not a missing-quota entry.
+        fetched_count = len(recs_raw)
         integrity_warnings: list[str] = []
-        blank_rows = [r for r in recs_raw if (not r.get("cluster") or not r.get("namespace")) and r.get("resources")]
-        if blank_rows:
-            logger.warning(
-                "ResourceQuota API returned %d row(s) with blank cluster or namespace but populated resources",
-                len(blank_rows),
-            )
-            integrity_warnings.append(
-                f"{len(blank_rows)} row(s) had a blank cluster or namespace field with populated resources — "
-                "these may be unattributed recommendations from the Kubecost API."
-            )
 
-        # P0: Dedupe — drop duplicate (cluster, namespace, category) rows returned by the API.
-        # The API occasionally sends the same (cluster, namespace, category) triple multiple times
-        # within a single page; keep the first occurrence and adjust item_count accordingly.
+        # P0: Dedupe before the safety cap so unique rows past a duplicate run are not discarded.
+        # Keep the first (cluster, namespace, category) occurrence; next_offset still uses the
+        # pre-dedup page size so the Kubecost limit/offset cursor stays aligned.
         seen_keys: set[tuple[str, str, str]] = set()
         deduped: list[dict[str, Any]] = []
         for r in recs_raw:
@@ -3558,7 +3555,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             if key not in seen_keys:
                 seen_keys.add(key)
                 deduped.append(r)
-        dupe_count = len(recs_raw) - len(deduped)
+        dupe_count = fetched_count - len(deduped)
         if dupe_count:
             logger.warning(
                 "ResourceQuota API returned %d duplicate (cluster, namespace, category) key(s); removing them",
@@ -3569,6 +3566,25 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             )
             recs_raw = deduped
             item_count = max(0, item_count - dupe_count)
+
+        # Cap oversized upstream responses — this endpoint has server-side limit/offset, but a
+        # runaway page still needs a ceiling. At ~900 bytes/row, 1,873 rows ≈ 1.7MB.
+        recs_raw, was_capped = _cap_raw_rows(recs_raw, "resource quota")
+        truncated = was_capped or item_count > offset + fetched_count
+        next_offset = (offset + fetched_count) if truncated else None
+
+        # P0: Integrity check — warn when rows carry blank cluster/namespace but have resources.
+        # Blank dimensions indicate an unattributed row from the API, not a missing-quota entry.
+        blank_rows = [r for r in recs_raw if (not r.get("cluster") or not r.get("namespace")) and r.get("resources")]
+        if blank_rows:
+            logger.warning(
+                "ResourceQuota API returned %d row(s) with blank cluster or namespace but populated resources",
+                len(blank_rows),
+            )
+            integrity_warnings.append(
+                f"{len(blank_rows)} row(s) had a blank cluster or namespace field with populated resources — "
+                "these may be unattributed recommendations from the Kubecost API."
+            )
 
         if not recs_raw:
             return ResourceQuotaResponse(
