@@ -33,6 +33,7 @@
     "cloudability",
     "configmap",
     "daemonset",
+    "dedup",
     "DCR",
     "dedupe",
     "DIFFTOOL",
