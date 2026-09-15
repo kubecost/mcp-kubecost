@@ -42,7 +42,6 @@ class Settings:
     KUBECOST_API_KEY: str | None
     require_client_api_key: bool
     use_cac_views: bool
-    legacy_text_content: bool
     ssl_verify: bool | str  # passed directly to httpx verify=
     request_timeout_seconds: float
     retry_count: int
@@ -373,7 +372,6 @@ def get_settings() -> Settings:
         rate_limit_burst_capacity=rate_limit_burst_capacity,
         max_concurrent_tool_calls=max_concurrent_tool_calls,
         use_cac_views=_get_bool_env("USE_CAC_VIEWS", False),
-        legacy_text_content=_get_bool_env("MCP_LEGACY_TEXT_CONTENT", False),
         auth_mode=auth_mode,
         oidc_issuer_url=oidc_issuer_url,
         oidc_client_id=oidc_client_id,

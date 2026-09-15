@@ -28,7 +28,7 @@ from mcp_kubecost.client import kubecost_client_lifespan
 from mcp_kubecost.config.oidc import create_oidc_provider
 from mcp_kubecost.config.settings import AuthMode, apply_http_rich_logging, get_settings
 from mcp_kubecost.errors import ConfigError
-from mcp_kubecost.middleware import TextContentSummaryMiddleware, ToolConcurrencyLimitMiddleware
+from mcp_kubecost.middleware import ToolConcurrencyLimitMiddleware
 from mcp_kubecost.skills import register_all_skills
 from mcp_kubecost.telemetry import log_telemetry_status
 from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
@@ -217,7 +217,6 @@ def create_server(server_name) -> FastMCP:
         )
     )
     mcp.add_middleware(ToolConcurrencyLimitMiddleware(settings.max_concurrent_tool_calls))
-    mcp.add_middleware(TextContentSummaryMiddleware(settings.legacy_text_content))
 
     # Register all toolsets
     register_kubecost_tools(mcp)
