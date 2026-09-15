@@ -137,6 +137,7 @@ test-all:
     #!/usr/bin/env bash
     set -euo pipefail
     export KUBECOST_BASE_URL="${KUBECOST_BASE_URL:-https://demo.kubecost.xyz}"
+    export MCP_KUBECOST_TARGET="${MCP_KUBECOST_TARGET:-tests/mcp-demo.json}"    
     uv run pytest -m ""
 
 # Live integration tests only. Default target is tests/mcp-demo.json (same as the CI `integration` job).
@@ -156,7 +157,9 @@ test-integration-http-3030:
         echo -e "\033[33m  Run 'just serve' or 'just docker-build-run' to start the FastMCP server.\033[0m" >&2
         exit 1
     fi
-    MCP_KUBECOST_TARGET=http://localhost:3030/mcp uv run pytest -m integration
+    export KUBECOST_BASE_URL="${KUBECOST_BASE_URL:-https://demo.kubecost.xyz}"    
+    export MCP_KUBECOST_TARGET="${MCP_KUBECOST_TARGET:-http://localhost:3030/mcp}"
+    uv run pytest -m integration
 
 # Mirror the `test` job in .github/workflows/ci.yml. Pass --no-auto-format to skip the formatter prompt.
 [positional-arguments]
