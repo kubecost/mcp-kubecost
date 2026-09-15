@@ -19,7 +19,6 @@ from mcp.types import TextContent
 from pytest_httpx import HTTPXMock
 
 from mcp_kubecost.domain.kubecost.sizing_guidance import SIZING_MECHANICS
-from mcp_kubecost.middleware import TextContentSummaryMiddleware
 from mcp_kubecost.skills import register_all_skills
 from mcp_kubecost.tools import kubecost_tools as ktools
 from mcp_kubecost.tools.kubecost_tools import (
