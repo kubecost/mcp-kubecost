@@ -14,7 +14,11 @@
             ],
             "transport": "stdio",
             "env": {
-                "KUBECOST_BASE_URL": "https://demo.kubecost.xyz"
+                "KUBECOST_BASE_URL": "http://localhost:9090",
+                "KUBECOST_API_BASE_PATH": "/model",
+                "FASTMCP_SHOW_SERVER_BANNER": "false",
+                "FASTMCP_LOG_LEVEL": "DEBUG",
+                "FASTMCP_ENABLE_RICH_LOGGING": "false"
             }
         }
     }
