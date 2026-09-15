@@ -24,7 +24,7 @@ CLI accepts:
 
         MCP_KUBECOST_TARGET=http://localhost:3030/mcp uv run pytest -m integration
 
-The default target is the developer's own ``.bob/mcp.json`` (gitignored), and
+The default target is the developer's own ``.agents/mcp.json`` (gitignored), and
 ``MCP_KUBECOST_CONFIG`` is still honoured as the old name for this setting.
 Tests skip when a file target is missing, so a checkout without one is not a
 failure; a URL target is not probed in advance, so an unreachable one fails.
@@ -46,7 +46,7 @@ from urllib.parse import urlsplit
 
 import pytest
 
-DEFAULT_MCP_TARGET = os.path.join(os.path.dirname(__file__), "..", ".bob", "mcp.json")
+DEFAULT_MCP_TARGET = os.path.join(os.path.dirname(__file__), "..", ".agents", "mcp.json")
 MCP_TARGET = os.environ.get("MCP_KUBECOST_TARGET") or os.environ.get("MCP_KUBECOST_CONFIG") or DEFAULT_MCP_TARGET
 
 pytestmark = pytest.mark.integration

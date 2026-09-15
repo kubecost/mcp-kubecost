@@ -7,6 +7,7 @@ The FastMCP `tool.run()` returns a `ToolResult` with `.structured_content` (dict
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import UTC
@@ -111,45 +112,37 @@ def mcp_app() -> FastMCP:
     return app
 
 
-# ── text content vs structuredContent (through middleware) ───────────────────
+# ── text content vs structuredContent ────────────────────────────────────────
 
 
-class TestTextContentSummary:
+class TestDualJsonContent:
     """End-to-end shape of a tool call as a client sees it.
 
-    Every other test here calls ``tool.run()``, which bypasses middleware. These
-    go through a real client round-trip so ``TextContentSummaryMiddleware`` is in
-    the path. ``kubecost_list_windows`` needs no HTTP stub.
+    Every other test here calls ``tool.run()``, which still returns a ToolResult
+    but this goes through a real client round-trip. MCP 2025-11-25 says a tool
+    that returns structured content SHOULD also put the same JSON in the text
+    block for clients that ignore structuredContent. FastMCP does that by
+    default when tools return a Pydantic model; we must not strip it.
+    ``kubecost_list_windows`` needs no HTTP stub.
     """
 
     @staticmethod
-    def _app(legacy_text_content: bool) -> FastMCP:
+    def _app() -> FastMCP:
         app = FastMCP("test-kubecost-text")
         register_kubecost_tools(app)
-        app.add_middleware(TextContentSummaryMiddleware(legacy_text_content))
         return app
 
     @pytest.mark.asyncio
-    async def test_text_is_a_summary_and_structured_content_is_complete(self):
-        async with Client(self._app(legacy_text_content=False)) as client:
+    async def test_text_json_matches_structured_content(self):
+        async with Client(self._app()) as client:
             result = await client.call_tool("kubecost_list_windows", {})
 
         assert len(result.content) == 1
         text = _text(result)
-        assert text.startswith("Here is a list of possible time window formats")
-        assert "structuredContent" in text
-        # The payload itself must not be duplicated into the text block.
-        assert "lastmonth" not in text
-        assert len(_sc(result)["windows"]) > 0
-
-    @pytest.mark.asyncio
-    async def test_legacy_flag_restores_full_json_text(self):
-        async with Client(self._app(legacy_text_content=True)) as client:
-            result = await client.call_tool("kubecost_list_windows", {})
-
-        text = _text(result)
+        structured = _sc(result)
+        assert json.loads(text) == structured
         assert "lastmonth" in text
-        assert len(_sc(result)["windows"]) > 0
+        assert len(structured["windows"]) > 0
 
 
 # ── kubecost_list_windows (no HTTP) ──────────────────────────────────────────
