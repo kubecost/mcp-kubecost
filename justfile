@@ -1,6 +1,14 @@
 # Task Runner
 # https://github.com/casey/just
 
+# Enforce bash/zsh strict mode
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# consistency across all platforms and development environments
+unexport VIRTUAL_ENV
+export UV_FROZEN := "1"
+export UV_PYTHON_PREFERENCE := "only-managed"
+
 MCP_CONFIG := "./.agents/mcp.json"
 
 default:
@@ -133,8 +141,8 @@ spell-check:
 # Automatically check for outdated dependencies and update pyproject.toml
 update-dependencies:
     just setup-dev-environment
-    ./scripts/update_dependencies.py
-    uv sync --all-extras --active --upgrade
+    env -u UV_FROZEN ./scripts/update_dependencies.py
+    env -u UV_FROZEN uv sync --all-extras
 
 build:
     uv sync --extra dev
