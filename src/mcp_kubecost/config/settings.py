@@ -342,7 +342,7 @@ def get_settings() -> Settings:
 
     # AUTH_MODE=api_key is the same gate as REQUIRE_CLIENT_API_KEY=true.
     require_client_api_key = _get_bool_env("REQUIRE_CLIENT_API_KEY", False) or auth_mode == AuthMode.API_KEY
-    request_timeout_seconds = _get_float_env("REQUEST_TIMEOUT_SECONDS", 15.0)
+    request_timeout_seconds = _get_float_env("REQUEST_TIMEOUT_SECONDS", 300.0)
     if request_timeout_seconds <= 0:
         raise ConfigError("REQUEST_TIMEOUT_SECONDS must be greater than 0")
     retry_count = _get_int_env("REQUEST_RETRY_COUNT", 2)
