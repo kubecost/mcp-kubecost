@@ -101,6 +101,10 @@ class TestRequireClientApiKeySetting:
 
 
 class TestRequestSettings:
+    def test_default_timeout_is_300(self, monkeypatch):
+        monkeypatch.delenv("REQUEST_TIMEOUT_SECONDS", raising=False)
+        assert _load_settings(monkeypatch).request_timeout_seconds == 300.0
+
     def test_rejects_non_positive_timeout(self, monkeypatch):
         for value in ("0", "-0.1"):
             with pytest.raises(ConfigError, match="REQUEST_TIMEOUT_SECONDS must be greater than 0"):
