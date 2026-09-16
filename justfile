@@ -1,7 +1,7 @@
 # Task Runner
 # https://github.com/casey/just
 
-MCP_CONFIG := "./.bob/mcp.json"
+MCP_CONFIG := "./.agents/mcp.json"
 
 default:
     @just --list
@@ -42,8 +42,8 @@ docker-build-run:
 
 # Install dependencies and create virtual environment
 setup-dev-environment:
-    uv venv --clear
-    uv sync --all-extras --active
+    uv venv .venv --clear
+    uv sync --all-extras
 
 # Start FastMCP dev server with browser inspector UI
 dev-inspector:
