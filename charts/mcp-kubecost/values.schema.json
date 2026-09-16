@@ -230,6 +230,7 @@
           "required": ["value", "existingSecret", "key"]
         },
         "requestTimeoutSeconds": { "type": "number", "exclusiveMinimum": 0 },
+        "toolCallTimeoutSeconds": { "type": "number", "exclusiveMinimum": 0 },
         "requestRetryCount": { "type": "integer", "minimum": 0 },
         "rateLimitRequestsPerSecond": { "type": "number", "exclusiveMinimum": 0 },
         "rateLimitBurstCapacity": { "type": "integer", "minimum": 1 },
@@ -285,7 +286,7 @@
           }
         }
       },
-      "required": ["authMode", "kubecostApiBaseUrl", "kubecostApiPort", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "requestRetryCount", "rateLimitRequestsPerSecond", "rateLimitBurstCapacity", "maxConcurrentToolCalls", "defaultWindow", "logLevel", "useCacViews", "requireClientApiKey", "externalUrl", "fastmcpHttpHostOriginProtection", "fastmcpHttpAllowedHosts", "fastmcpHttpAllowedOrigins", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "otelExcludedUrls", "ssl", "oidc"]
+      "required": ["authMode", "kubecostApiBaseUrl", "kubecostApiPort", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "toolCallTimeoutSeconds", "requestRetryCount", "rateLimitRequestsPerSecond", "rateLimitBurstCapacity", "maxConcurrentToolCalls", "defaultWindow", "logLevel", "useCacViews", "requireClientApiKey", "externalUrl", "fastmcpHttpHostOriginProtection", "fastmcpHttpAllowedHosts", "fastmcpHttpAllowedOrigins", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "otelExcludedUrls", "ssl", "oidc"]
     },
     "nodeSelector": { "type": "object" },
     "tolerations": { "type": "array" },

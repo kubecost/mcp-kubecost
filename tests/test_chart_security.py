@@ -73,6 +73,7 @@ async def test_chart_guard_allows_public_requests_and_rejects_browser_attacks(tm
         values["httpRoute"] = {"enabled": True, "hostnames": ["mcp.example.com"], "parentRefs": [{"name": "gateway"}]}
     docs = _render(tmp_path, values)
     env = docs["ConfigMap"]["data"]
+    assert env["MCP_TOOL_CALL_TIMEOUT_SECONDS"] == "600"
     assert env["FASTMCP_HTTP_HOST_ORIGIN_PROTECTION"] == "true"
     assert env["FORWARDED_ALLOW_IPS"] == ""
     hosts = json.loads(env["FASTMCP_HTTP_ALLOWED_HOSTS"])

@@ -11,8 +11,8 @@ set -euo pipefail
 #
 # Examples:
 #   scripts/cost_comparison.sh
-#   scripts/cost_comparison.sh ./.bob/mcp.json namespace
-#   scripts/cost_comparison.sh ./.bob/mcp.json cluster,namespace
+#   scripts/cost_comparison.sh ./.agents/mcp.json namespace
+#   scripts/cost_comparison.sh ./.agents/mcp.json cluster,namespace
 #
 # Notes:
 #   - Windows are RFC3339 ranges computed in UTC so they satisfy the
@@ -23,7 +23,7 @@ set -euo pipefail
 #     fine for a quick comparison but not guaranteed to be exactly 7 days apart
 #     in every edge case.
 
-MCP_CONFIG="${1:-./.bob/mcp.json}"
+MCP_CONFIG="${1:-./.agents/mcp.json}"
 AGGREGATE="${2:-namespace}"
 
 # --- Portable UTC date arithmetic (macOS/BSD date vs GNU date) --------------
