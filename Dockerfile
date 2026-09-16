@@ -1,63 +1,102 @@
 # syntax=docker/dockerfile:1
-FROM ghcr.io/astral-sh/uv:trixie-slim AS builder
+# ==============================================================================
+# Stage 1: Builder
+# Install Python, uv, and project dependencies. Builder is discarded; only
+# /app (venv + application) is copied into the runtime image.
+# Python is installed at /usr/bin/python3.12 so the venv shebang matches the
+# same path provided by the pkg stage in the final image.
+# ==============================================================================
+FROM registry.access.redhat.com/ubi9-minimal:latest AS builder
 
-ENV UV_COMPILE_BYTECODE=1 \
-    UV_LINK_MODE=copy \
-    UV_NO_DEV=1 \
-    UV_PYTHON_CACHE_DIR=/root/.cache/uv/python \
-    UV_PYTHON_INSTALL_DIR=/python \
-    UV_PYTHON_PREFERENCE=only-managed
+RUN microdnf install -y python3.12 python3.12-pip && \
+    microdnf clean all
 
 WORKDIR /app
+RUN python3.12 -m pip install --no-cache-dir uv
 
-# Install locked third-party dependencies in a separately cached layer.
-RUN --mount=type=cache,target=/root/.cache/uv \
-    --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    uv sync --locked --no-install-project --no-editable --extra otel
+# UV_PYTHON pins the interpreter the venv is built against: the venv shebang must
+# be a path that also exists in the final image, and uv will otherwise resolve to
+# a managed CPython download that the runtime stage does not carry.
+ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
+    UV_PYTHON=/usr/bin/python3.12 \
+    UV_PYTHON_DOWNLOADS=never \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_NO_DEV=1
 
+# Dependencies resolve from the lockfile alone, so this layer survives source edits.
+COPY pyproject.toml uv.lock /app/
+RUN python3.12 -m uv sync --locked --no-install-project --no-editable --extra otel
+
+# Ownership is applied by COPY --chown in the final stage; only the group bits,
+# which COPY --chown does not carry, have to be set here.
+COPY README.md /app/
 COPY src/ /app/src/
 COPY config/fastmcp-http.json /app/config/fastmcp-http.json
+RUN python3.12 -m uv sync --locked --no-editable --extra otel && \
+    chmod -R g=u /app && \
+    install -d -m 0770 /var/lib/mcp-kubecost && \
+    chmod -R g=u /var/lib/mcp-kubecost
 
-# Install the application as a non-editable production package.
-RUN --mount=type=bind,source=uv.lock,target=uv.lock \
-    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
-    --mount=type=bind,source=README.md,target=README.md \
-    uv sync --locked --no-editable --extra otel
+# ==============================================================================
+# Stage 2: Python runtime rootfs
+# Start from ubi-micro (no package manager) and add only Python 3.12, CA
+# certs, and tzdata via dnf --installroot. This keeps the runtime UBI-based
+# while excluding rpm/microdnf/libarchive from the final image.
+# ==============================================================================
+FROM registry.access.redhat.com/ubi9/ubi-micro:latest AS micro
 
-# Distroless runtime never installs packages. Drop unused pip that ships
-# with uv-managed CPython so scanners do not flag its vendored copies
-RUN rm -rf \
-      /python/cpython-*/lib/python*/ensurepip \
-      /python/cpython-*/lib/python*/site-packages/pip \
-      /python/cpython-*/lib/python*/site-packages/pip-*.dist-info \
-      /python/cpython-*/bin/pip* \
-    && install -d -m 0750 -o 65532 -g 65532 /var/lib/mcp-kubecost
+FROM registry.access.redhat.com/ubi9:latest AS pkg
+COPY --from=micro / /mnt/rootfs
+RUN dnf install --installroot=/mnt/rootfs --releasever=9 \
+    --setopt=install_weak_deps=false --setopt=tsflags=noscripts --nodocs -y \
+    python3.12 python3.12-libs ca-certificates tzdata \
+    libstdc++ && \
+    dnf reinstall --installroot=/mnt/rootfs --releasever=9 --setopt=tsflags=noscripts --nodocs -y tzdata && \
+    dnf update --installroot=/mnt/rootfs -y && \
+    dnf --installroot=/mnt/rootfs clean all && \
+    rm -rf /mnt/rootfs/var/cache/* /mnt/rootfs/var/lib/dnf /mnt/rootfs/var/log/* /mnt/rootfs/tmp/* && \
+    printf 'nonroot:x:65532:65532:nonroot:/app:/sbin/nologin\n' >> /mnt/rootfs/etc/passwd && \
+    printf 'nonroot:x:65532:\n' >> /mnt/rootfs/etc/group && \
+    mkdir -p /mnt/rootfs/app /mnt/rootfs/licenses /mnt/rootfs/var/lib/mcp-kubecost && \
+    chown 65532:0 /mnt/rootfs/app /mnt/rootfs/var/lib/mcp-kubecost && \
+    chmod g=u /mnt/rootfs/app /mnt/rootfs/var/lib/mcp-kubecost
 
-# ── Runtime stage ────────────────────────────────────────────────────────────
-# distroless/base has libc + libssl but no Python, no shell, no pebble.
-# We bring our own Python (uv-managed) and venv from the builder.
-FROM gcr.io/distroless/cc-debian12:nonroot
+# ==============================================================================
+# Stage 3: Final image
+# /mnt/rootfs is already a complete ubi-micro rootfs plus Python, so FROM
+# scratch avoids shipping that base twice. Contents remain UBI 9 (required for
+# the Red Hat OpenShift Operator); only the declared parent changes.
+# ==============================================================================
+# FROM scratch
+## commenting out the distroless step above, there is concern that the use of scratch will void our certification
 
-# needed to disable Cannot read termcap database; error messages
-COPY --from=builder /usr/share/terminfo /usr/share/terminfo
+FROM registry.access.redhat.com/ubi9/ubi-micro:latest
+COPY --from=pkg /mnt/rootfs /
 
-# Copy the uv-managed Python runtime (venv symlinks point into here)
-COPY --from=builder /python /python
-COPY --from=builder /app/ /app/
-COPY --from=builder --chown=65532:65532 /var/lib/mcp-kubecost/ /var/lib/mcp-kubecost/
+ARG version=dev
+LABEL name="mcp-kubecost" \
+    vendor="Kubecost by IBM" \
+    summary="FinOps MCP server for Kubecost analytics." \
+    description="Read-only Kubecost cost allocation and container rightsizing data for MCP clients." \
+    maintainer="kubecost-image-support@wwpdl.vnet.ibm.com" \
+    version="${version}" \
+    release="${version}"
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
-    TERM=xterm-256color \
-    TERMINFO=/usr/share/terminfo \
+    PYTHONDONTWRITEBYTECODE=1 \
+    TZ=Etc/UTC \
     FASTMCP_SHOW_SERVER_BANNER=false \
     FASTMCP_TELEMETRY_MODE=off \
     OTEL_SERVICE_NAME=mcp-kubecost
 
 WORKDIR /app
+COPY --from=builder --chown=65532:0 /app /app
+COPY --from=builder --chown=65532:0 /var/lib/mcp-kubecost/ /var/lib/mcp-kubecost/
+COPY LICENSE /licenses/LICENSE
 
 EXPOSE 3030
 VOLUME ["/var/lib/mcp-kubecost"]
-
+USER 65532
 CMD ["/app/.venv/bin/mcp-kubecost-http"]
