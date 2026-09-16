@@ -109,6 +109,7 @@ class TestRuntimeProtection:
         assert rate.burst_capacity == 20
         assert rate.global_limit is True
         assert concurrency.max_concurrent == 10
+        assert concurrency.timeout_seconds == 600.0
 
 
 class TestProbesStayUnauthenticatedWithAuthEnabled:

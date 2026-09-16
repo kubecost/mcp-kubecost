@@ -56,7 +56,7 @@ def start_http_client() -> httpx.AsyncClient:
     if _http_client is None or _http_client.is_closed:
         settings = get_settings()
         _http_client = httpx.AsyncClient(
-            timeout=settings.request_timeout_seconds,
+            timeout=httpx.Timeout(settings.request_timeout_seconds, connect=10.0, write=10.0, pool=10.0),
             verify=settings.ssl_verify,
         )
     return _http_client

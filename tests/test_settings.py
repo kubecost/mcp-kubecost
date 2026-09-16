@@ -110,6 +110,11 @@ class TestRequestSettings:
             with pytest.raises(ConfigError, match="REQUEST_TIMEOUT_SECONDS must be greater than 0"):
                 _load_settings(monkeypatch, REQUEST_TIMEOUT_SECONDS=value)
 
+    def test_tool_call_deadline(self, monkeypatch):
+        assert _load_settings(monkeypatch, MCP_TOOL_CALL_TIMEOUT_SECONDS="42").tool_call_timeout_seconds == 42.0
+        with pytest.raises(ConfigError, match="MCP_TOOL_CALL_TIMEOUT_SECONDS must be greater than 0"):
+            _load_settings(monkeypatch, MCP_TOOL_CALL_TIMEOUT_SECONDS="0")
+
     def test_rejects_negative_retry_count(self, monkeypatch):
         with pytest.raises(ConfigError, match="REQUEST_RETRY_COUNT must be 0 or greater"):
             _load_settings(monkeypatch, REQUEST_RETRY_COUNT="-1")

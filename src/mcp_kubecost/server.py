@@ -221,7 +221,9 @@ def create_server(server_name) -> FastMCP:
             global_limit=True,
         )
     )
-    mcp.add_middleware(ToolConcurrencyLimitMiddleware(settings.max_concurrent_tool_calls))
+    mcp.add_middleware(
+        ToolConcurrencyLimitMiddleware(settings.max_concurrent_tool_calls, settings.tool_call_timeout_seconds)
+    )
 
     # Register all toolsets
     register_kubecost_tools(mcp)

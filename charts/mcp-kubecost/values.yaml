@@ -248,6 +248,8 @@ config:
   # config.requestTimeoutSeconds is the Kubecost HTTP request timeout in seconds.
   # note that this should be fairly long in case of long running queries
   requestTimeoutSeconds: 300
+  # Total deadline per tool call, including queue time, API requests, and retries.
+  toolCallTimeoutSeconds: 600
   # config.requestRetryCount is the number of configured HTTP retries.
   requestRetryCount: 2
   # Sustained MCP request rate per pod. FastMCP uses a token bucket.

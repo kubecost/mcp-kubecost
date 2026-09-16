@@ -339,7 +339,11 @@ async def test_get_uses_configured_timeout(httpx_mock: HTTPXMock):
     with patch("mcp_kubecost.client.httpx.AsyncClient", side_effect=factory):
         await _get_with({}, _auth_settings(request_timeout_seconds=7.5))
 
-    assert captured["timeout"] == 7.5
+    timeout = captured["timeout"]
+    assert timeout.read == 7.5
+    assert timeout.connect == 10.0
+    assert timeout.write == 10.0
+    assert timeout.pool == 10.0
 
 
 @pytest.mark.asyncio
