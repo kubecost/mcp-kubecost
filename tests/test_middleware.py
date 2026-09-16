@@ -64,7 +64,7 @@ async def test_tool_deadline_includes_queue_wait():
 
     first = asyncio.create_task(middleware.on_call_tool(MagicMock(), call_next))
     await entered.wait()
-    with pytest.raises(ToolError, match="exceeded the 0.02-second deadline"):
+    with pytest.raises(ToolError, match=r"\[upstream_timeout\].*retryable=true.*Action: Retry a narrower query"):
         await middleware.on_call_tool(MagicMock(), call_next)
-    with pytest.raises(ToolError, match="exceeded the 0.02-second deadline"):
+    with pytest.raises(ToolError, match=r"\[upstream_timeout\].*retryable=true.*Action: Retry a narrower query"):
         await first

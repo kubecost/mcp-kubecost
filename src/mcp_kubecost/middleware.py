@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 
-from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import ToolResult
 from mcp.types import CallToolRequestParams
+
+from mcp_kubecost.errors import ErrorCode
 
 
 class ToolConcurrencyLimitMiddleware(Middleware):
@@ -31,7 +32,13 @@ class ToolConcurrencyLimitMiddleware(Middleware):
             async with asyncio.timeout(self.timeout_seconds):
                 async with self._semaphore:
                     return await call_next(context)
-        except TimeoutError as exc:
-            raise ToolError(
-                f"Tool call exceeded the {self.timeout_seconds:g}-second deadline. Retry a narrower query."
-            ) from exc
+        except TimeoutError:
+            # Import here so middleware imports do not load tool settings at module import time.
+            from mcp_kubecost.tools._common import raise_tool_error
+
+            raise_tool_error(
+                ErrorCode.UPSTREAM_TIMEOUT,
+                f"Tool call exceeded the {self.timeout_seconds:g}-second deadline.",
+                retryable=True,
+                suggested_action="Retry a narrower query. If timeouts persist, check Kubecost load.",
+            )

@@ -28,13 +28,13 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
 COPY pyproject.toml uv.lock /app/
 RUN python3.12 -m uv sync --locked --no-install-project --no-editable --extra otel
 
-# Ownership is applied by COPY --chown in the final stage; only the group bits,
-# which COPY --chown does not carry, have to be set here.
+# Keep group read/execute for OpenShift's arbitrary UID in group 0, but do not
+# let the runtime process modify application code or installed packages.
 COPY README.md /app/
 COPY src/ /app/src/
 COPY config/fastmcp-http.json /app/config/fastmcp-http.json
 RUN python3.12 -m uv sync --locked --no-editable --extra otel && \
-    chmod -R g=u /app && \
+    chmod -R g=u,go-w /app && \
     install -d -m 0770 /var/lib/mcp-kubecost && \
     chmod -R g=u /var/lib/mcp-kubecost
 
@@ -59,8 +59,9 @@ RUN dnf install --installroot=/mnt/rootfs --releasever=9 \
     printf 'nonroot:x:65532:65532:nonroot:/app:/sbin/nologin\n' >> /mnt/rootfs/etc/passwd && \
     printf 'nonroot:x:65532:\n' >> /mnt/rootfs/etc/group && \
     mkdir -p /mnt/rootfs/app /mnt/rootfs/licenses /mnt/rootfs/var/lib/mcp-kubecost && \
-    chown 65532:0 /mnt/rootfs/app /mnt/rootfs/var/lib/mcp-kubecost && \
-    chmod g=u /mnt/rootfs/app /mnt/rootfs/var/lib/mcp-kubecost
+    chown 65532:0 /mnt/rootfs/var/lib/mcp-kubecost && \
+    chmod 0755 /mnt/rootfs/app && \
+    chmod g=u /mnt/rootfs/var/lib/mcp-kubecost
 
 # ==============================================================================
 # Stage 3: Final image
@@ -92,7 +93,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     OTEL_SERVICE_NAME=mcp-kubecost
 
 WORKDIR /app
-COPY --from=builder --chown=65532:0 /app /app
+COPY --from=builder --chown=0:0 /app /app
 COPY --from=builder --chown=65532:0 /var/lib/mcp-kubecost/ /var/lib/mcp-kubecost/
 COPY LICENSE /licenses/LICENSE
 
