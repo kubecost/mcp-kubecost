@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       bump-level:
-        description: "Is this a major/minor/patch? Breaking changes should be a minor bump. Fixes are patches."
+        description: "Is this a major/minor/patch? Breaking changes should be a minor bump. Fixes are patches. Ignored when dry-run is true."
         required: true
         type: choice
         options:
@@ -21,6 +21,11 @@ on:
         required: false
         type: string
         default: ""
+      dry-run:
+        description: "Build wheel, chart, and the multi-arch image from this branch without bumping versions, tagging a GitHub Release, pushing to ICR, or updating Helm."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # required for creating the GitHub Release and pushing to gh-pages
@@ -37,6 +42,11 @@ jobs:
           ssh-key: ${{ secrets.DEPLOY_KEY }}
           fetch-depth: 0
 
+      - name: Dry-run notice
+        if: ${{ inputs.dry-run }}
+        run: |
+          echo "Dry-run: packaging this branch and building the multi-arch image without publishing."
+
       - name: Install uv
         uses: astral-sh/setup-uv@v10.0.1
         with:
@@ -50,7 +60,7 @@ jobs:
         run: uv sync --locked --all-extras
 
       - name: Bump version
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.dry-run
         run: |
           set -euo pipefail
 
@@ -117,7 +127,7 @@ jobs:
           echo "release_tag=$RELEASE_TAG"     >> "$GITHUB_OUTPUT"
 
       - name: Verify release tag is unused
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.dry-run
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.id.outputs.release_tag }}
@@ -168,7 +178,7 @@ jobs:
           if-no-files-found: error
 
       - name: Create GitHub Release
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.dry-run
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.id.outputs.release_tag }}
@@ -209,12 +219,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ needs.build.outputs.release_tag }}
+          # Dry-run must use the dispatched branch. The release tag is only created
+          # by the GitHub Release step, which dry-run skips.
+          ref: ${{ inputs.dry-run && github.sha || needs.build.outputs.release_tag }}
+
+      # QEMU is required on ubuntu-latest for arm64/s390x. The ibm-finops-agent
+      # job skips this because it runs on Kubecost-Linux-Large-x86, which already
+      # has binfmt. Do not drop QEMU without switching this job to that runner.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64,s390x
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
       - name: Log in to ICR
+        if: ${{ !inputs.dry-run }}
         uses: docker/login-action@v4
         with:
           registry: icr.io
@@ -227,24 +248,40 @@ jobs:
         with:
           images: icr.io/kubecost/mcp-kubecost
           tags: |
-            type=raw,value=latest
-            type=raw,value=${{ needs.build.outputs.release_tag }}
-            type=raw,value=${{ needs.build.outputs.chart_version }}
+            type=raw,value=latest,enable=${{ !inputs.dry-run }}
+            type=raw,value=${{ needs.build.outputs.release_tag }},enable=${{ !inputs.dry-run }}
+            type=raw,value=${{ needs.build.outputs.chart_version }},enable=${{ !inputs.dry-run }}
+            type=raw,value=dry-run-${{ github.sha }},enable=${{ inputs.dry-run }}
 
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
           context: .
-          push: true
-          platforms: linux/amd64,linux/arm64
+          push: ${{ !inputs.dry-run }}
+          # Multi-arch cannot use the default docker exporter when push is false.
+          outputs: ${{ inputs.dry-run && 'type=cacheonly' || 'type=registry' }}
+          platforms: linux/amd64,linux/arm64,linux/s390x
+          build-args: |
+            version=${{ inputs.dry-run && github.sha || needs.build.outputs.release_tag }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Dry-run summary
+        if: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Dry-run"
+            echo ""
+            echo "Built linux/amd64, linux/arm64, and linux/s390x from \`${GITHUB_SHA}\`."
+            echo "Did not bump versions, create a GitHub Release, push to ICR, or update Helm."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   update-helm-index:
     needs: [build, publish-image]
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry-run
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -295,7 +332,7 @@ jobs:
   # after the chart is downloadable from the Helm index.
   update-parent-chart:
     needs: [build, publish-image, update-helm-index]
-    if: github.event_name == 'workflow_dispatch' && !inputs.prerelease
+    if: github.event_name == 'workflow_dispatch' && !inputs.prerelease && !inputs.dry-run
     runs-on: ubuntu-latest
     permissions:
       contents: read

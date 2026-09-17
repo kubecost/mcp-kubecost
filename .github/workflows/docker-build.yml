@@ -92,7 +92,11 @@ jobs:
         with:
           context: .
           push: ${{ env.PUBLISH == 'true' }}
+          # amd64 only — linux/arm64 and linux/s390x are built on release
+          # (.github/workflows/release.yml publish-image), where QEMU cost is acceptable.
           platforms: linux/amd64
+          build-args: |
+            version=${{ github.sha }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
