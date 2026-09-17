@@ -223,13 +223,13 @@ jobs:
           # by the GitHub Release step, which dry-run skips.
           ref: ${{ inputs.dry-run && github.sha || needs.build.outputs.release_tag }}
 
-      # QEMU is required on ubuntu-latest for arm64/s390x. The ibm-finops-agent
-      # job skips this because it runs on Kubecost-Linux-Large-x86, which already
+      # QEMU is required on ubuntu-latest for arm64. The ibm-finops-agent job
+      # skips this because it runs on Kubecost-Linux-Large-x86, which already
       # has binfmt. Do not drop QEMU without switching this job to that runner.
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
         with:
-          platforms: arm64,s390x
+          platforms: arm64
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -260,7 +260,7 @@ jobs:
           push: ${{ !inputs.dry-run }}
           # Multi-arch cannot use the default docker exporter when push is false.
           outputs: ${{ inputs.dry-run && 'type=cacheonly' || 'type=registry' }}
-          platforms: linux/amd64,linux/arm64,linux/s390x
+          platforms: linux/amd64,linux/arm64
           build-args: |
             version=${{ inputs.dry-run && github.sha || needs.build.outputs.release_tag }}
           tags: ${{ steps.meta.outputs.tags }}
@@ -275,7 +275,7 @@ jobs:
           {
             echo "### Dry-run"
             echo ""
-            echo "Built linux/amd64, linux/arm64, and linux/s390x from \`${GITHUB_SHA}\`."
+            echo "Built linux/amd64 and linux/arm64 from \`${GITHUB_SHA}\`."
             echo "Did not bump versions, create a GitHub Release, push to ICR, or update Helm."
           } >> "$GITHUB_STEP_SUMMARY"
 
