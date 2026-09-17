@@ -37,7 +37,7 @@ jobs:
       chart_version: ${{ steps.id.outputs.py_version }}
       release_tag: ${{ steps.id.outputs.release_tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           ssh-key: ${{ secrets.DEPLOY_KEY }}
           fetch-depth: 0
@@ -48,7 +48,7 @@ jobs:
           echo "Dry-run: packaging this branch and building the multi-arch image without publishing."
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.0.1
+        uses: astral-sh/setup-uv@v10.1.0
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -144,7 +144,7 @@ jobs:
           echo "Tag ${TAG} is available."
 
       - name: Set up Helm
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@v5.0.1
 
       - name: Build wheel + sdist
         run: uv build
@@ -171,7 +171,7 @@ jobs:
           fi
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: ${{ steps.id.outputs.artifact_name }}
           path: dist/*
@@ -217,7 +217,7 @@ jobs:
     outputs:
       image: icr.io/kubecost/mcp-kubecost:${{ needs.build.outputs.release_tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           # Dry-run must use the dispatched branch. The release tag is only created
           # by the GitHub Release step, which dry-run skips.
@@ -227,16 +227,16 @@ jobs:
       # skips this because it runs on Kubecost-Linux-Large-x86, which already
       # has binfmt. Do not drop QEMU without switching this job to that runner.
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4.4.0
         with:
           platforms: arm64
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@v4.4.1
 
       - name: Log in to ICR
         if: ${{ !inputs.dry-run }}
-        uses: docker/login-action@v4
+        uses: docker/login-action@v4.6.0
         with:
           registry: icr.io
           username: iamapikey
@@ -244,7 +244,7 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@v6.2.0
         with:
           images: icr.io/kubecost/mcp-kubecost
           tags: |
@@ -254,7 +254,7 @@ jobs:
             type=raw,value=dry-run-${{ github.sha }},enable=${{ inputs.dry-run }}
 
       - name: Build and push
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@v7.4.0
         with:
           context: .
           push: ${{ !inputs.dry-run }}
@@ -284,14 +284,14 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && !inputs.dry-run
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           ssh-key: ${{ secrets.DEPLOY_KEY }}
           ref: gh-pages
           path: gh-pages
 
       - name: Set up Helm
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@v5.0.1
 
       - name: Download chart tarball from release
         env:
@@ -348,7 +348,7 @@ jobs:
       # in one hour, so no long-lived user PAT is stored in this repository.
       - name: Generate an app token with write access to the parent chart repo
         id: parent-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@v3.2.0
         with:
           client-id: ${{ vars.KC_ACTIONS_BOT_APP_CLIENT_ID }}
           private-key: ${{ secrets.KC_ACTIONS_BOT_APP_PRIVATE_KEY }}
@@ -356,7 +356,7 @@ jobs:
           repositories: kubecost
 
       - name: Check out the parent chart repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           repository: ${{ env.PARENT_REPO }}
           ref: ${{ env.PARENT_BRANCH }}
@@ -367,7 +367,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Helm
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@v5.0.1
 
       # ubuntu-latest ships yq, but pin it so the Chart.yaml edit below cannot
       # break when the runner image is updated.
