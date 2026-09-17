@@ -26,9 +26,9 @@ _update_chart_version:
     #!/usr/bin/env bash
     set -euo pipefail
     VERSION=$(uv version --short)
-    echo "Updating Chart.yaml appVersion to $VERSION..."
-    just _sed 's|^appVersion:.*|appVersion: "'"$VERSION"'"|' charts/mcp-kubecost/Chart.yaml
-    echo "Updated charts/mcp-kubecost/Chart.yaml appVersion to $VERSION"
+    echo "Updating Chart.yaml appVersion to v$VERSION..."
+    just _sed 's|^appVersion:.*|appVersion: "v'"$VERSION"'"|' charts/mcp-kubecost/Chart.yaml
+    echo "Updated charts/mcp-kubecost/Chart.yaml appVersion to v$VERSION"
 
 # build and run docker image on por 3030 for integration tests
 docker-build-run:

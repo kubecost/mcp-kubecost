@@ -36,7 +36,7 @@ jobs:
         run: |
           mkdir -p .helm-render
           helm template mcp-kubecost "$CHART_DIR" --namespace mcp-kubecost > .helm-render/mcp-kubecost-default.yaml
-          grep -q 'image: "icr.io/kubecost/mcp-kubecost:' .helm-render/mcp-kubecost-default.yaml
+          grep -q 'image: "icr.io/kubecost/mcp-kubecost:v' .helm-render/mcp-kubecost-default.yaml
           grep -q 'replicas: 1' .helm-render/mcp-kubecost-default.yaml
           grep -q 'type: Recreate' .helm-render/mcp-kubecost-default.yaml
           grep -q 'FORWARDED_ALLOW_IPS: ""' .helm-render/mcp-kubecost-default.yaml
@@ -104,7 +104,7 @@ jobs:
             --set global.platforms.cicd.enabled=true \
             --set global.platforms.cicd.skipSanityChecks=true \
             > .helm-render/mcp-kubecost-global.yaml
-          grep -q 'image: "public.ecr.aws/kubecost/mcp-kubecost:' .helm-render/mcp-kubecost-global.yaml
+          grep -q 'image: "public.ecr.aws/kubecost/mcp-kubecost:v' .helm-render/mcp-kubecost-global.yaml
           grep -q 'name: icr-pull' .helm-render/mcp-kubecost-global.yaml
           grep -q 'name: app-pull' .helm-render/mcp-kubecost-global.yaml
           ! grep -q 'icr.io' .helm-render/mcp-kubecost-global.yaml
