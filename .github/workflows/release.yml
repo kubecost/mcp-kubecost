@@ -86,12 +86,14 @@ jobs:
             echo "::warning::manifest.json not found — skipping version sync."
           fi
 
-          # Keep Chart.yaml version + appVersion in lockstep with pyproject.toml.
+          # Chart.yaml version is Helm SemVer (no v). appVersion is the git/ICR
+          # image tag and keeps the leading v so the default image is
+          # icr.io/kubecost/mcp-kubecost:v${PY_VERSION}.
           CHART_FILE="charts/mcp-kubecost/Chart.yaml"
           if [ -f "$CHART_FILE" ]; then
             sed -i "s|^version:.*|version: ${PY_VERSION}|" "$CHART_FILE"
-            sed -i "s|^appVersion:.*|appVersion: \"${PY_VERSION}\"|" "$CHART_FILE"
-            echo "Updated $CHART_FILE version and appVersion to $PY_VERSION"
+            sed -i "s|^appVersion:.*|appVersion: \"v${PY_VERSION}\"|" "$CHART_FILE"
+            echo "Updated $CHART_FILE version to ${PY_VERSION} and appVersion to v${PY_VERSION}"
           fi
 
           git config user.name "github-app-commit[bot]"
@@ -250,7 +252,6 @@ jobs:
           tags: |
             type=raw,value=latest,enable=${{ !inputs.dry-run }}
             type=raw,value=${{ needs.build.outputs.release_tag }},enable=${{ !inputs.dry-run }}
-            type=raw,value=${{ needs.build.outputs.chart_version }},enable=${{ !inputs.dry-run }}
             type=raw,value=dry-run-${{ github.sha }},enable=${{ inputs.dry-run }}
 
       - name: Build and push
@@ -463,6 +464,21 @@ jobs:
           helm repo update > /dev/null
           helm dependency update "$PARENT_CHART_DIR"
 
+          # The parent validate-mcp-subchart job builds the expected image tag from
+          # the chart pin and used to strip the leading v. Image tags are now always
+          # v-prefixed (appVersion); tarball / Chart.lock checks still use #v.
+          VALIDATE_SCRIPT=".github/scripts/validate_mcp_subchart.sh"
+          if [ -f "$VALIDATE_SCRIPT" ]; then
+            # Only the image assertions change. Tarball/Chart.lock still use ${dep_version#v}.
+            sed -i \
+              -e 's|icr.io/kubecost/mcp-kubecost:${dep_version#v}|icr.io/kubecost/mcp-kubecost:v${dep_version#v}|g' \
+              -e 's|test-registry.io/kubecost/mcp-kubecost:${dep_version#v}|test-registry.io/kubecost/mcp-kubecost:v${dep_version#v}|g' \
+              "$VALIDATE_SCRIPT"
+            echo "Ensured ${VALIDATE_SCRIPT} expects a v-prefixed image tag."
+          else
+            echo "::warning::${VALIDATE_SCRIPT} not found; parent CI may still expect an unprefixed image tag."
+          fi
+
           echo "previous=${CURRENT}" >> "$GITHUB_OUTPUT"
           echo "changed=true"        >> "$GITHUB_OUTPUT"
 
@@ -495,8 +511,8 @@ jobs:
             > /tmp/parent-render.yaml
           grep -q "kind: Deployment" /tmp/parent-render.yaml
           grep -q "charts/mcp/templates/deployment.yaml" /tmp/parent-render.yaml
-          grep -q "image: \"icr.io/kubecost/mcp-kubecost:${CHART_VERSION}\"" /tmp/parent-render.yaml
-          echo "Parent chart renders mcp-kubecost ${CHART_VERSION}."
+          grep -q "image: \"icr.io/kubecost/mcp-kubecost:v${CHART_VERSION}\"" /tmp/parent-render.yaml
+          echo "Parent chart renders mcp-kubecost v${CHART_VERSION}."
 
       - name: Diff mcp-kubecost values.yaml between versions
         if: steps.bump.outputs.changed == 'true'
@@ -589,6 +605,9 @@ jobs:
 
           git switch -c "$BRANCH"
           git add "${PARENT_CHART_DIR}/Chart.yaml" "${PARENT_CHART_DIR}/Chart.lock"
+          if [ -f .github/scripts/validate_mcp_subchart.sh ]; then
+            git add .github/scripts/validate_mcp_subchart.sh
+          fi
           git commit -m "chore(deps): bump mcp-kubecost subchart to ${CHART_VERSION}"
           git push --set-upstream origin "$BRANCH"
 
@@ -613,6 +632,7 @@ jobs:
 
           - \`${PARENT_CHART_DIR}/Chart.yaml\`: \`dependencies[mcp-kubecost].version\` -> \`${CHART_VERSION}\`
           - \`${PARENT_CHART_DIR}/Chart.lock\`: regenerated with \`helm dependency update\`
+          - \`.github/scripts/validate_mcp_subchart.sh\`: expected image tag is \`v${CHART_VERSION}\` (chart version stays unprefixed)
 
           ## Validation performed by the release pipeline
 
@@ -620,7 +640,7 @@ jobs:
           - \`helm lint ${PARENT_CHART_DIR} --skip-schema-validation --set 'mcp.enabled=true'\`
           - \`helm template kubecost ${PARENT_CHART_DIR} --skip-schema-validation --set 'global.platforms.cicd.enabled=true' --set 'global.platforms.cicd.skipSanityChecks=true'\` (subchart enabled by default)
           - \`helm template kubecost ${PARENT_CHART_DIR} --skip-schema-validation --set 'mcp.enabled=true' --set 'global.platforms.cicd.enabled=true' --set 'global.platforms.cicd.skipSanityChecks=true'\`
-            renders \`icr.io/kubecost/mcp-kubecost:${CHART_VERSION}\`
+            renders \`icr.io/kubecost/mcp-kubecost:v${CHART_VERSION}\`
 
           ## Notes
 

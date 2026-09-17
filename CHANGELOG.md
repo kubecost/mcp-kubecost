@@ -12,6 +12,9 @@ Package, Helm chart, and git tags currently use **0.17.0** (`v0.17.0`). That is 
 ### Added
 
 - Kubecost filter expressions for workload costs and cost comparison, with a consistent `applied_filter` echo across allocation and container sizing responses
+### Changed
+
+- Default container image tag is now the git/ICR tag with a leading `v` (`icr.io/kubecost/mcp-kubecost:vX.Y.Z`). Helm chart `version` is still unprefixed SemVer. The unprefixed image tag is no longer published on new releases.
 
 ## [0.17.0] - 2026-09-16
 
