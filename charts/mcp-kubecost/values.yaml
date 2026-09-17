@@ -53,7 +53,8 @@ image:
   registry: icr.io
   # image.repository is the image path within the registry (no host).
   repository: kubecost/mcp-kubecost
-  # image.tag is the container image tag. Defaults to the chart appVersion when empty.
+  # image.tag is the container image tag. Defaults to the chart appVersion
+  # (the git/ICR tag, e.g. v0.17.0) when empty. Override for sha-/pr-/latest tags.
   tag: ""
   # image.pullPolicy controls when Kubernetes pulls the image.
   pullPolicy: IfNotPresent
