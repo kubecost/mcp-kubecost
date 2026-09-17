@@ -78,7 +78,7 @@ def test_server_icons_offers_a_light_and_dark_variant():
     assert [icon.src for icon in icons] == [KUBECOST_LOGO_DATA_URI, KUBECOST_LOGO_DARK_DATA_URI]
     assert [getattr(icon, "theme", None) for icon in icons] == ["light", "dark"]
     for icon in icons:
-        assert icon.mimeType == "image/png"
+        assert icon.model_dump(by_alias=True)["mimeType"] == "image/png"
         # Concrete pixel size for a raster image.
         assert icon.sizes == ["128x128"]
 

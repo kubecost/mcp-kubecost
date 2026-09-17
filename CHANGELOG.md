@@ -9,6 +9,10 @@ Package, Helm chart, and git tags currently use **0.17.0** (`v0.17.0`). That is 
 
 ## [Unreleased]
 
+### Added
+
+- Kubecost filter expressions for workload costs and cost comparison, with a consistent `applied_filter` echo across allocation and container sizing responses
+
 ## [0.17.0] - 2026-09-16
 
 General availability of the Kubecost FinOps MCP server: a read-only MCP interface over Kubecost cost allocation and optimization APIs.
