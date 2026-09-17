@@ -147,11 +147,17 @@ Profiles change none of these — every profile is filter-free unless you pass a
 """
 
 _KUBECOST_FILTER_DESCRIPTION = (
-    "Optional Kubecost server-side filter restricting which containers are analyzed, e.g. "
-    'namespace:"prod" or cluster:"cluster-one". Narrows the population before sizing. This is '
-    "NOT a savings threshold — use min_monthly_savings for that, and sort_by to rank results. "
+    "Optional Kubecost server-side filter selecting workloads before aggregation or sizing. "
+    'For example: cluster:"cluster-one"+(namespace:"prod"|namespace:"staging"). '
+    "Use the same expression across allocation and container sizing calls for a consistent scope. "
     "Leave empty (default) to cover all workloads."
 )
+
+
+def _normalize_kubecost_filter(filter_str: str) -> str | None:
+    """Normalize only surrounding whitespace; Kubecost owns the expression grammar."""
+    return filter_str.strip() or None
+
 
 _CONTAINER_SAVINGS_WINDOW_CLARIFICATION = f"""\
 15 days is used by default.
@@ -1119,6 +1125,9 @@ class KubecostAllocationResponse(BaseToolResponse):
         description="Resolved UTC boundaries and display string for the queried window. Null if resolution failed.",
     )
     aggregate: str = Field(description="Aggregation dimension(s) requested.")
+    applied_filter: str | None = Field(
+        default=None, description="Kubecost filter applied before allocation; null means all workloads."
+    )
     dimensions: list[str] = Field(
         default_factory=list,
         description="Resolved dimension columns present in each result row.",
@@ -1292,6 +1301,9 @@ class ContainerSavingsResponse(BaseToolResponse):
     """Response from get_container_savings_recommendations."""
 
     window: str = Field(description="Time window used for the query.")
+    applied_filter: str | None = Field(
+        default=None, description="Kubecost filter applied before sizing; null means all workloads."
+    )
     resolved_window: ResolvedWindow | None = Field(
         default=None,
         description="Resolved UTC boundaries and display string for the queried window. Null if resolution failed.",
@@ -1884,6 +1896,9 @@ class CostComparisonResponse(BaseToolResponse):
         description="Resolved UTC boundaries and display string for the baseline window. Null if resolution failed.",
     )
     aggregate: str = Field(description="Aggregation dimension(s) requested.")
+    applied_filter: str | None = Field(
+        default=None, description="Kubecost filter applied to both periods; null means all workloads."
+    )
     dimensions: list[str] = Field(
         default_factory=list, description="Resolved dimension columns present in each result row."
     )
@@ -1992,6 +2007,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 ),
             ),
         ] = "cluster,namespace",
+        filter_str: Annotated[str, Field(description=_KUBECOST_FILTER_DESCRIPTION)] = "",
         accumulate: Annotated[
             bool,
             Field(
@@ -2044,6 +2060,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         get_container_savings_recommendations. For period-over-period cost
         change / spike investigation, use get_kubecost_cost_comparison instead.
         """
+        applied_filter = _normalize_kubecost_filter(filter_str)
         if not window:
             return KubecostAllocationResponse(
                 status=QueryStatus.ERROR,
@@ -2054,6 +2071,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 ),
                 window=None,
                 aggregate=aggregate,
+                applied_filter=applied_filter,
             )
 
         window, resolved_window = _normalize_and_resolve(window)
@@ -2065,6 +2083,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 window=window,
                 accumulate=accumulate,
                 limit=limit,
+                filter_str=applied_filter,
             )
         except McpToolError as exc:
             _err_msg, _err_action = mcp_error_response_fields(exc)
@@ -2075,6 +2094,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 window=window,
                 resolved_window=resolved_window,
                 aggregate=aggregate,
+                applied_filter=applied_filter,
             )
 
         # The response carries the range Kubecost actually queried; prefer it.
@@ -2090,6 +2110,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 window=window,
                 resolved_window=resolved_window,
                 aggregate=aggregate,
+                applied_filter=applied_filter,
                 dimensions=dimension_cols,
             )
 
@@ -2113,6 +2134,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 window=window,
                 resolved_window=resolved_window,
                 aggregate=aggregate,
+                applied_filter=applied_filter,
                 dimensions=dimension_cols,
                 total_cost=round(total, 2),
                 row_count=0,
@@ -2154,6 +2176,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             window=window,
             resolved_window=resolved_window,
             aggregate=aggregate,
+            applied_filter=applied_filter,
             dimensions=dimension_cols,
             total_cost=round(filtered_total, 2),
             row_count=len(filtered),
@@ -2207,6 +2230,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 ),
             ),
         ] = "cluster,namespace",
+        filter_str: Annotated[str, Field(description=_KUBECOST_FILTER_DESCRIPTION)] = "",
         top_n: Annotated[
             int,
             Field(
@@ -2248,6 +2272,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         grouped under __unallocated__ and explained in the response notes.
 
         """
+        applied_filter = _normalize_kubecost_filter(filter_str)
         default_current_window, default_baseline_window = _default_wow_windows()
         current_window = normalize_window_order(current_window or default_current_window)
         baseline_window = normalize_window_order(baseline_window or default_baseline_window)
@@ -2263,12 +2288,14 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 window=current_window,
                 accumulate=True,
                 limit=100000,
+                filter_str=applied_filter,
             )
             baseline_response = await _fetch_allocation(
                 aggregate=aggregate,
                 window=baseline_window,
                 accumulate=True,
                 limit=100000,
+                filter_str=applied_filter,
             )
         except McpToolError as exc:
             _err_msg, _err_action = mcp_error_response_fields(exc)
@@ -2281,6 +2308,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 resolved_current_window=resolved_current_window,
                 resolved_baseline_window=resolved_baseline_window,
                 aggregate=aggregate,
+                applied_filter=applied_filter,
             )
 
         # Both responses carry the ranges Kubecost actually queried; prefer them.
@@ -2305,6 +2333,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 resolved_current_window=resolved_current_window,
                 resolved_baseline_window=resolved_baseline_window,
                 aggregate=aggregate,
+                applied_filter=applied_filter,
                 dimensions=dimension_cols,
             )
 
@@ -2359,6 +2388,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             resolved_current_window=resolved_current_window,
             resolved_baseline_window=resolved_baseline_window,
             aggregate=aggregate,
+            applied_filter=applied_filter,
             dimensions=dimension_cols,
             total_current_cost=round(total_current, 2),
             total_baseline_cost=round(total_baseline, 2),
@@ -2523,6 +2553,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                     ),
                 )
 
+        applied_filter = _normalize_kubecost_filter(filter_str)
         try:
             response = await _fetch_request_sizing(
                 window=resolved_window,
@@ -2532,7 +2563,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 q_ram=resolved_q_ram,
                 target_cpu_utilization=resolved_target_cpu,
                 target_ram_utilization=resolved_target_ram,
-                filter_str=filter_str or "",
+                filter_str=applied_filter,
                 limit=_SAVINGS_API_FETCH_LIMIT,
             )
         except McpToolError as exc:
@@ -2542,6 +2573,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 message=_err_msg,
                 recommended_action=_err_action,
                 window=resolved_window,
+                applied_filter=applied_filter,
                 total_monthly_savings=0.0,
                 container_count=0,
                 summary_aggregate=summary_aggregate,
@@ -2557,6 +2589,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 message=f"No container savings recommendations returned for {window_display}.",
                 recommended_action="Try a wider window or a different filter.",
                 window=resolved_window,
+                applied_filter=applied_filter,
                 resolved_window=resolved_window_display,
                 total_monthly_savings=0.0,
                 container_count=0,
@@ -2585,6 +2618,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                     "Omit min_monthly_savings to return every reduction candidate, or lower the threshold."
                 ),
                 window=resolved_window,
+                applied_filter=applied_filter,
                 resolved_window=resolved_window_display,
                 total_monthly_savings=0.0,
                 container_count=0,
@@ -2644,6 +2678,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             ),
             recommended_action=("Increase top_n to retrieve more per-container rows." if truncated else None),
             window=resolved_window,
+            applied_filter=applied_filter,
             resolved_window=resolved_window_display,
             total_monthly_savings=round(float(filtered_total_savings), 2),
             container_count=filtered_count,
@@ -2664,7 +2699,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 "target_ram_utilization": resolved_target_ram,
                 "min_monthly_savings": resolved_min_monthly_savings,
                 "sort_by": sort_by,
-                "filter": filter_str or "(none)",
+                "filter": applied_filter or "(none)",
             },
             interpretation=interpretation,
         )
@@ -3659,6 +3694,14 @@ window formats:
 accumulate:
   true  (default) — single total for the window
   false           — daily breakdown (use for trend analysis only)
+
+filter_str:
+  Optional Kubecost filter applied before aggregation. Reuse the same expression
+  in get_kubecost_cost_comparison and get_container_savings_recommendations.
+  Example: cluster:"cluster-one"+(namespace:"prod"|namespace:"staging")
+  + means AND; | means OR. Group mixed operators with parentheses.
+  Pass the plain expression; the HTTP client handles URL encoding.
+  The response's applied_filter echoes the expression, or null when omitted.
 """
 
     @mcp.resource("kubecost://schema/cost-fields")
@@ -4012,7 +4055,7 @@ async def _fetch_request_sizing(
     q_ram: float,
     target_cpu_utilization: float,
     target_ram_utilization: float,
-    filter_str: str,
+    filter_str: str | None,
     limit: int,
 ) -> dict[str, Any]:
     """Fetch container savings recommendations via the shared API wrapper."""
@@ -4023,11 +4066,12 @@ async def _fetch_request_sizing(
         "qRAM": q_ram,
         "targetCPUUtilization": target_cpu_utilization,
         "targetRAMUtilization": target_ram_utilization,
-        "filter": filter_str,
         "window": to_api_window(window),
         "offset": 0,
         "limit": limit,
     }
+    if filter_str is not None:
+        params["filter"] = filter_str
     path = f"{get_settings().kubecost_api_base_path}{_SEG_CONTAINER_SAVINGS}"
     logger.debug("Kubecost request sizing: path=%s window=%s", path, window)
     return await call_get_api(path, params=params)
@@ -4038,6 +4082,7 @@ async def _fetch_allocation(
     window: str,
     accumulate: bool,
     limit: int,
+    filter_str: str | None,
 ) -> dict[str, Any]:
     """Fetch allocation data via the shared API wrapper.
 
@@ -4056,6 +4101,8 @@ async def _fetch_allocation(
         "sortByOrder": "desc",
         "limit": limit,
     }
+    if filter_str is not None:
+        params["filter"] = filter_str
     path = f"{get_settings().kubecost_api_base_path}{_SEG_ALLOCATION}"
     logger.debug("Kubecost allocation: path=%s window=%s", path, window)
     return await call_get_api(path, params=params)
