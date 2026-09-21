@@ -218,6 +218,7 @@ jobs:
       packages: write
     outputs:
       image: icr.io/kubecost/mcp-kubecost:${{ needs.build.outputs.release_tag }}
+      index_digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -255,6 +256,7 @@ jobs:
             type=raw,value=dry-run-${{ github.sha }},enable=${{ inputs.dry-run }}
 
       - name: Build and push
+        id: push
         uses: docker/build-push-action@v7.4.0
         with:
           context: .
@@ -277,7 +279,7 @@ jobs:
             echo "### Dry-run"
             echo ""
             echo "Built linux/amd64 and linux/arm64 from \`${GITHUB_SHA}\`."
-            echo "Did not bump versions, create a GitHub Release, push to ICR, or update Helm."
+            echo "Did not bump versions, create a GitHub Release, push to ICR or public ECR, or update Helm."
           } >> "$GITHUB_STEP_SUMMARY"
 
   update-helm-index:
@@ -657,4 +659,83 @@ jobs:
           {
             echo "### Parent chart PR"
             gh pr view "$BRANCH" --json url --jq .url
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Copies only the version tag (not latest) after every other release job has
+  # succeeded. A prerelease skips update-parent-chart on purpose; a failure
+  # there still blocks this copy. Dry-run never reaches it.
+  #
+  # skopeo copies the multi-arch index as-is, so the public ECR digest matches
+  # the ICR digest. The IAM role trust for kubecost-integrations-ecr must allow
+  # repo:kubecost/mcp-kubecost:*, and public.ecr.aws/kubecost/mcp-kubecost must
+  # already exist.
+  publish-public-ecr:
+    needs: [build, publish-image, update-helm-index, update-parent-chart]
+    if: >-
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      !inputs.dry-run &&
+      needs.build.result == 'success' &&
+      needs.publish-image.result == 'success' &&
+      needs.update-helm-index.result == 'success' &&
+      (needs.update-parent-chart.result == 'success' || needs.update-parent-chart.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Log in to ICR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: icr.io
+          username: iamapikey
+          password: ${{ secrets.IBM_CLOUD_API_KEY }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::297945954695:role/kubecost-integrations-ecr
+          role-duration-seconds: 1000
+          role-skip-session-tagging: false
+          role-session-name: mcp-kubecost-release
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR Public
+        uses: aws-actions/amazon-ecr-login@v2.1.7
+        with:
+          registry-type: public
+
+      - name: Install skopeo
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+      - name: Copy versioned tag to Amazon ECR Public
+        env:
+          TAG: ${{ needs.build.outputs.release_tag }}
+          INDEX_DIGEST: ${{ needs.publish-image.outputs.index_digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "${INDEX_DIGEST}" ]; then
+            echo "::error::ICR index digest is empty; refusing to copy an unverified image."
+            exit 1
+          fi
+          SRC="icr.io/kubecost/mcp-kubecost:${TAG}"
+          DST="public.ecr.aws/kubecost/mcp-kubecost:${TAG}"
+          skopeo copy --all --preserve-digests \
+            "docker://${SRC}" \
+            "docker://${DST}"
+          ECR_DIGEST=$(skopeo inspect --format '{{.Digest}}' "docker://${DST}")
+          if [ "${ECR_DIGEST}" != "${INDEX_DIGEST}" ]; then
+            echo "::error::Public ECR digest ${ECR_DIGEST} does not match ICR digest ${INDEX_DIGEST}."
+            exit 1
+          fi
+          echo "Copied ${DST} (digest: ${ECR_DIGEST})"
+          {
+            echo "### Public ECR"
+            echo ""
+            echo "\`${DST}\`"
+            echo ""
+            echo "Digest: \`${ECR_DIGEST}\`"
           } >> "$GITHUB_STEP_SUMMARY"
