@@ -36,7 +36,8 @@ jobs:
         run: |
           mkdir -p .helm-render
           helm template mcp-kubecost "$CHART_DIR" --namespace mcp-kubecost > .helm-render/mcp-kubecost-default.yaml
-          grep -q 'image: "icr.io/kubecost/mcp-kubecost:v' .helm-render/mcp-kubecost-default.yaml
+          # Image tags keep the leading v (Chart.appVersion), e.g. icr.io/kubecost/mcp-kubecost:v0.17.1
+          grep -qE 'image: "icr.io/kubecost/mcp-kubecost:v[0-9]' .helm-render/mcp-kubecost-default.yaml
           grep -q 'replicas: 1' .helm-render/mcp-kubecost-default.yaml
           grep -q 'type: Recreate' .helm-render/mcp-kubecost-default.yaml
           grep -q 'FORWARDED_ALLOW_IPS: ""' .helm-render/mcp-kubecost-default.yaml
@@ -104,7 +105,9 @@ jobs:
             --set global.platforms.cicd.enabled=true \
             --set global.platforms.cicd.skipSanityChecks=true \
             > .helm-render/mcp-kubecost-global.yaml
-          grep -q 'image: "public.ecr.aws/kubecost/mcp-kubecost:v' .helm-render/mcp-kubecost-global.yaml
+          # Registry override only; the tag still has the leading v, e.g.
+          # public.ecr.aws/kubecost/mcp-kubecost:v0.17.1 — never :0.17.1
+          grep -qE 'image: "public.ecr.aws/kubecost/mcp-kubecost:v[0-9]' .helm-render/mcp-kubecost-global.yaml
           grep -q 'name: icr-pull' .helm-render/mcp-kubecost-global.yaml
           grep -q 'name: app-pull' .helm-render/mcp-kubecost-global.yaml
           ! grep -q 'icr.io' .helm-render/mcp-kubecost-global.yaml
