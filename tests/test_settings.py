@@ -101,10 +101,19 @@ class TestRequireClientApiKeySetting:
 
 
 class TestRequestSettings:
+    def test_default_timeout_is_300(self, monkeypatch):
+        monkeypatch.delenv("REQUEST_TIMEOUT_SECONDS", raising=False)
+        assert _load_settings(monkeypatch).request_timeout_seconds == 300.0
+
     def test_rejects_non_positive_timeout(self, monkeypatch):
         for value in ("0", "-0.1"):
             with pytest.raises(ConfigError, match="REQUEST_TIMEOUT_SECONDS must be greater than 0"):
                 _load_settings(monkeypatch, REQUEST_TIMEOUT_SECONDS=value)
+
+    def test_tool_call_deadline(self, monkeypatch):
+        assert _load_settings(monkeypatch, MCP_TOOL_CALL_TIMEOUT_SECONDS="42").tool_call_timeout_seconds == 42.0
+        with pytest.raises(ConfigError, match="MCP_TOOL_CALL_TIMEOUT_SECONDS must be greater than 0"):
+            _load_settings(monkeypatch, MCP_TOOL_CALL_TIMEOUT_SECONDS="0")
 
     def test_rejects_negative_retry_count(self, monkeypatch):
         with pytest.raises(ConfigError, match="REQUEST_RETRY_COUNT must be 0 or greater"):

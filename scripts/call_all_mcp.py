@@ -11,7 +11,7 @@ from typing import Any
 from fastmcp import Client
 from fastmcp.mcp_config import MCPConfig
 
-CONFIG_DEFAULT = "./.bob/mcp.json"
+CONFIG_DEFAULT = "./.agents/mcp.json"
 
 
 def as_jsonable(value: Any) -> Any:

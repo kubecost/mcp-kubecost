@@ -6,6 +6,7 @@ import asyncio
 from unittest.mock import MagicMock
 
 import pytest
+from fastmcp.exceptions import ToolError
 from fastmcp.server.middleware.middleware import MiddlewareContext
 from fastmcp.tools.base import ToolResult
 from mcp.types import CallToolRequestParams
@@ -14,7 +15,7 @@ from mcp_kubecost.middleware import ToolConcurrencyLimitMiddleware
 
 
 async def test_tool_concurrency_limit_queues_excess_calls():
-    middleware = ToolConcurrencyLimitMiddleware(max_concurrent=1)
+    middleware = ToolConcurrencyLimitMiddleware(max_concurrent=1, timeout_seconds=600)
     first_started = asyncio.Event()
     release_first = asyncio.Event()
     second_started = asyncio.Event()
@@ -44,7 +45,26 @@ async def test_tool_concurrency_limit_queues_excess_calls():
 
 def test_tool_concurrency_limit_rejects_non_positive_max():
     with pytest.raises(ValueError, match="max_concurrent must be greater than 0"):
-        ToolConcurrencyLimitMiddleware(max_concurrent=0)
+        ToolConcurrencyLimitMiddleware(max_concurrent=0, timeout_seconds=600)
 
     with pytest.raises(ValueError, match="max_concurrent must be greater than 0"):
-        ToolConcurrencyLimitMiddleware(max_concurrent=-1)
+        ToolConcurrencyLimitMiddleware(max_concurrent=-1, timeout_seconds=600)
+
+
+async def test_tool_deadline_includes_queue_wait():
+    middleware = ToolConcurrencyLimitMiddleware(max_concurrent=1, timeout_seconds=0.02)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def call_next(context: MiddlewareContext[CallToolRequestParams]) -> ToolResult:
+        del context
+        entered.set()
+        await release.wait()
+        return MagicMock(spec=ToolResult)
+
+    first = asyncio.create_task(middleware.on_call_tool(MagicMock(), call_next))
+    await entered.wait()
+    with pytest.raises(ToolError, match=r"\[upstream_timeout\].*retryable=true.*Action: Retry a narrower query"):
+        await middleware.on_call_tool(MagicMock(), call_next)
+    with pytest.raises(ToolError, match=r"\[upstream_timeout\].*retryable=true.*Action: Retry a narrower query"):
+        await first

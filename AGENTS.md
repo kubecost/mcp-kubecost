@@ -321,5 +321,15 @@ A newly added power is not visible to an in-flight agent session — the client 
 
 - [docs/development/README.md](docs/development/README.md) — human setup, run, Docker/Kubernetes workflow
 - [README.md](README.md) — overview and client configuration
+- [CHANGELOG.md](CHANGELOG.md) — user-facing changes (Keep a Changelog)
 - [docs/auth/README.md](docs/auth/README.md) — MCP OIDC, Kubecost API keys, and pod hardening
 - [docs/development/pre-commit-checks.md](docs/development/pre-commit-checks.md) — hook tiers and CI auto-fix workflow
+
+## Changelog
+
+The file is [`CHANGELOG.md`](CHANGELOG.md) at the repository root (Keep a Changelog).
+
+- Every commit that changes user-facing behavior MUST add an entry under `## [Unreleased]`, in Added / Changed / Fixed / Removed.
+- Use Conventional Commits (`feat:`, `fix:`, `refactor:`) so entries can be generated from commit messages.
+- Skip for: ci-only changes, docs-only changes, test-only changes, formatting/lint fixes.
+- At release, move `[Unreleased]` into a new `## [X.Y.Z] - YYYY-MM-DD` section and retarget the compare links at the bottom of the file.

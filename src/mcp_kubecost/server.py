@@ -15,23 +15,28 @@ from importlib.metadata import version as pkg_version
 os.environ["FASTMCP_SHOW_SERVER_BANNER"] = "false"
 
 from dotenv import load_dotenv
-from fastmcp import FastMCP
-from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware
-from mcp.server.streamable_http import MCP_PROTOCOL_VERSION_HEADER, MCP_SESSION_ID_HEADER
-from starlette.middleware import Middleware
-from starlette.middleware.cors import CORSMiddleware
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
 
-from mcp_kubecost.branding import FAVICON_MEDIA_TYPE, FAVICON_PNG, KUBECOST_WEBSITE_URL, server_icons
-from mcp_kubecost.client import kubecost_client_lifespan
-from mcp_kubecost.config.oidc import create_oidc_provider
-from mcp_kubecost.config.settings import AuthMode, apply_http_rich_logging, get_settings
-from mcp_kubecost.errors import ConfigError
-from mcp_kubecost.middleware import ToolConcurrencyLimitMiddleware
-from mcp_kubecost.skills import register_all_skills
-from mcp_kubecost.telemetry import log_telemetry_status
-from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
+# Load .env before any mcp_kubecost import — _common.py calls get_settings() at module
+# body level, so the cache must be populated from a fully-loaded environment.
+load_dotenv(".env")
+
+from fastmcp import FastMCP  # noqa: E402
+from fastmcp.server.middleware.rate_limiting import RateLimitingMiddleware  # noqa: E402
+from mcp.server.streamable_http import MCP_PROTOCOL_VERSION_HEADER, MCP_SESSION_ID_HEADER  # noqa: E402
+from starlette.middleware import Middleware  # noqa: E402
+from starlette.middleware.cors import CORSMiddleware  # noqa: E402
+from starlette.requests import Request  # noqa: E402
+from starlette.responses import JSONResponse, Response  # noqa: E402
+
+from mcp_kubecost.branding import FAVICON_MEDIA_TYPE, FAVICON_PNG, KUBECOST_WEBSITE_URL, server_icons  # noqa: E402
+from mcp_kubecost.client import kubecost_client_lifespan  # noqa: E402
+from mcp_kubecost.config.oidc import create_oidc_provider  # noqa: E402
+from mcp_kubecost.config.settings import AuthMode, apply_http_rich_logging, get_settings  # noqa: E402
+from mcp_kubecost.errors import ConfigError  # noqa: E402
+from mcp_kubecost.middleware import ToolConcurrencyLimitMiddleware  # noqa: E402
+from mcp_kubecost.skills import register_all_skills  # noqa: E402
+from mcp_kubecost.telemetry import log_telemetry_status  # noqa: E402
+from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools  # noqa: E402
 
 _SERVER_INSTRUCTIONS = (
     "Read-only Kubecost MCP server for cost visibility and savings recommendations. "
@@ -216,7 +221,9 @@ def create_server(server_name) -> FastMCP:
             global_limit=True,
         )
     )
-    mcp.add_middleware(ToolConcurrencyLimitMiddleware(settings.max_concurrent_tool_calls))
+    mcp.add_middleware(
+        ToolConcurrencyLimitMiddleware(settings.max_concurrent_tool_calls, settings.tool_call_timeout_seconds)
+    )
 
     # Register all toolsets
     register_kubecost_tools(mcp)
@@ -228,7 +235,8 @@ def create_server(server_name) -> FastMCP:
 
 
 # When using the fastmcp cli, all project wide initialization must be outside the main() function.
-load_dotenv(".env")  # reads variables from a .env file and sets them in os.environ
+# load_dotenv(".env") is called early in this file, before mcp_kubecost imports, so that
+# get_settings()'s lru_cache is populated from the fully-loaded environment.
 apply_http_rich_logging()  # HTTP: fastmcp.settings.enable_rich_logging = False
 import mcp_kubecost.logging_fastmcp  # noqa: E402,F401 -- must follow load_dotenv so FASTMCP_LOG_LEVEL is set
 

@@ -2,6 +2,13 @@
 
 This chart deploys the read-only Kubecost FinOps MCP server.
 
+Tool calls have a 600-second total deadline by default (`config.toolCallTimeoutSeconds`).
+Kubecost API reads may wait up to 300 seconds between response chunks
+(`config.requestTimeoutSeconds`); connection establishment and pool waits are
+limited to 10 seconds. Configure the MCP client's request timeout and any
+Ingress or gateway response timeout to exceed the longest tool call you intend
+to support. Check real query durations before increasing these values.
+
 ## Installation Options
 
 See the [readme](../../README.md) at the root of the repository for installation options.

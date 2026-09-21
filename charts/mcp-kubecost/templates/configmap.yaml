@@ -8,6 +8,7 @@ data:
   KUBECOST_BASE_URL: {{ printf "%s:%v" (tpl .Values.config.kubecostApiBaseUrl .) .Values.config.kubecostApiPort | quote }}
   KUBECOST_API_BASE_PATH: {{ .Values.config.kubecostApiBasePath | quote }}
   REQUEST_TIMEOUT_SECONDS: {{ .Values.config.requestTimeoutSeconds | quote }}
+  MCP_TOOL_CALL_TIMEOUT_SECONDS: {{ .Values.config.toolCallTimeoutSeconds | quote }}
   REQUEST_RETRY_COUNT: {{ .Values.config.requestRetryCount | quote }}
   MCP_RATE_LIMIT_REQUESTS_PER_SECOND: {{ .Values.config.rateLimitRequestsPerSecond | quote }}
   MCP_RATE_LIMIT_BURST_CAPACITY: {{ .Values.config.rateLimitBurstCapacity | quote }}

@@ -1,7 +1,15 @@
 # Task Runner
 # https://github.com/casey/just
 
-MCP_CONFIG := "./.bob/mcp.json"
+# Enforce bash/zsh strict mode
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+# consistency across all platforms and development environments
+unexport VIRTUAL_ENV
+export UV_FROZEN := "1"
+export UV_PYTHON_PREFERENCE := "only-managed"
+
+MCP_CONFIG := "./.agents/mcp.json"
 
 default:
     @just --list
@@ -18,9 +26,9 @@ _update_chart_version:
     #!/usr/bin/env bash
     set -euo pipefail
     VERSION=$(uv version --short)
-    echo "Updating Chart.yaml appVersion to $VERSION..."
-    just _sed 's|^appVersion:.*|appVersion: "'"$VERSION"'"|' charts/mcp-kubecost/Chart.yaml
-    echo "Updated charts/mcp-kubecost/Chart.yaml appVersion to $VERSION"
+    echo "Updating Chart.yaml appVersion to v$VERSION..."
+    just _sed 's|^appVersion:.*|appVersion: "v'"$VERSION"'"|' charts/mcp-kubecost/Chart.yaml
+    echo "Updated charts/mcp-kubecost/Chart.yaml appVersion to v$VERSION"
 
 # build and run docker image on por 3030 for integration tests
 docker-build-run:
@@ -42,8 +50,8 @@ docker-build-run:
 
 # Install dependencies and create virtual environment
 setup-dev-environment:
-    uv venv --clear
-    uv sync --all-extras --active
+    uv venv .venv --clear
+    uv sync --all-extras
 
 # Start FastMCP dev server with browser inspector UI
 dev-inspector:
@@ -133,8 +141,8 @@ spell-check:
 # Automatically check for outdated dependencies and update pyproject.toml
 update-dependencies:
     just setup-dev-environment
-    ./scripts/update_dependencies.py
-    uv sync --all-extras --active --upgrade
+    env -u UV_FROZEN ./scripts/update_dependencies.py
+    env -u UV_FROZEN uv sync --all-extras
 
 build:
     uv sync --extra dev

@@ -64,6 +64,7 @@ class Settings:
     oidc_jwt_signing_key: str | None
     oidc_storage_encryption_key: str | None
     oidc_ephemeral_keys: bool
+    tool_call_timeout_seconds: float = 600.0
 
     def to_loggable_dict(self) -> dict:
         """Return a copy of settings safe for logging (sensitive fields redacted)."""
@@ -342,9 +343,12 @@ def get_settings() -> Settings:
 
     # AUTH_MODE=api_key is the same gate as REQUIRE_CLIENT_API_KEY=true.
     require_client_api_key = _get_bool_env("REQUIRE_CLIENT_API_KEY", False) or auth_mode == AuthMode.API_KEY
-    request_timeout_seconds = _get_float_env("REQUEST_TIMEOUT_SECONDS", 15.0)
+    request_timeout_seconds = _get_float_env("REQUEST_TIMEOUT_SECONDS", 300.0)
     if request_timeout_seconds <= 0:
         raise ConfigError("REQUEST_TIMEOUT_SECONDS must be greater than 0")
+    tool_call_timeout_seconds = _get_float_env("MCP_TOOL_CALL_TIMEOUT_SECONDS", 600.0)
+    if tool_call_timeout_seconds <= 0:
+        raise ConfigError("MCP_TOOL_CALL_TIMEOUT_SECONDS must be greater than 0")
     retry_count = _get_int_env("REQUEST_RETRY_COUNT", 2)
     if retry_count < 0:
         raise ConfigError("REQUEST_RETRY_COUNT must be 0 or greater")
@@ -365,6 +369,7 @@ def get_settings() -> Settings:
         require_client_api_key=require_client_api_key,
         ssl_verify=_get_ssl_verify_env(),
         request_timeout_seconds=request_timeout_seconds,
+        tool_call_timeout_seconds=tool_call_timeout_seconds,
         retry_count=retry_count,
         default_window=os.getenv("DEFAULT_WINDOW", "15d").strip(),
         log_level=os.getenv("FASTMCP_LOG_LEVEL", "INFO").upper(),

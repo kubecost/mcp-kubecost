@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       bump-level:
-        description: "Is this a major/minor/patch? Breaking changes should be a minor bump. Fixes are patches."
+        description: "Is this a major/minor/patch? Breaking changes should be a minor bump. Fixes are patches. Ignored when dry-run is true."
         required: true
         type: choice
         options:
@@ -21,6 +21,11 @@ on:
         required: false
         type: string
         default: ""
+      dry-run:
+        description: "dry-run: Build from this branch without bumping or tagging a GitHub Release."
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # required for creating the GitHub Release and pushing to gh-pages
@@ -32,10 +37,15 @@ jobs:
       chart_version: ${{ steps.id.outputs.py_version }}
       release_tag: ${{ steps.id.outputs.release_tag }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           ssh-key: ${{ secrets.DEPLOY_KEY }}
           fetch-depth: 0
+
+      - name: Dry-run notice
+        if: ${{ inputs.dry-run }}
+        run: |
+          echo "Dry-run: packaging this branch and building the multi-arch image without publishing."
 
       - name: Install uv
         uses: astral-sh/setup-uv@v10.1.0
@@ -50,7 +60,7 @@ jobs:
         run: uv sync --locked --all-extras
 
       - name: Bump version
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.dry-run
         run: |
           set -euo pipefail
 
@@ -76,12 +86,14 @@ jobs:
             echo "::warning::manifest.json not found — skipping version sync."
           fi
 
-          # Keep Chart.yaml version + appVersion in lockstep with pyproject.toml.
+          # Chart.yaml version is Helm SemVer (no v). appVersion is the git/ICR
+          # image tag and keeps the leading v so the default image is
+          # icr.io/kubecost/mcp-kubecost:v${PY_VERSION}.
           CHART_FILE="charts/mcp-kubecost/Chart.yaml"
           if [ -f "$CHART_FILE" ]; then
             sed -i "s|^version:.*|version: ${PY_VERSION}|" "$CHART_FILE"
-            sed -i "s|^appVersion:.*|appVersion: \"${PY_VERSION}\"|" "$CHART_FILE"
-            echo "Updated $CHART_FILE version and appVersion to $PY_VERSION"
+            sed -i "s|^appVersion:.*|appVersion: \"v${PY_VERSION}\"|" "$CHART_FILE"
+            echo "Updated $CHART_FILE version to ${PY_VERSION} and appVersion to v${PY_VERSION}"
           fi
 
           git config user.name "github-app-commit[bot]"
@@ -117,7 +129,7 @@ jobs:
           echo "release_tag=$RELEASE_TAG"     >> "$GITHUB_OUTPUT"
 
       - name: Verify release tag is unused
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.dry-run
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.id.outputs.release_tag }}
@@ -134,7 +146,7 @@ jobs:
           echo "Tag ${TAG} is available."
 
       - name: Set up Helm
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@v5.0.1
 
       - name: Build wheel + sdist
         run: uv build
@@ -161,14 +173,14 @@ jobs:
           fi
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.1
         with:
           name: ${{ steps.id.outputs.artifact_name }}
           path: dist/*
           if-no-files-found: error
 
       - name: Create GitHub Release
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && !inputs.dry-run
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.id.outputs.release_tag }}
@@ -206,16 +218,28 @@ jobs:
       packages: write
     outputs:
       image: icr.io/kubecost/mcp-kubecost:${{ needs.build.outputs.release_tag }}
+      index_digest: ${{ steps.push.outputs.digest }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ needs.build.outputs.release_tag }}
+          # Dry-run must use the dispatched branch. The release tag is only created
+          # by the GitHub Release step, which dry-run skips.
+          ref: ${{ inputs.dry-run && github.sha || needs.build.outputs.release_tag }}
+
+      # QEMU is required on ubuntu-latest for arm64. The ibm-finops-agent job
+      # skips this because it runs on Kubecost-Linux-Large-x86, which already
+      # has binfmt. Do not drop QEMU without switching this job to that runner.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4.4.0
+        with:
+          platforms: arm64
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+        uses: docker/setup-buildx-action@v4.4.1
 
       - name: Log in to ICR
-        uses: docker/login-action@v4
+        if: ${{ !inputs.dry-run }}
+        uses: docker/login-action@v4.6.0
         with:
           registry: icr.io
           username: iamapikey
@@ -223,38 +247,54 @@ jobs:
 
       - name: Extract Docker metadata
         id: meta
-        uses: docker/metadata-action@v6
+        uses: docker/metadata-action@v6.2.0
         with:
           images: icr.io/kubecost/mcp-kubecost
           tags: |
-            type=raw,value=latest
-            type=raw,value=${{ needs.build.outputs.release_tag }}
-            type=raw,value=${{ needs.build.outputs.chart_version }}
+            type=raw,value=latest,enable=${{ !inputs.dry-run }}
+            type=raw,value=${{ needs.build.outputs.release_tag }},enable=${{ !inputs.dry-run }}
+            type=raw,value=dry-run-${{ github.sha }},enable=${{ inputs.dry-run }}
 
       - name: Build and push
-        uses: docker/build-push-action@v7
+        id: push
+        uses: docker/build-push-action@v7.4.0
         with:
           context: .
-          push: true
+          push: ${{ !inputs.dry-run }}
+          # Multi-arch cannot use the default docker exporter when push is false.
+          outputs: ${{ inputs.dry-run && 'type=cacheonly' || 'type=registry' }}
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            version=${{ inputs.dry-run && github.sha || needs.build.outputs.release_tag }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Dry-run summary
+        if: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Dry-run"
+            echo ""
+            echo "Built linux/amd64 and linux/arm64 from \`${GITHUB_SHA}\`."
+            echo "Did not bump versions, create a GitHub Release, push to ICR or public ECR, or update Helm."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   update-helm-index:
     needs: [build, publish-image]
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry-run
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
         with:
           ssh-key: ${{ secrets.DEPLOY_KEY }}
           ref: gh-pages
           path: gh-pages
 
       - name: Set up Helm
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@v5.0.1
 
       - name: Download chart tarball from release
         env:
@@ -295,7 +335,7 @@ jobs:
   # after the chart is downloadable from the Helm index.
   update-parent-chart:
     needs: [build, publish-image, update-helm-index]
-    if: github.event_name == 'workflow_dispatch' && !inputs.prerelease
+    if: github.event_name == 'workflow_dispatch' && !inputs.prerelease && !inputs.dry-run
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -311,7 +351,7 @@ jobs:
       # in one hour, so no long-lived user PAT is stored in this repository.
       - name: Generate an app token with write access to the parent chart repo
         id: parent-token
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@v3.2.0
         with:
           client-id: ${{ vars.KC_ACTIONS_BOT_APP_CLIENT_ID }}
           private-key: ${{ secrets.KC_ACTIONS_BOT_APP_PRIVATE_KEY }}
@@ -319,7 +359,7 @@ jobs:
           repositories: kubecost
 
       - name: Check out the parent chart repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v7.0.1
         with:
           repository: ${{ env.PARENT_REPO }}
           ref: ${{ env.PARENT_BRANCH }}
@@ -330,7 +370,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Helm
-        uses: azure/setup-helm@v5
+        uses: azure/setup-helm@v5.0.1
 
       # ubuntu-latest ships yq, but pin it so the Chart.yaml edit below cannot
       # break when the runner image is updated.
@@ -426,6 +466,21 @@ jobs:
           helm repo update > /dev/null
           helm dependency update "$PARENT_CHART_DIR"
 
+          # The parent validate-mcp-subchart job builds the expected image tag from
+          # the chart pin and used to strip the leading v. Image tags are now always
+          # v-prefixed (appVersion); tarball / Chart.lock checks still use #v.
+          VALIDATE_SCRIPT=".github/scripts/validate_mcp_subchart.sh"
+          if [ -f "$VALIDATE_SCRIPT" ]; then
+            # Only the image assertions change. Tarball/Chart.lock still use ${dep_version#v}.
+            sed -i \
+              -e 's|icr.io/kubecost/mcp-kubecost:${dep_version#v}|icr.io/kubecost/mcp-kubecost:v${dep_version#v}|g' \
+              -e 's|test-registry.io/kubecost/mcp-kubecost:${dep_version#v}|test-registry.io/kubecost/mcp-kubecost:v${dep_version#v}|g' \
+              "$VALIDATE_SCRIPT"
+            echo "Ensured ${VALIDATE_SCRIPT} expects a v-prefixed image tag."
+          else
+            echo "::warning::${VALIDATE_SCRIPT} not found; parent CI may still expect an unprefixed image tag."
+          fi
+
           echo "previous=${CURRENT}" >> "$GITHUB_OUTPUT"
           echo "changed=true"        >> "$GITHUB_OUTPUT"
 
@@ -458,8 +513,8 @@ jobs:
             > /tmp/parent-render.yaml
           grep -q "kind: Deployment" /tmp/parent-render.yaml
           grep -q "charts/mcp/templates/deployment.yaml" /tmp/parent-render.yaml
-          grep -q "image: \"icr.io/kubecost/mcp-kubecost:${CHART_VERSION}\"" /tmp/parent-render.yaml
-          echo "Parent chart renders mcp-kubecost ${CHART_VERSION}."
+          grep -q "image: \"icr.io/kubecost/mcp-kubecost:v${CHART_VERSION}\"" /tmp/parent-render.yaml
+          echo "Parent chart renders mcp-kubecost v${CHART_VERSION}."
 
       - name: Diff mcp-kubecost values.yaml between versions
         if: steps.bump.outputs.changed == 'true'
@@ -552,6 +607,9 @@ jobs:
 
           git switch -c "$BRANCH"
           git add "${PARENT_CHART_DIR}/Chart.yaml" "${PARENT_CHART_DIR}/Chart.lock"
+          if [ -f .github/scripts/validate_mcp_subchart.sh ]; then
+            git add .github/scripts/validate_mcp_subchart.sh
+          fi
           git commit -m "chore(deps): bump mcp-kubecost subchart to ${CHART_VERSION}"
           git push --set-upstream origin "$BRANCH"
 
@@ -576,6 +634,7 @@ jobs:
 
           - \`${PARENT_CHART_DIR}/Chart.yaml\`: \`dependencies[mcp-kubecost].version\` -> \`${CHART_VERSION}\`
           - \`${PARENT_CHART_DIR}/Chart.lock\`: regenerated with \`helm dependency update\`
+          - \`.github/scripts/validate_mcp_subchart.sh\`: expected image tag is \`v${CHART_VERSION}\` (chart version stays unprefixed)
 
           ## Validation performed by the release pipeline
 
@@ -583,7 +642,7 @@ jobs:
           - \`helm lint ${PARENT_CHART_DIR} --skip-schema-validation --set 'mcp.enabled=true'\`
           - \`helm template kubecost ${PARENT_CHART_DIR} --skip-schema-validation --set 'global.platforms.cicd.enabled=true' --set 'global.platforms.cicd.skipSanityChecks=true'\` (subchart enabled by default)
           - \`helm template kubecost ${PARENT_CHART_DIR} --skip-schema-validation --set 'mcp.enabled=true' --set 'global.platforms.cicd.enabled=true' --set 'global.platforms.cicd.skipSanityChecks=true'\`
-            renders \`icr.io/kubecost/mcp-kubecost:${CHART_VERSION}\`
+            renders \`icr.io/kubecost/mcp-kubecost:v${CHART_VERSION}\`
 
           ## Notes
 
@@ -600,4 +659,83 @@ jobs:
           {
             echo "### Parent chart PR"
             gh pr view "$BRANCH" --json url --jq .url
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Copies only the version tag (not latest) after every other release job has
+  # succeeded. A prerelease skips update-parent-chart on purpose; a failure
+  # there still blocks this copy. Dry-run never reaches it.
+  #
+  # skopeo copies the multi-arch index as-is, so the public ECR digest matches
+  # the ICR digest. The IAM role trust for kubecost-integrations-ecr must allow
+  # repo:kubecost/mcp-kubecost:*, and public.ecr.aws/kubecost/mcp-kubecost must
+  # already exist.
+  publish-public-ecr:
+    needs: [build, publish-image, update-helm-index, update-parent-chart]
+    if: >-
+      always() &&
+      github.event_name == 'workflow_dispatch' &&
+      !inputs.dry-run &&
+      needs.build.result == 'success' &&
+      needs.publish-image.result == 'success' &&
+      needs.update-helm-index.result == 'success' &&
+      (needs.update-parent-chart.result == 'success' || needs.update-parent-chart.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Log in to ICR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: icr.io
+          username: iamapikey
+          password: ${{ secrets.IBM_CLOUD_API_KEY }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::297945954695:role/kubecost-integrations-ecr
+          role-duration-seconds: 1000
+          role-skip-session-tagging: false
+          role-session-name: mcp-kubecost-release
+          aws-region: us-east-1
+
+      - name: Login to Amazon ECR Public
+        uses: aws-actions/amazon-ecr-login@v2.1.7
+        with:
+          registry-type: public
+
+      - name: Install skopeo
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y skopeo
+
+      - name: Copy versioned tag to Amazon ECR Public
+        env:
+          TAG: ${{ needs.build.outputs.release_tag }}
+          INDEX_DIGEST: ${{ needs.publish-image.outputs.index_digest }}
+        run: |
+          set -euo pipefail
+          if [ -z "${INDEX_DIGEST}" ]; then
+            echo "::error::ICR index digest is empty; refusing to copy an unverified image."
+            exit 1
+          fi
+          SRC="icr.io/kubecost/mcp-kubecost:${TAG}"
+          DST="public.ecr.aws/kubecost/mcp-kubecost:${TAG}"
+          skopeo copy --all --preserve-digests \
+            "docker://${SRC}" \
+            "docker://${DST}"
+          ECR_DIGEST=$(skopeo inspect --format '{{.Digest}}' "docker://${DST}")
+          if [ "${ECR_DIGEST}" != "${INDEX_DIGEST}" ]; then
+            echo "::error::Public ECR digest ${ECR_DIGEST} does not match ICR digest ${INDEX_DIGEST}."
+            exit 1
+          fi
+          echo "Copied ${DST} (digest: ${ECR_DIGEST})"
+          {
+            echo "### Public ECR"
+            echo ""
+            echo "\`${DST}\`"
+            echo ""
+            echo "Digest: \`${ECR_DIGEST}\`"
           } >> "$GITHUB_STEP_SUMMARY"
