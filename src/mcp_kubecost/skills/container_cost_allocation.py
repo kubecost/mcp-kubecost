@@ -47,6 +47,13 @@ by namespace/service/label, or any workload-level spend breakdown.
 - `true` (default): Single total for the window — use for cost comparisons and showback
 - `false`: Daily breakdown — use only for trend analysis and time-series visualization
 
+### filter_str parameter
+- Optional Kubecost server-side scope, e.g. `cluster:"cluster-one"+namespace:"prod"`
+- Reuse the same expression with `get_kubecost_cost_comparison` and
+  `get_container_savings_recommendations` to analyze the same workload population.
+- Check `applied_filter` in each response; null means no server-side filter.
+- `min_total_cost` and `min_monthly_savings` are result thresholds, not workload scope.
+
 ### top_n parameter
 - Controls how many rows appear in the inline summary (default: 20)
 

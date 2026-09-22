@@ -209,6 +209,39 @@ class TestRemovedTools:
 
 class TestGetKubecostWorkloadCosts:
     @pytest.mark.asyncio
+    async def test_compound_filter_is_sent_and_echoed(self, httpx_mock: HTTPXMock, mcp_app, allocation_response_one_ns):
+        expression = 'cluster:"c1"+(namespace:"prod"|namespace:"staging")'
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json=allocation_response_one_ns)
+        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        result = await tool.run({"filter_str": f"  {expression}  "})
+
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert request.url.params["filter"] == expression
+        assert _sc(result)["applied_filter"] == expression
+
+    @pytest.mark.asyncio
+    async def test_blank_filter_is_omitted_and_echoed_as_null(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        result = await tool.run({"filter_str": "  "})
+
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert "filter" not in request.url.params
+        assert _sc(result)["status"] == "empty"
+        assert _sc(result)["applied_filter"] is None
+
+    @pytest.mark.asyncio
+    async def test_error_echoes_filter(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_allocation_url(), status_code=400, text="invalid filter")
+        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        result = await tool.run({"filter_str": 'namespace:"prod"'})
+
+        assert _sc(result)["status"] == "error"
+        assert _sc(result)["applied_filter"] == 'namespace:"prod"'
+
+    @pytest.mark.asyncio
     async def test_empty_string_window_returns_error(self, mcp_app):
         """Passing an explicit empty string should still return an error (guard kept for safety)."""
         tool = await mcp_app.get_tool("get_kubecost_workload_costs")
@@ -370,6 +403,28 @@ class TestGetKubecostWorkloadCosts:
 
 
 class TestGetContainerSavingsRecommendations:
+    @pytest.mark.asyncio
+    async def test_filter_is_sent_and_echoed(self, httpx_mock: HTTPXMock, mcp_app):
+        expression = 'cluster:"c1"+namespace:"prod"'
+        httpx_mock.add_response(method="GET", url=_savings_url(), json=_savings_payload(_savings_rec("a", cpu=10)))
+        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        result = await tool.run({"filter_str": f" {expression} "})
+
+        request = httpx_mock.get_request()
+        assert request is not None
+        assert request.url.params["filter"] == expression
+        assert _sc(result)["applied_filter"] == expression
+        assert _sc(result)["parameters"]["filter"] == expression
+
+    @pytest.mark.asyncio
+    async def test_upstream_error_echoes_filter(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_savings_url(), status_code=400, text="invalid filter")
+        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        result = await tool.run({"filter_str": 'namespace:"prod"'})
+
+        assert _sc(result)["status"] == "error"
+        assert _sc(result)["applied_filter"] == 'namespace:"prod"'
+
     @pytest.mark.asyncio
     async def test_success_response(self, httpx_mock: HTTPXMock, mcp_app, savings_api_response):
         httpx_mock.add_response(
@@ -1573,6 +1628,41 @@ def _comparison_allocation_response(ns_name: str, total_cost: float) -> dict:
 
 
 class TestGetKubecostCostComparison:
+    @pytest.mark.asyncio
+    async def test_same_compound_filter_reaches_both_windows(self, httpx_mock: HTTPXMock, mcp_app):
+        expression = 'cluster:"c1"+(namespace:"prod"|namespace:"staging")'
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
+        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        result = await tool.run(
+            {
+                "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
+                "baseline_window": "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z",
+                "filter_str": expression,
+            }
+        )
+
+        requests = httpx_mock.get_requests()
+        assert len(requests) == 2
+        assert all(request.url.params["filter"] == expression for request in requests)
+        assert _sc(result)["status"] == "empty"
+        assert _sc(result)["applied_filter"] == expression
+
+    @pytest.mark.asyncio
+    async def test_upstream_error_echoes_filter(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(method="GET", url=_allocation_url(), status_code=400, text="invalid filter")
+        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        result = await tool.run(
+            {
+                "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
+                "baseline_window": "2020-01-01T00:00:00Z,2020-01-08T00:00:00Z",
+                "filter_str": 'namespace:"prod"',
+            }
+        )
+
+        assert _sc(result)["status"] == "error"
+        assert _sc(result)["applied_filter"] == 'namespace:"prod"'
+
     @pytest.mark.asyncio
     async def test_default_windows_are_calculated_when_tool_is_called(
         self, httpx_mock: HTTPXMock, mcp_app, monkeypatch
