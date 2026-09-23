@@ -5,7 +5,7 @@ Point a client at the server's `/mcp` endpoint. Deploying the server: [the Helm 
 | Server `AUTH_MODE` | Client sends                  |
 | ------------------ | ----------------------------- |
 | `none` / `open`    | Nothing                       |
-| `oidc`             | OAuth sign-in                 |
+| `oidc` (recommended) | OAuth sign-in               |
 | `api_key`          | `X-API-KEY` header            |
 
 All 11 tools are read-only, so no client can change your cluster.
@@ -15,6 +15,9 @@ All 11 tools are read-only, so no client can change your cluster.
 **Settings → Connectors → Add → Add custom connector.** Name it, paste the URL, pick **No sign-in** (`none`/`open`/`api_key`) or **Sign in now** (`oidc`). For `api_key`, add an `X-API-KEY` request header.
 
 ![Claude's "Add custom connector" dialog: the connector named "Kubecost Demo MCP", URL https://demo.kubecost.xyz/mcp, "No sign-in" selected](images/claude-add-custom-connector.png)
+
+> [!IMPORTANT]
+> The screenshot connects to the **public demo**, which is why **No sign-in** is selected. For your own deployment, use `oidc` — otherwise anyone with the URL can read your cost data. The Helm chart refuses `authMode: none` when an Ingress or HTTPRoute is enabled.
 
 All 11 tools should appear. Zero tools means the URL is missing `/mcp`.
 
