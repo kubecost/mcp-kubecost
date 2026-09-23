@@ -23,6 +23,7 @@ This MCP server exposes Kubecost’s real-time cost allocation and optimization 
 ## Table of Contents<!-- omit in toc -->
 
 - [How to install](#how-to-install)
+- [Connecting an AI assistant](#connecting-an-ai-assistant)
 - [Examples of What You Can Ask](#examples-of-what-you-can-ask)
   - [Cost Visibility](#cost-visibility)
   - [Savings Opportunities](#savings-opportunities)
@@ -41,6 +42,10 @@ This repo may have newer versions of the MCP available for users looking for the
 
 > [!NOTE]
 > The MCP server is read-only. It never modifies your cluster or Kubecost configuration.
+
+## Connecting an AI assistant
+
+Point your assistant at the server's `/mcp` endpoint. [docs/clients/README.md](docs/clients/README.md) has setup for Claude, Claude Code, ChatGPT, and generic `mcpServers` JSON.
 
 ## Examples of What You Can Ask
 

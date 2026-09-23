@@ -80,5 +80,6 @@ Local HTTP: `uv run fastmcp run config/fastmcp-http.json` (port 3030).
 
 - [auth-technical.md](auth-technical.md) — full technical reference: OIDC setup, nginx configuration, environment variable table, Helm install examples, pod hardening, and troubleshooting
 - [oidc-client-sharing.md](oidc-client-sharing.md) — whether to share an OIDC client with the Kubecost UI
+- [../clients/README.md](../clients/README.md) — client setup for each auth mode
 - [`charts/mcp-kubecost/values.yaml`](../../charts/mcp-kubecost/values.yaml) — full Helm value reference with inline documentation
 - [`.env.example`](../../.env.example) — full environment variable template
