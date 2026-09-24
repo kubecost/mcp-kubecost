@@ -263,8 +263,6 @@ config:
   defaultWindow: 15d
   # config.logLevel is the FastMCP log level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL').
   logLevel: INFO
-  # config.useCacViews enables Kubecost CAC views.
-  useCacViews: false
   # config.externalUrl is the public origin of this MCP server, with no path.
   # Required for OIDC unless the chart can infer it from exactly one enabled
   # Ingress or HTTPRoute containing exactly one non-wildcard hostname.
@@ -341,6 +339,22 @@ config:
     storageEncryptionKey: ""
     # Pre-created Secret containing the four OIDC secret values above.
     existingSecret: ""
+
+# extraEnv holds additional container environment variables as standard Kubernetes
+# EnvVar entries, so `valueFrom` (secretKeyRef, configMapKeyRef, fieldRef) works here
+# too. These are appended after everything the chart renders itself, and Kubernetes
+# resolves duplicate names last-wins, so an entry here overrides the same variable
+# from the ConfigMap. Use it for settings the chart has no dedicated value for, e.g.:
+#
+#   extraEnv:
+#     - name: DEFAULT_VIEW_ID
+#       value: "0"
+#     - name: SOME_TOKEN
+#       valueFrom:
+#         secretKeyRef:
+#           name: my-secret
+#           key: token
+extraEnv: []
 
 nodeSelector: {}
 tolerations: []

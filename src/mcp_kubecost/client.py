@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
@@ -212,14 +212,6 @@ def _build_headers() -> dict[str, str]:
     return headers
 
 
-def _build_params(params: dict[str, Any] | None) -> dict[str, Any]:
-    """Merge caller-supplied params with server-wide query flags (e.g. viewId)."""
-    merged: dict[str, Any] = dict(params) if params else {}
-    if get_settings().use_cac_views:
-        merged.setdefault("viewId", 0)
-    return merged or None  # type: ignore[return-value]
-
-
 def _retry_delay(response: httpx.Response | None, attempt: int) -> float:
     """Return a bounded server-directed delay or full-jitter backoff."""
     if response is not None:
@@ -256,7 +248,6 @@ async def _request(
     headers = _build_headers() if headers is None else headers
     retryable_method = method.upper() == "GET"
     attempts = 1 + settings.retry_count if retryable_method else 1
-    request_params = _build_params(params)
 
     client = start_http_client()
     for attempt in range(1, attempts + 1):
@@ -265,7 +256,7 @@ async def _request(
             response = await client.request(
                 method,
                 url,
-                params=request_params,
+                params=params,
                 headers=headers,
                 json=json,
             )
@@ -320,6 +311,54 @@ async def _request(
     raise RuntimeError("unreachable: retry loop exited without return or raise")
 
 
+# ---------------------------------------------------------------------------
+# Injectable HTTP backend
+# ---------------------------------------------------------------------------
+#
+# An embedding application can route every Kubecost API call through its own
+# HTTP stack — its own authentication, base URL, tracing and connection pool —
+# by installing a backend here.
+#
+# ``mcp_kubecost.tools._common`` does ``from mcp_kubecost.client import get, post``
+# at import time, so it holds direct references to these two function objects.
+# The indirection therefore has to live *inside* ``get`` and ``post``: rebinding
+# the module attributes would never reach a caller that already imported them.
+
+HttpGetBackend = Callable[[str, "dict[str, Any] | None"], Awaitable[Any]]
+HttpPostBackend = Callable[[str, "dict[str, Any] | None", "dict[str, Any] | None"], Awaitable[Any]]
+
+_backend_get: HttpGetBackend | None = None
+_backend_post: HttpPostBackend | None = None
+
+
+def set_http_backend(get_fn: HttpGetBackend, post_fn: HttpPostBackend) -> None:
+    """Route :func:`get` and :func:`post` through *get_fn* / *post_fn*.
+
+    ``get_fn`` is awaited as ``get_fn(path, params)`` and ``post_fn`` as
+    ``post_fn(path, json, params)``; both return parsed JSON.
+
+    A backend owns the entire transport, so everything this module would
+    otherwise supply is bypassed: the configured base URL, the API-key headers,
+    the retry loop, the shared ``httpx`` client, and the POST authentication
+    guard — the embedding application is expected to supply its own credentials.
+
+    Raise :class:`KubecostClientError` from a backend to reuse the structured
+    error mapping that :meth:`KubecostClientError.to_tool_error` and
+    ``tools._common._handle_call_failure`` already implement. ``httpx``
+    exceptions also map correctly if allowed to propagate.
+    """
+    global _backend_get, _backend_post
+    _backend_get = get_fn
+    _backend_post = post_fn
+
+
+def reset_http_backend() -> None:
+    """Restore the built-in ``httpx`` transport. Safe when no backend is installed."""
+    global _backend_get, _backend_post
+    _backend_get = None
+    _backend_post = None
+
+
 async def get(path: str, params: dict[str, Any] | None = None) -> Any:
     """Make a GET request to the Kubecost API.
 
@@ -337,6 +376,8 @@ async def get(path: str, params: dict[str, Any] | None = None) -> Any:
         KubecostClientError: If the API returns a non-2xx status.
         httpx.RequestError: If the request fails after retries (timeout, connect, etc.).
     """
+    if _backend_get is not None:
+        return await _backend_get(path, params)
     return await _request("GET", path, params=params)
 
 
@@ -346,7 +387,8 @@ async def post(path: str, json: dict[str, Any] | None = None, params: dict[str, 
     Unlike :func:`get`, this **requires** a key from either source: a POST
     mutates state, so it is never sent unauthenticated. No tool calls this
     today — the MCP surface is read-only — but the guard stands for whenever
-    a write tool is added.
+    a write tool is added. The guard does not apply when a backend is installed
+    via :func:`set_http_backend`, because that backend owns authentication.
 
     Args:
         path: API path relative to the base URL (e.g., "/rightsizing/aws/recommendations/ec2/snooze").
@@ -361,6 +403,9 @@ async def post(path: str, json: dict[str, Any] | None = None, params: dict[str, 
         KubecostClientError: If the API returns a non-2xx status.
         httpx.RequestError: If the request fails after retries (timeout, connect, etc.).
     """
+    if _backend_post is not None:
+        return await _backend_post(path, json, params)
+
     headers = _build_headers()
 
     if KUBECOST_API_KEY_HEADER not in headers:

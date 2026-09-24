@@ -147,7 +147,7 @@ def register_optimization_skill(mcp: FastMCP) -> None:
     """Register the optimization skill as an MCP prompt."""
 
     @mcp.prompt()
-    def optimization() -> str:
+    def container_optimization() -> str:
         """Guidance for rightsizing resources and diagnosing Kubernetes cost anomalies.
 
         Use when investigating savings opportunities, rightsizing workloads or nodes,

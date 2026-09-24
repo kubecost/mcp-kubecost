@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from mcp_kubecost.client import close_http_client
+from mcp_kubecost.client import close_http_client, reset_http_backend
 
 # ---------------------------------------------------------------------------
 # Environment defaults — must be set before any module-level settings load
@@ -21,6 +21,14 @@ async def reset_shared_http_client():
     await close_http_client()
     yield
     await close_http_client()
+
+
+@pytest.fixture(autouse=True)
+def reset_injected_http_backend():
+    """Make sure a test that installs an HTTP backend cannot leak it into the next one."""
+    reset_http_backend()
+    yield
+    reset_http_backend()
 
 
 # ---------------------------------------------------------------------------

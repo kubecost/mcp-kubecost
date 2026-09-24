@@ -237,7 +237,8 @@
         "maxConcurrentToolCalls": { "type": "integer", "minimum": 1 },
         "defaultWindow": { "type": "string", "minLength": 1 },
         "logLevel": { "type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "debug", "info", "warning", "error", "critical"] },
-        "useCacViews": { "type": "boolean" },
+        "defaultViewId": { "type": ["string", "integer"], "description": "Accepted but ignored. The chart no longer renders a view scope; kept so that helm upgrade does not reject values files that still set it." },
+        "useCacViews": { "type": "boolean", "description": "Accepted but ignored. Was never wired to anything usable; kept so that helm upgrade does not reject values files that still set it." },
         "authMode": { "type": "string", "enum": ["none", "open", "oidc", "api_key"] },
         "requireClientApiKey": { "type": "boolean" },
         "externalUrl": { "type": "string", "pattern": "^$|^https://[^/?#]+/?$" },
@@ -286,7 +287,12 @@
           }
         }
       },
-      "required": ["authMode", "kubecostApiBaseUrl", "kubecostApiPort", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "toolCallTimeoutSeconds", "requestRetryCount", "rateLimitRequestsPerSecond", "rateLimitBurstCapacity", "maxConcurrentToolCalls", "defaultWindow", "logLevel", "useCacViews", "requireClientApiKey", "externalUrl", "fastmcpHttpHostOriginProtection", "fastmcpHttpAllowedHosts", "fastmcpHttpAllowedOrigins", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "otelExcludedUrls", "ssl", "oidc"]
+      "required": ["authMode", "kubecostApiBaseUrl", "kubecostApiPort", "kubecostApiBasePath", "kubecostApiKey", "requestTimeoutSeconds", "toolCallTimeoutSeconds", "requestRetryCount", "rateLimitRequestsPerSecond", "rateLimitBurstCapacity", "maxConcurrentToolCalls", "defaultWindow", "logLevel", "requireClientApiKey", "externalUrl", "fastmcpHttpHostOriginProtection", "fastmcpHttpAllowedHosts", "fastmcpHttpAllowedOrigins", "mcpServerName", "telemetryMode", "otelServiceName", "otelMetricsExporter", "otelLogsExporter", "otelExcludedUrls", "ssl", "oidc"]
+    },
+    "extraEnv": {
+      "type": "array",
+      "description": "Additional container environment variables as Kubernetes EnvVar entries. Appended last, so a duplicate name overrides the ConfigMap.",
+      "items": {"type": "object", "additionalProperties": true, "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}, "value": {"type": "string"}, "valueFrom": {"type": "object"}}}
     },
     "nodeSelector": { "type": "object" },
     "tolerations": { "type": "array" },
