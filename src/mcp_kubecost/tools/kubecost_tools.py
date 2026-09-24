@@ -6,7 +6,13 @@ result sets are bounded via a ``top_n`` parameter with a ``truncated`` flag
 (client-side sort+slice), or true server-side ``limit``/``offset`` pagination
 where the upstream API supports it (e.g. ``get_resource_quota_recommendations``).
 
-Contract version: 10.0
+Contract version: 11.0
+
+11.0 renamed every response row field from camelCase to snake_case. FastMCP 4 defaults
+Pydantic serialization to ``by_alias=False`` (FastMCP 3 defaulted to ``True``), so the
+camelCase ``Field(alias=...)`` values below are now input aliases only -- they still
+match the raw Kubecost API keys these rows are validated from, but they are no longer
+the names clients see.
 """
 
 from __future__ import annotations
@@ -60,7 +66,7 @@ from mcp_kubecost.tools._common import (
 
 logger = logging.getLogger(__name__)
 
-_VERSION = "10.0"
+_VERSION = "11.0"
 
 # ---------------------------------------------------------------------------
 # API path segments — combined with get_settings().kubecost_api_base_path at call time
@@ -125,7 +131,7 @@ How the results are trimmed. Use this to explain results, or ask which the user 
 
 ---
 **Savings threshold (`min_monthly_savings`)** — keeps reduction candidates where
-`monthlySavings_total >= min_monthly_savings`.
+`monthly_savings_total >= min_monthly_savings`.
 
 - **Omit / null (default)** — every reduction candidate.
 - **`5.0` (recommended for noise reduction)** — material opportunities only.
@@ -631,8 +637,8 @@ _UNALLOCATED = "__unallocated__"
 # Idle capacity is shared into every row (see _fetch_allocation), which the caller cannot infer.
 _IDLE_SHARED_NOTE = (
     "Idle (unused but provisioned) capacity is distributed proportionally into each row. "
-    "cpuCostIdle, ramCostIdle, and gpuCostIdle are portions already included in the corresponding "
-    "resource costs and totalCost; do not add them again. No separate idle row is returned."
+    "cpu_cost_idle, ram_cost_idle, and gpu_cost_idle are portions already included in the corresponding "
+    "resource costs and total_cost; do not add them again. No separate idle row is returned."
 )
 
 
@@ -1041,22 +1047,22 @@ class AllocationRow(BaseModel):
     cpu_cost: float = Field(
         default=0.0,
         alias="cpuCost",
-        description="CPU request cost including the cpuCostIdle portion (USD).",
+        description="CPU request cost including the cpu_cost_idle portion (USD).",
     )
     cpu_cost_idle: float = Field(
         default=0.0,
         alias="cpuCostIdle",
-        description="Idle portion already included in cpuCost and totalCost; do not add it again (USD).",
+        description="Idle portion already included in cpu_cost and total_cost; do not add it again (USD).",
     )
     ram_cost: float = Field(
         default=0.0,
         alias="ramCost",
-        description="RAM request cost including the ramCostIdle portion (USD).",
+        description="RAM request cost including the ram_cost_idle portion (USD).",
     )
     ram_cost_idle: float = Field(
         default=0.0,
         alias="ramCostIdle",
-        description="Idle portion already included in ramCost and totalCost; do not add it again (USD).",
+        description="Idle portion already included in ram_cost and total_cost; do not add it again (USD).",
     )
     network_cost: float = Field(
         default=0.0,
@@ -1071,12 +1077,12 @@ class AllocationRow(BaseModel):
     gpu_cost: float = Field(
         default=0.0,
         alias="gpuCost",
-        description="GPU cost including the gpuCostIdle portion (USD).",
+        description="GPU cost including the gpu_cost_idle portion (USD).",
     )
     gpu_cost_idle: float = Field(
         default=0.0,
         alias="gpuCostIdle",
-        description="Idle portion already included in gpuCost and totalCost; do not add it again (USD).",
+        description="Idle portion already included in gpu_cost and total_cost; do not add it again (USD).",
     )
     load_balancer_cost: float = Field(
         default=0.0,
@@ -1134,19 +1140,19 @@ class KubecostAllocationResponse(BaseToolResponse):
     )
     total_cost: float = Field(
         default=0.0,
-        description="Sum of totalCost across all rows, including proportionally distributed idle cost (USD).",
+        description="Sum of total_cost across all rows, including proportionally distributed idle cost (USD).",
     )
     row_count: int = Field(default=0, description="Total number of rows returned.")
     rows: list[AllocationRow] = Field(
         default_factory=list,
         description=(
-            "Aggregated allocation rows sorted by window_start ascending then totalCost "
+            "Aggregated allocation rows sorted by window_start ascending then total_cost "
             "descending — with accumulate=true there is a single window, so this is simply "
-            "totalCost descending; with accumulate=false there is one row per dimension key "
+            "total_cost descending; with accumulate=false there is one row per dimension key "
             "per day, in date order. Each row contains the requested dimension values "
             "(e.g. cluster, namespace), the window_start/window_end dates it covers, "
-            "plus cost fields: totalCost, cpuCost, ramCost, networkCost, pvCost, "
-            "gpuCost, sharedCost, and idle percentages cpuIdlePct, ramIdlePct, totalIdlePct."
+            "plus cost fields: total_cost, cpu_cost, ram_cost, network_cost, pv_cost, "
+            "gpu_cost, shared_cost, and idle percentages cpu_idle_pct, ram_idle_pct, total_idle_pct."
         ),
     )
     truncated: bool = Field(
@@ -2041,7 +2047,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             float,
             Field(
                 description=(
-                    "Minimum totalCost (USD) to include a row. Rows below this threshold "
+                    "Minimum total_cost (USD) to include a row. Rows below this threshold "
                     "are excluded as trivial noise. Default $1.00; set 0.0 to include all."
                 ),
                 ge=0.0,
@@ -2127,7 +2133,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             return KubecostAllocationResponse(
                 status=QueryStatus.EMPTY,
                 message=(
-                    f"No rows with totalCost >= ${min_total_cost:,.2f} for window {window_display}. "
+                    f"No rows with total_cost >= ${min_total_cost:,.2f} for window {window_display}. "
                     f"({len(aggregated)} rows totaling ${total:,.2f} were below the threshold.)"
                 ),
                 recommended_action="Lower min_total_cost or widen the window to surface more rows.",
@@ -3708,18 +3714,18 @@ filter_str:
     def cost_fields_schema() -> str:
         """Definitions of cost columns returned by get_kubecost_workload_costs."""
         return """\
-cpuCost          — CPU request cost, including cpuCostIdle
-cpuCostIdle      — idle portion already included in cpuCost and totalCost
-ramCost          — RAM request cost, including ramCostIdle
-ramCostIdle      — idle portion already included in ramCost and totalCost
-networkCost      — egress/ingress network cost
-pvCost           — persistent volume storage cost
-gpuCost          — GPU cost, including gpuCostIdle
-gpuCostIdle      — idle portion already included in gpuCost and totalCost
-loadBalancerCost — load balancer cost
-sharedCost       — shared namespace overhead allocation
-totalCost        — sum of all cost components, including idle portions
-totalEfficiency  — utilization ratio 0–1 (request vs actual use)
+cpu_cost           — CPU request cost, including cpu_cost_idle
+cpu_cost_idle      — idle portion already included in cpu_cost and total_cost
+ram_cost           — RAM request cost, including ram_cost_idle
+ram_cost_idle      — idle portion already included in ram_cost and total_cost
+network_cost       — egress/ingress network cost
+pv_cost            — persistent volume storage cost
+gpu_cost           — GPU cost, including gpu_cost_idle
+gpu_cost_idle      — idle portion already included in gpu_cost and total_cost
+load_balancer_cost — load balancer cost
+shared_cost        — shared namespace overhead allocation
+total_cost         — sum of all cost components, including idle portions
+total_efficiency   — utilization ratio 0–1 (request vs actual use)
 """
 
     @mcp.resource("kubecost://schema/sizing-profiles")
@@ -3971,7 +3977,7 @@ Wait for their reply, then call `get_kubecost_workload_costs` with:
 
 Then present:
 1. A 2-3 bullet Executive Summary of the biggest cost drivers and any anomalies.
-2. An SVG bar chart of the top 10 by totalCost.
+2. An SVG bar chart of the top 10 by total_cost.
 """
 
     @mcp.prompt()
@@ -3989,7 +3995,7 @@ Wait for their reply, then call `get_kubecost_workload_costs` with:
 
 Then present:
 1. A 2-3 bullet summary of trend direction and any notable spikes.
-2. An SVG line chart (date on X axis, totalCost on Y axis, one line per {aggregate}).
+2. An SVG line chart (date on X axis, total_cost on Y axis, one line per {aggregate}).
 """
 
     @mcp.prompt()
