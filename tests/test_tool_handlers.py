@@ -261,15 +261,15 @@ class TestGetKubecostWorkloadCosts:
         assert sc["status"] == "ok"
         assert sc["total_cost"] > 0
         row = sc["rows"][0]
-        assert row["cpuCostIdle"] + row["ramCostIdle"] > 0
-        assert row["totalCost"] == pytest.approx(
-            row["cpuCost"]
-            + row["ramCost"]
-            + row["networkCost"]
-            + row["pvCost"]
-            + row["gpuCost"]
-            + row["loadBalancerCost"]
-            + row["sharedCost"]
+        assert row["cpu_cost_idle"] + row["ram_cost_idle"] > 0
+        assert row["total_cost"] == pytest.approx(
+            row["cpu_cost"]
+            + row["ram_cost"]
+            + row["network_cost"]
+            + row["pv_cost"]
+            + row["gpu_cost"]
+            + row["load_balancer_cost"]
+            + row["shared_cost"]
         )
         assert any("already included" in note and "do not add them again" in note for note in sc["notes"])
 
@@ -395,7 +395,7 @@ class TestGetKubecostWorkloadCosts:
         sc = _sc(result)
         assert sc["row_count"] == 2
         assert sc["resolved_window"]["days"] == 7
-        assert [r["totalCost"] for r in sc["rows"]] == [31.0, 7.2]
+        assert [r["total_cost"] for r in sc["rows"]] == [31.0, 7.2]
         assert "Daily breakdown" not in sc["message"]
 
 
@@ -534,8 +534,8 @@ class TestGetContainerSavingsRecommendations:
         result = await tool.run({"window": "15d"})
         sc = _sc(result)
         assert sc["status"] == "ok"
-        assert {r["containerName"] for r in sc["rows"]} == {"api"}
-        assert {r["containerName"] for r in sc["undersized_rows"]} == {"leaky"}
+        assert {r["container_name"] for r in sc["rows"]} == {"api"}
+        assert {r["container_name"] for r in sc["undersized_rows"]} == {"leaky"}
         assert sc["undersized_count"] == 1
         # Totals describe the reduction candidates only — an undersized row is not a saving.
         assert sc["total_monthly_savings"] == 25.0
@@ -552,7 +552,7 @@ class TestGetContainerSavingsRecommendations:
         tool = await mcp_app.get_tool("get_container_savings_recommendations")
         result = await tool.run({"window": "15d"})
         sc = _sc(result)
-        assert {r["containerName"] for r in sc["undersized_rows"]} == {"starved"}
+        assert {r["container_name"] for r in sc["undersized_rows"]} == {"starved"}
 
     @pytest.mark.asyncio
     async def test_savings_filter_never_hides_undersized_rows(self, httpx_mock: HTTPXMock, mcp_app):
@@ -566,8 +566,8 @@ class TestGetContainerSavingsRecommendations:
         result = await tool.run({"window": "15d", "min_monthly_savings": 5.0})
         sc = _sc(result)
         assert sc["status"] == "ok"
-        assert {r["containerName"] for r in sc["rows"]} == {"api"}  # 'small' trimmed
-        assert {r["containerName"] for r in sc["undersized_rows"]} == {"leaky"}  # never trimmed
+        assert {r["container_name"] for r in sc["rows"]} == {"api"}  # 'small' trimmed
+        assert {r["container_name"] for r in sc["undersized_rows"]} == {"leaky"}  # never trimmed
 
     @pytest.mark.asyncio
     async def test_filter_removing_every_candidate_still_reports_undersized(self, httpx_mock: HTTPXMock, mcp_app):
@@ -582,7 +582,7 @@ class TestGetContainerSavingsRecommendations:
         sc = _sc(result)
         assert sc["status"] == "ok"
         assert sc["rows"] == []
-        assert {r["containerName"] for r in sc["undersized_rows"]} == {"leaky"}
+        assert {r["container_name"] for r in sc["undersized_rows"]} == {"leaky"}
         assert sc["undersized_count"] == 1
 
     @pytest.mark.asyncio
@@ -594,7 +594,7 @@ class TestGetContainerSavingsRecommendations:
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
         tool = await mcp_app.get_tool("get_container_savings_recommendations")
         result = await tool.run({"window": "15d"})
-        by_name = {r["containerName"]: r for r in _sc(result)["rows"]}
+        by_name = {r["container_name"]: r for r in _sc(result)["rows"]}
         assert by_name["shrink"]["pct_change_cpu"] == -75.0
         assert by_name["shrink"]["pct_change_memory"] == -50.0
         # No current request means percent change is undefined, not -100%.
@@ -612,11 +612,11 @@ class TestGetContainerSavingsRecommendations:
         tool = await mcp_app.get_tool("get_container_savings_recommendations")
 
         by_dollars = await tool.run({"window": "15d"})
-        assert [r["containerName"] for r in _sc(by_dollars)["rows"]] == ["big-slight", "small-drastic"]
+        assert [r["container_name"] for r in _sc(by_dollars)["rows"]] == ["big-slight", "small-drastic"]
 
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
         by_pct = await tool.run({"window": "15d", "sort_by": "pct_change_cpu"})
-        assert [r["containerName"] for r in _sc(by_pct)["rows"]] == ["small-drastic", "big-slight"]
+        assert [r["container_name"] for r in _sc(by_pct)["rows"]] == ["small-drastic", "big-slight"]
         assert _sc(by_pct)["parameters"]["sort_by"] == "pct_change_cpu"
 
     @pytest.mark.asyncio
@@ -720,8 +720,8 @@ class TestGetAbandonedWorkloads:
         tool = await mcp_app.get_tool("get_abandoned_workloads")
         result = await tool.run({})
         rows = _sc(result)["rows"]
-        # FastMCP serialises Pydantic models by alias
-        savings = [r["monthlySavings"] for r in rows]
+        # FastMCP 4 serialises Pydantic models by field name, not by alias
+        savings = [r["monthly_savings"] for r in rows]
         assert savings == sorted(savings, reverse=True)
 
     @pytest.mark.asyncio
@@ -2037,7 +2037,107 @@ class TestUndersizedRanking:
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
         tool = await mcp_app.get_tool("get_container_savings_recommendations")
         sc = _sc(await tool.run({"window": "15d"}))
-        assert [r["containerName"] for r in sc["undersized_rows"]] == ["big-mem", "tiny"]
+        assert [r["container_name"] for r in sc["undersized_rows"]] == ["big-mem", "tiny"]
         assert sc["undersized_count"] == 2
         # Neither belongs in the reduction candidates.
         assert sc["rows"] == []
+
+
+class TestWireContractFieldNames:
+    """Pin the emitted row key names so a framework default-flip fails loudly.
+
+    Four row models carry camelCase ``Field(alias=...)`` values that match the raw
+    Kubecost API keys the rows are validated *from*. FastMCP 3 serialized responses
+    with ``by_alias=True``, so those aliases were also the names clients saw; FastMCP 4
+    defaults to ``by_alias=False``, making them input aliases only. Contract 11.0
+    accepts snake_case as the wire format. If these assertions fail, the framework's
+    serialization default moved again -- do not "fix" them by renaming fields.
+    """
+
+    @pytest.mark.asyncio
+    async def test_allocation_row_keys_are_snake_case(self, httpx_mock: HTTPXMock, mcp_app, allocation_response_one_ns):
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json=allocation_response_one_ns)
+        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        row = _sc(await tool.run({"window": "7d", "aggregate": "cluster,namespace"}))["rows"][0]
+
+        assert {
+            "cpu_cost",
+            "cpu_cost_idle",
+            "ram_cost",
+            "ram_cost_idle",
+            "network_cost",
+            "pv_cost",
+            "gpu_cost",
+            "gpu_cost_idle",
+            "load_balancer_cost",
+            "shared_cost",
+            "total_cost",
+            "cpu_idle_pct",
+            "ram_idle_pct",
+            "gpu_idle_pct",
+            "total_idle_pct",
+        } <= row.keys()
+        assert not [k for k in row if k.lower() != k], f"camelCase leaked into an allocation row: {sorted(row)}"
+
+    @pytest.mark.asyncio
+    async def test_container_savings_row_keys_are_snake_case(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(
+            method="GET", url=_savings_url(), json=_savings_payload(_savings_rec("api", cpu=10.0, memory=5.0))
+        )
+        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        row = _sc(await tool.run({"window": "15d"}))["rows"][0]
+
+        assert {
+            "cluster_id",
+            "controller_kind",
+            "controller_name",
+            "container_name",
+            "monthly_savings_total",
+            "monthly_savings_cpu",
+            "monthly_savings_memory",
+            "recommended_cpu_in_milli_cores",
+            "recommended_memory_in_mib",
+            "current_cpu_in_milli_cores",
+            "current_memory_in_mib",
+            "current_efficiency_cpu",
+            "current_efficiency_memory",
+            "current_efficiency",
+            "avg_usage_cpu_in_milli_cores",
+            "avg_usage_memory_in_mib",
+            "max_usage_cpu_in_milli_cores",
+            "max_usage_memory_in_mib",
+        } <= row.keys()
+        assert not [k for k in row if k.lower() != k], f"camelCase leaked into a savings row: {sorted(row)}"
+
+    @pytest.mark.asyncio
+    async def test_abandoned_workload_row_keys_are_snake_case(
+        self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response
+    ):
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
+        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        row = _sc(await tool.run({}))["rows"][0]
+
+        assert {
+            "cluster_id",
+            "ingress_bytes_per_second",
+            "egress_bytes_per_second",
+            "monthly_savings",
+        } <= row.keys()
+        assert not [k for k in row if k.lower() != k], f"camelCase leaked into an abandoned row: {sorted(row)}"
+
+    @pytest.mark.asyncio
+    async def test_quota_resource_change_uses_renamed_quota_fields(
+        self, httpx_mock: HTTPXMock, mcp_app, resource_quota_api_response
+    ):
+        """The Kubecost API's ``used`` / ``recommended`` surface as the clearer quota names.
+
+        This pair renames *semantically*, not just in case: the API's ``used`` is the
+        existing quota cap, never observed pod usage.
+        """
+        httpx_mock.add_response(method="GET", url=_resource_quota_url(), json=resource_quota_api_response)
+        tool = await mcp_app.get_tool("get_resource_quota_recommendations")
+        change = _sc(await tool.run({}))["recommendations"][0]["resources"][0]
+
+        assert {"current_quota", "recommended_quota"} <= change.keys()
+        assert "used" not in change
+        assert "recommended" not in change

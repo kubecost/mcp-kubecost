@@ -4,7 +4,7 @@ This MCP server can be configured to export traces via OpenTelemetry. The contai
 
 This feature is considered experimental.
 
-### Current behavior (FastMCP 3.4.x)
+### Current behavior (FastMCP 4.0.x)
 
 | Variable | Role |
 |----------|------|
@@ -19,7 +19,12 @@ When enabled, traces include FastMCP MCP operation spans (tools, prompts, resour
 At process start the server logs **observed** telemetry state (auto-instrumentation loaded or not, exporter names, OTLP endpoint with credentials stripped). A warning means the env flag is on but this process is not wrapped — typically `fastmcp run` was used instead of `mcp-kubecost-http`, or the `otel` extra is missing. `OTEL_*HEADERS` are never written to logs.
 
 > [!NOTE]
-> On FastMCP 3.4.x, `FASTMCP_TELEMETRY_MODE` is **not** read by FastMCP itself. This server reuses that name so the same env var will keep working after a FastMCP 4 upgrade. STDIO local runs are not wrapped unless you invoke `opentelemetry-instrument` yourself.
+> As of FastMCP 4, `FASTMCP_TELEMETRY_MODE` is read by **both** FastMCP and this server, and the
+> name is deliberately shared. FastMCP accepts `native` (its default), `propagation_only`, and `off`,
+> and uses it to gate its own native MCP spans; this server uses the same value to decide whether to
+> wrap the process with `opentelemetry-instrument`. So `off` now turns off both — FastMCP's spans and
+> the auto-instrumentation wrapper. STDIO local runs are not wrapped unless you invoke
+> `opentelemetry-instrument` yourself.
 
 > [!IMPORTANT]
 > `opentelemetry-distro` turns on **all three** signals by default — traces, metrics, and logs all

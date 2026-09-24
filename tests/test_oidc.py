@@ -147,6 +147,10 @@ def _dcr_proxy(
     proxy._default_scope_str = "openid profile"
     proxy._cimd_manager = None  # get_client skips CIMD refresh
     proxy._upstream_client_id = "upstream-client-id"  # needed by OAuthProxy.get_client fallback
+    # FastMCP 4's register_client consults this to decide whether registered clients may
+    # present the SEP-990 jwt-bearer (ID-JAG) grant. We do not configure identity
+    # assertion, so None is the production value.
+    proxy._identity_assertion = None
     proxy._storage_dir = Path("/tmp/mcp-kubecost-test-oauth")  # named in DecryptionError logs
     proxy._client_store = PydanticAdapter[ProxyDCRClient](
         key_value=MemoryStore(),
@@ -155,6 +159,19 @@ def _dcr_proxy(
         raise_on_validation_error=True,
     )
     return proxy
+
+
+def _dcr_request(body: dict) -> MagicMock:
+    """Mock a Starlette Request for the SDK's RegistrationHandler.
+
+    MCP SDK v2 reads ``await request.body()`` and validates the raw JSON; v1 read
+    ``await request.json()``. Set both so the mock does not depend on which one the
+    handler happens to call.
+    """
+    request = MagicMock()
+    request.body = AsyncMock(return_value=json.dumps(body).encode())
+    request.json = AsyncMock(return_value=body)
+    return request
 
 
 class TestFixedPublicRoutes:
@@ -448,8 +465,7 @@ class TestIdempotentClientRegistration:
         # The two concurrent /register calls seen in mcp.log.
         issued = []
         for _ in range(2):
-            request = MagicMock()
-            request.json = AsyncMock(return_value=body)
+            request = _dcr_request(body)
             response = await handler.handle(request)
             assert response.status_code == 201
             issued.append(json.loads(bytes(response.body))["client_id"])
@@ -772,8 +788,7 @@ class TestDCRRegistrationContractSnapshot:
             "token_endpoint_auth_method": "none",
         }
 
-        request = MagicMock()
-        request.json = AsyncMock(return_value=body)
+        request = _dcr_request(body)
         response = await handler.handle(request)
 
         assert response.status_code == 201, f"Expected 201, got {response.status_code}"
@@ -801,8 +816,7 @@ class TestDCRRegistrationContractSnapshot:
         }
 
         handler = RegistrationHandler(provider=proxy, options=ClientRegistrationOptions(enabled=True))
-        request = MagicMock()
-        request.json = AsyncMock(return_value=body)
+        request = _dcr_request(body)
         response = await handler.handle(request)
         data = json.loads(bytes(response.body))
         # The exact UUID is computed from the HMAC of the sorted JSON of the five
@@ -845,8 +859,7 @@ class TestDCRNativeApplicationType:
             "application_type": "native",
         }
 
-        request = MagicMock()
-        request.json = AsyncMock(return_value=body)
+        request = _dcr_request(body)
         response = await handler.handle(request)
 
         assert response.status_code == 201, f"native application_type should succeed; got {response.status_code}"

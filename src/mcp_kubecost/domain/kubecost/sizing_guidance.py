@@ -338,11 +338,11 @@ above P80.
 
 ## Result Column Glossary
 
-- **currentEfficiency_*** — request vs actual usage (low = over-provisioned)
-- **AvgUsage_cpuInMilliCores / AvgUsage_memoryInMiB** — mean usage over the window
-- **MaxUsage_cpuInMilliCores / MaxUsage_memoryInMiB** — peak usage (large gap from Avg = burst/spike behavior)
-- **monthlySavings_memory < 0** — undersized memory; do NOT reduce memory request
-- **Recommended_cpuInMilliCores / Recommended_memoryInMiB** — suggested request
+- **current_efficiency_*** — request vs actual usage (low = over-provisioned)
+- **avg_usage_cpu_in_milli_cores / avg_usage_memory_in_mib** — mean usage over the window
+- **max_usage_cpu_in_milli_cores / max_usage_memory_in_mib** — peak usage (large gap from avg = burst/spike behavior)
+- **monthly_savings_memory < 0** — undersized memory; do NOT reduce memory request
+- **recommended_cpu_in_milli_cores / recommended_memory_in_mib** — suggested request
   based on quantiles and target utilization
 - **pct_change_cpu / pct_change_memory** — signed change from the current request.
   Negative means the request would shrink. Null when there is no current request to
@@ -507,7 +507,7 @@ FIELD_DESCRIPTIONS = {
         "Profiles do not apply a savings filter."
     ),
     "min_monthly_savings": (
-        "Minimum monthlySavings_total (USD) to keep in 'rows'. Default null returns every "
+        "Minimum monthly_savings_total (USD) to keep in 'rows'. Default null returns every "
         "reduction candidate. Pass 5.0 to cut noise and focus on material opportunities. "
         "This filter never touches 'undersized_rows' — under-provisioned workloads stay visible "
         "regardless of the threshold."
@@ -590,8 +590,8 @@ def build_result_interpretation(
         "---",
         "**How to read these results:**",
         "- CPU is compressible, memory is not. Be more conservative with memory recommendations.",
-        "- Low `currentEfficiency` = request far above observed use — the strongest reduction candidates.",
-        "- A large gap between `AvgUsage` and `MaxUsage` means bursty demand; size for the burst.",
+        "- Low `current_efficiency` = request far above observed use — the strongest reduction candidates.",
+        "- A large gap between `avg_usage` and `max_usage` means bursty demand; size for the burst.",
         "- `pct_change_cpu` / `pct_change_memory` are signed — negative means the request would shrink.",
     ]
 

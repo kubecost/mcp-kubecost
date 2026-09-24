@@ -248,4 +248,4 @@ The items below are gaps in FastMCP `3.4.x` relative to the 2026-07-28 MCP Autho
 | RFC 9207 `iss` parameter in authorization responses | SHOULD (flagged to become MUST) | Missing from FastMCP. The callback redirect does not carry `iss` and `authorization_response_iss_parameter_supported` is absent from the AS metadata. |
 | `scope` in `WWW-Authenticate` 401 challenge | SHOULD | FastMCP emits only `resource_metadata`. Once available, wire `OIDC_REQUIRED_SCOPES` into it. |
 
-Watch [FastMCP releases](https://gofastmcp.com/updates) for these items. Bump the `>=3.4.7,<4.0` pin and re-run the full suite (including `just check-consent-branding`) against every FastMCP minor release.
+Watch [FastMCP releases](https://gofastmcp.com/updates) for these items. Bump the `>=4.0.9,<5.0` pin and re-run the full suite (including `just check-consent-branding`) against every FastMCP minor release.
