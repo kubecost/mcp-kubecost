@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-Package, Helm chart, and git tags currently use **0.17.0** (`v0.17.0`). That is the GA baseline. Later 1.x versions belong under `[Unreleased]` until they are tagged.
+Package, Helm chart, and git tags currently use **0.17.1** (`v0.17.1`); 0.17.0 is the GA baseline. Later versions belong under `[Unreleased]` until they are tagged.
 
 ## [Unreleased]
 
@@ -13,6 +13,7 @@ Package, Helm chart, and git tags currently use **0.17.0** (`v0.17.0`). That is 
 
 - Kubecost filter expressions for workload costs and cost comparison, with a consistent `applied_filter` echo across allocation and container sizing responses
 - Custom CA support via `global.updateCaTrust` in the Helm chart, mirroring the Kubecost umbrella chart's keys — an umbrella install that already sets it covers this pod with no MCP-specific value. An init container merges the certificates from a Secret (`caCertsSecret`) or ConfigMap (`caCertsConfig`) with the image's public roots and writes the result to the trust store both outbound clients verify against, so a privately signed OIDC issuer, egress proxy, or Kubecost endpoint is trusted *in addition to* the public roots. Unlike the parent chart, the init container runs as the pod's non-root UID, so `global.updateCaTrust.securityContext` is ignored and the OpenShift restricted-v2 path keeps working.
+
 ### Changed
 
 - **BREAKING (response contract 10.0 → 11.0): tool response fields are now snake_case.** Upgrading to FastMCP 4 changed the default Pydantic serialization from `by_alias=True` to `by_alias=False`, so row fields are emitted under their field names instead of the camelCase Kubecost API aliases. Rename the keys you read:
@@ -23,12 +24,19 @@ Package, Helm chart, and git tags currently use **0.17.0** (`v0.17.0`). That is 
 - Upgraded to FastMCP 4 (`fastmcp>=4.0.9,<5.0`, from `>=3.4.7,<4.0`), which moves the server onto MCP Python SDK 2.x and the sessionless `2026-07-28` protocol with protocol-era negotiation. Tool, prompt, and resource names and parameters are unchanged.
 - `FASTMCP_TELEMETRY_MODE` is now read by FastMCP itself as well as by this server's entrypoint. Both accept `off` and `native`, so existing values keep working, but `off` now also disables FastMCP's own native MCP spans in addition to skipping the `opentelemetry-instrument` wrapper. `propagation_only` is newly accepted by FastMCP.
 - Kubecost API calls now verify TLS against the operating system trust store instead of the certifi bundle `httpx` ships with. This matches how FastMCP verifies OIDC discovery, so one CA installed into the container's trust store covers both. `SSL_CA_BUNDLE` (chart: `config.ssl.caBundle`) is unchanged and still trusts that one bundle *instead of* the public roots, for Kubecost calls only; `KUBECOST_SSL_VERIFY=false` still disables verification. Deployments relying on a CA that is in certifi but not in the image's trust store should move it to `global.updateCaTrust`.
-- Default container image tag is now the git/ICR tag with a leading `v` (`icr.io/kubecost/mcp-kubecost:vX.Y.Z`). Helm chart `version` is still unprefixed SemVer. The unprefixed image tag is no longer published on new releases.
 
 ### Fixed
 
 - Container image now carries a populated CA trust store. The runtime rootfs installs `ca-certificates` with rpm scriptlets disabled, so `update-ca-trust extract` never ran and its generated bundles were absent, leaving `/etc/pki/tls/cert.pem` dangling and OpenSSL with zero trusted anchors. This surfaced only after the FastMCP 4 upgrade, because FastMCP 4 verifies TLS against the system trust store (via `truststore`) where FastMCP 3 used certifi's bundled PEM — OIDC discovery against a publicly trusted issuer failed with `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` and the server crash-looped. Private CAs mounted into `/etc/pki/ca-trust/source/anchors` are honoured.
 - OIDC startup failures now explain the failure that actually occurred. A TLS verification failure points at the trust store and private-CA mounting, and a connection failure points at DNS and pod egress, instead of both claiming the issuer returned an HTML login page.
+
+## [0.17.1] - 2026-09-17
+
+Release plumbing only; no changes to the MCP surface or server behavior.
+
+### Changed
+
+- Default container image tag is now the git/ICR tag with a leading `v` (`icr.io/kubecost/mcp-kubecost:vX.Y.Z`). Helm chart `version` is still unprefixed SemVer. The unprefixed image tag is no longer published on new releases.
 
 ## [0.17.0] - 2026-09-16
 
@@ -42,5 +50,6 @@ General availability of the Kubecost FinOps MCP server: a read-only MCP interfac
 - STDIO and Streamable HTTP transports, plus `/health` and `/version` HTTP routes
 - Optional OpenTelemetry extra, installed in the container image
 
-[Unreleased]: https://github.com/kubecost/mcp-kubecost/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/kubecost/mcp-kubecost/compare/v0.17.1...HEAD
+[0.17.1]: https://github.com/kubecost/mcp-kubecost/compare/v0.17.0...v0.17.1
 [0.17.0]: https://github.com/kubecost/mcp-kubecost/releases/tag/v0.17.0
