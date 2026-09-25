@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import ssl
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -12,6 +13,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
+import truststore
 
 from mcp_kubecost.auth import KUBECOST_API_KEY_HEADER, resolve_api_key
 from mcp_kubecost.config.settings import get_settings
@@ -26,6 +28,31 @@ _BACKOFF_CAP_SECONDS = 2.0
 _RETRY_AFTER_CAP_SECONDS = 30.0
 
 _http_client: httpx.AsyncClient | None = None
+
+
+def _resolve_verify(ssl_verify: bool | str) -> ssl.SSLContext | bool | str:
+    """Turn ``settings.ssl_verify`` into the value ``httpx`` should verify against.
+
+    ``True`` means "verify normally", and this resolves that to the **operating
+    system** trust store rather than ``httpx``'s bundled certifi PEM. That is what
+    FastMCP's own ``httpx2`` client does for OIDC discovery
+    (``httpx2/_config.py``: ``truststore.SSLContext`` when neither
+    ``SSL_CERT_FILE`` nor ``SSL_CERT_DIR`` is set), so both of this server's TLS
+    paths now anchor on the same certificates. A private CA installed into the
+    container's trust store — see ``global.updateCaTrust`` in the Helm chart —
+    therefore covers Kubecost as well as the identity provider, *on top of* the
+    public roots rather than instead of them.
+
+    ``truststore`` defers to OpenSSL's own defaults on Linux, so ``SSL_CERT_FILE``
+    and ``SSL_CERT_DIR`` keep working here exactly as they do for ``httpx2``.
+
+    The other two cases pass straight through: ``SSL_CA_BUNDLE`` resolves to a path
+    string, which is a deliberately narrow override that trusts that one bundle and
+    nothing else, and ``False`` disables verification.
+    """
+    if ssl_verify is True:
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    return ssl_verify
 
 
 def start_http_client() -> httpx.AsyncClient:
@@ -57,7 +84,7 @@ def start_http_client() -> httpx.AsyncClient:
         settings = get_settings()
         _http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(settings.request_timeout_seconds, connect=10.0, write=10.0, pool=10.0),
-            verify=settings.ssl_verify,
+            verify=_resolve_verify(settings.ssl_verify),
         )
     return _http_client
 

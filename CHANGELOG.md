@@ -12,6 +12,7 @@ Package, Helm chart, and git tags currently use **0.17.0** (`v0.17.0`). That is 
 ### Added
 
 - Kubecost filter expressions for workload costs and cost comparison, with a consistent `applied_filter` echo across allocation and container sizing responses
+- Custom CA support via `global.updateCaTrust` in the Helm chart, mirroring the Kubecost umbrella chart's keys — an umbrella install that already sets it covers this pod with no MCP-specific value. An init container merges the certificates from a Secret (`caCertsSecret`) or ConfigMap (`caCertsConfig`) with the image's public roots and writes the result to the trust store both outbound clients verify against, so a privately signed OIDC issuer, egress proxy, or Kubecost endpoint is trusted *in addition to* the public roots. Unlike the parent chart, the init container runs as the pod's non-root UID, so `global.updateCaTrust.securityContext` is ignored and the OpenShift restricted-v2 path keeps working.
 ### Changed
 
 - **BREAKING (response contract 10.0 → 11.0): tool response fields are now snake_case.** Upgrading to FastMCP 4 changed the default Pydantic serialization from `by_alias=True` to `by_alias=False`, so row fields are emitted under their field names instead of the camelCase Kubecost API aliases. Rename the keys you read:
@@ -21,6 +22,7 @@ Package, Helm chart, and git tags currently use **0.17.0** (`v0.17.0`). That is 
   - `get_resource_quota_recommendations` resource changes — `used` → `current_quota` and `recommended` → `recommended_quota`. This pair also renames *semantically*: the API's `used` is the namespace's existing ResourceQuota cap, not observed pod usage.
 - Upgraded to FastMCP 4 (`fastmcp>=4.0.9,<5.0`, from `>=3.4.7,<4.0`), which moves the server onto MCP Python SDK 2.x and the sessionless `2026-07-28` protocol with protocol-era negotiation. Tool, prompt, and resource names and parameters are unchanged.
 - `FASTMCP_TELEMETRY_MODE` is now read by FastMCP itself as well as by this server's entrypoint. Both accept `off` and `native`, so existing values keep working, but `off` now also disables FastMCP's own native MCP spans in addition to skipping the `opentelemetry-instrument` wrapper. `propagation_only` is newly accepted by FastMCP.
+- Kubecost API calls now verify TLS against the operating system trust store instead of the certifi bundle `httpx` ships with. This matches how FastMCP verifies OIDC discovery, so one CA installed into the container's trust store covers both. `SSL_CA_BUNDLE` (chart: `config.ssl.caBundle`) is unchanged and still trusts that one bundle *instead of* the public roots, for Kubecost calls only; `KUBECOST_SSL_VERIFY=false` still disables verification. Deployments relying on a CA that is in certifi but not in the image's trust store should move it to `global.updateCaTrust`.
 - Default container image tag is now the git/ICR tag with a leading `v` (`icr.io/kubecost/mcp-kubecost:vX.Y.Z`). Helm chart `version` is still unprefixed SemVer. The unprefixed image tag is no longer published on new releases.
 
 ### Fixed

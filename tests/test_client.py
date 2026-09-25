@@ -10,9 +10,16 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import truststore
 from pytest_httpx import HTTPXMock
 
-from mcp_kubecost.client import KubecostClientError, get, kubecost_client_lifespan, post
+from mcp_kubecost.client import (
+    KubecostClientError,
+    _resolve_verify,
+    get,
+    kubecost_client_lifespan,
+    post,
+)
 from mcp_kubecost.config.settings import AuthMode, Settings
 from mcp_kubecost.errors import ErrorCode
 
@@ -481,3 +488,22 @@ async def test_get_honors_http_date_retry_after(httpx_mock: HTTPXMock):
     sleep.assert_awaited_once()
     delay = sleep.await_args_list[0].args[0]
     assert 8.0 <= delay <= 10.0
+
+
+class TestResolveVerify:
+    """``verify=True`` must mean the OS trust store, not httpx's bundled certifi PEM.
+
+    That is what FastMCP's ``httpx2`` client uses for OIDC discovery, so anchoring
+    both paths on the same certificates is what lets one private CA — mounted via
+    the chart's ``global.updateCaTrust`` — cover Kubecost and the identity provider.
+    """
+
+    def test_true_resolves_to_the_os_trust_store(self):
+        context = _resolve_verify(True)
+        assert isinstance(context, truststore.SSLContext)
+
+    def test_false_disables_verification(self):
+        assert _resolve_verify(False) is False
+
+    def test_bundle_path_passes_through(self):
+        assert _resolve_verify("/etc/mcp-kubecost/ca/ca.crt") == "/etc/mcp-kubecost/ca/ca.crt"

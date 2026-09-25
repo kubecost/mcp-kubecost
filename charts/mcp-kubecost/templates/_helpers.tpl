@@ -108,6 +108,64 @@ runAsUser/runAsGroup and assigns its own IDs instead.
 {{- end }}
 
 {{/*
+Return "true" when custom CA certificates should be installed into the trust store.
+Gated on `global.updateCaTrust.enabled` alone: the parent chart ships a non-empty
+`caCertsSecret` default alongside `enabled: false`, so the secret name says nothing
+about intent.
+*/}}
+{{- define "mcp-kubecost.updateCaTrustEnabled" -}}
+{{- if (((.Values.global).updateCaTrust).enabled) -}}true{{- end -}}
+{{- end }}
+
+{{/*
+Directory the extracted PEM trust bundle is written to. /etc/pki/tls/cert.pem --
+OpenSSL's default CA file in this image, and therefore what both the Kubecost
+`httpx` client and FastMCP's `httpx2` client verify against -- resolves to
+tls-ca-bundle.pem inside it. Mounting only this directory rather than the whole
+`extracted` tree leaves the image's java/, openssl/ and edk2/ bundles in place.
+*/}}
+{{- define "mcp-kubecost.caTrustExtractedDir" -}}
+/etc/pki/ca-trust/extracted/pem
+{{- end }}
+
+{{/*
+Container securityContext, shared by the main container and the update-ca-trust
+init container. Deliberately not `global.updateCaTrust.securityContext`: the parent
+chart defaults that to runAsUser 0 / runAsNonRoot false, and Helm merges it into
+this subchart whether or not the feature is enabled. A root init container would
+contradict podSecurityContext.runAsNonRoot and be rejected by the OpenShift
+restricted-v2 SCC. `trust extract` needs no root, so there is nothing to trade for.
+*/}}
+{{- define "mcp-kubecost.containerSecurityContext" -}}
+allowPrivilegeEscalation: {{ .Values.containerSecurityContext.allowPrivilegeEscalation }}
+readOnlyRootFilesystem: {{ .Values.containerSecurityContext.readOnlyRootFilesystem }}
+capabilities:
+  drop:
+    {{- toYaml .Values.containerSecurityContext.capabilitiesDrop | nindent 4 }}
+{{- end }}
+
+{{/*
+Validate `global.updateCaTrust`: exactly one certificate source. Mirrors the parent
+chart's kubecost.caCertsSecretConfig.check.
+*/}}
+{{- define "mcp-kubecost.validateUpdateCaTrust" -}}
+{{- if include "mcp-kubecost.updateCaTrustEnabled" . -}}
+{{- $ca := ((.Values.global).updateCaTrust) | default dict -}}
+{{- $secret := trim ($ca.caCertsSecret | default "") -}}
+{{- $config := trim ($ca.caCertsConfig | default "") -}}
+{{- if and $secret $config -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: global.updateCaTrust.caCertsSecret and global.updateCaTrust.caCertsConfig cannot both be set. Supply exactly one certificate source so the mounted anchors are unambiguous.\n") -}}
+{{- end -}}
+{{- if not (or $secret $config) -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: global.updateCaTrust.enabled is true but neither global.updateCaTrust.caCertsSecret nor global.updateCaTrust.caCertsConfig is set.\n\n  Example:\n    global.updateCaTrust.caCertsSecret: \"ca-certs-secret\"\n") -}}
+{{- end -}}
+{{- if empty (trim ($ca.caCertsMountPath | default "")) -}}
+{{- fail (printf "\n\nFAILURE [mcp-kubecost]: global.updateCaTrust.caCertsMountPath must not be empty. Use the p11-kit source anchor directory: /etc/pki/ca-trust/source/anchors\n") -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Fail on contradictory values, and when referenced existing Secrets are missing
 unless CI/CD skip is on or the cluster is unreachable (helm template / dry-run
 with no kube API). The routing + authMode=none check and the replicas HA check
@@ -115,6 +173,7 @@ are not gated by skipSanityChecks: that flag only skips live Secret lookups.
 */}}
 {{- define "mcp-kubecost.sanityChecks" -}}
 {{- $p := include "mcp-kubecost.valuePrefix" . }}
+{{- include "mcp-kubecost.validateUpdateCaTrust" . }}
 {{- $mode := .Values.config.authMode | default "none" }}
 {{- $routeEnabled := or .Values.httpRoute.enabled .Values.ingress.enabled }}
 {{- if and $routeEnabled (eq $mode "none") }}
@@ -151,10 +210,19 @@ are not gated by skipSanityChecks: that flag only skips live Secret lookups.
 {{- if .Values.config.ssl.caBundle.existingSecret }}
 {{- $checks = append $checks (dict "name" .Values.config.ssl.caBundle.existingSecret "ref" (printf "%sconfig.ssl.caBundle.existingSecret" $p)) -}}
 {{- end }}
+{{- $ca := ((.Values.global).updateCaTrust) | default dict -}}
+{{- if and (include "mcp-kubecost.updateCaTrustEnabled" .) $ca.caCertsSecret }}
+{{- $checks = append $checks (dict "name" $ca.caCertsSecret "ref" "global.updateCaTrust.caCertsSecret") -}}
+{{- end }}
 {{- range $checks }}
 {{- $secret := lookup "v1" "Secret" $.Release.Namespace .name }}
 {{- if not $secret }}
 {{- fail (printf "%s %q was not found in namespace %s; create the Secret or set global.platforms.cicd.enabled and global.platforms.cicd.skipSanityChecks for Argo CD / similar tools" .ref .name $.Release.Namespace) }}
+{{- end }}
+{{- end }}
+{{- if and (include "mcp-kubecost.updateCaTrustEnabled" .) $ca.caCertsConfig }}
+{{- if not (lookup "v1" "ConfigMap" $.Release.Namespace $ca.caCertsConfig) }}
+{{- fail (printf "global.updateCaTrust.caCertsConfig %q was not found in namespace %s; create the ConfigMap or set global.platforms.cicd.enabled and global.platforms.cicd.skipSanityChecks for Argo CD / similar tools" $ca.caCertsConfig $.Release.Namespace) }}
 {{- end }}
 {{- end }}
 {{- end }}

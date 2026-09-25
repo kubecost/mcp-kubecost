@@ -214,6 +214,19 @@ One variable is read outside `get_settings()`, in [`otel_entrypoint.py`](src/mcp
 
 Add new settings to `Settings` and `.env.example` together; do not read `os.getenv` from a tool or client module.
 
+### TLS trust — two clients, one trust store
+
+There are two independent outbound TLS paths, and both now anchor on the **operating system** trust store:
+
+| Path | Client | Resolution |
+|---|---|---|
+| Kubecost API | `httpx` in [`client.py`](src/mcp_kubecost/client.py) | `SSL_CA_BUNDLE` path > `KUBECOST_SSL_VERIFY=false` > `_resolve_verify(True)` → `truststore.SSLContext` |
+| OIDC discovery | `httpx2` inside FastMCP 4 | `SSL_CERT_FILE` > `SSL_CERT_DIR` > `truststore.SSLContext` |
+
+`_resolve_verify()` exists so that `verify=True` means the OS store rather than httpx's bundled **certifi** PEM, which is what FastMCP's `httpx2` already does. One private CA installed into the container's trust store therefore covers both. `truststore` is a direct dependency for this reason, not just a transitive one — do not drop it back to transitive, and do not "simplify" `_resolve_verify()` back to passing `settings.ssl_verify` through.
+
+`SSL_CA_BUNDLE` stays a narrow override that trusts one bundle *instead of* the public roots, and reaches Kubecost calls only. In the chart that is `config.ssl.caBundle`; `global.updateCaTrust` is the additive, both-paths mechanism, whose keys mirror the Kubecost parent chart. Its init container runs `trust extract` as the pod's non-root UID and writes the merged bundle into an emptyDir over `/etc/pki/ca-trust/extracted/pem`. The parent's `update-ca-trust extract` needs root (p11-kit chmods `extracted/pem/directory-hash` to 0555 mid-run, then fails to symlink into it), which is why `global.updateCaTrust.securityContext` is deliberately ignored here — honouring its `runAsUser: 0` default would contradict `podSecurityContext.runAsNonRoot` and the OpenShift restricted-v2 SCC. Note the parent ships a **non-empty** `caCertsSecret` default, so rendering gates on `enabled` alone.
+
 ## Kubecost Authentication
 
 OPTIONAL

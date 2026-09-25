@@ -132,6 +132,25 @@ jobs:
           grep -q 'SSL_CA_BUNDLE:' .helm-render/mcp-kubecost-secure.yaml
           ! grep -q 'kind: HTTPRoute' .helm-render/mcp-kubecost-secure.yaml
 
+      - name: Render custom CA trust store
+        run: |
+          helm template mcp-kubecost "$CHART_DIR" \
+            --namespace mcp-kubecost \
+            --set global.updateCaTrust.enabled=true \
+            --set global.updateCaTrust.caCertsSecret=corporate-ca \
+            --set global.platforms.cicd.enabled=true \
+            --set global.platforms.cicd.skipSanityChecks=true \
+            > .helm-render/mcp-kubecost-catrust.yaml
+          grep -q 'name: update-ca-trust' .helm-render/mcp-kubecost-catrust.yaml
+          grep -q 'trust extract' .helm-render/mcp-kubecost-catrust.yaml
+          grep -q 'name: ssl-path' .helm-render/mcp-kubecost-catrust.yaml
+          grep -q 'secretName: corporate-ca' .helm-render/mcp-kubecost-catrust.yaml
+          # The parent chart runs this init container as root; this one must not.
+          ! grep -q 'runAsUser: 0' .helm-render/mcp-kubecost-catrust.yaml
+          # caCertsSecret has a non-empty parent default, so the feature must stay
+          # off until enabled is set.
+          ! grep -qE 'update-ca-trust|ssl-path' .helm-render/mcp-kubecost-default.yaml
+
       - name: Render preferred HTTPRoute configuration
         run: |
           helm template mcp-kubecost "$CHART_DIR" \

@@ -28,6 +28,17 @@
         "annotations": { "type": "object" },
         "podAnnotations": { "type": "object" },
         "additionalLabels": { "type": "object" },
+        "updateCaTrust": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "caCertsSecret": { "type": "string" },
+            "caCertsConfig": { "type": "string" },
+            "caCertsMountPath": { "type": "string", "pattern": "^/" },
+            "resources": { "type": "object" }
+          }
+        },
         "platforms": {
           "type": "object",
           "additionalProperties": true,

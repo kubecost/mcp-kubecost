@@ -1005,6 +1005,7 @@ dependencies = [
     { name = "httpx" },
     { name = "py-key-value-aio", extra = ["filetree"] },
     { name = "python-dotenv" },
+    { name = "truststore" },
 ]
 
 [package.optional-dependencies]
@@ -1041,6 +1042,7 @@ requires-dist = [
     { name = "pytest-httpx", marker = "extra == 'dev'" },
     { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "ruff", marker = "extra == 'dev'" },
+    { name = "truststore", specifier = ">=0.10.4" },
     { name = "vulture", marker = "extra == 'dev'" },
 ]
 provides-extras = ["otel", "dev"]

@@ -63,6 +63,38 @@ spec:
       {{- with include "mcp-kubecost.imagePullSecrets" . }}
       {{- . | nindent 6 }}
       {{- end }}
+      {{- if include "mcp-kubecost.updateCaTrustEnabled" . }}
+      {{- $ca := ((.Values.global).updateCaTrust) }}
+      {{- $extracted := include "mcp-kubecost.caTrustExtractedDir" . }}
+      initContainers:
+        # Merge the mounted anchors with the image's public anchors into the shared
+        # emptyDir below, which becomes OpenSSL's default trust store for the main
+        # container. `trust extract` rather than the parent chart's
+        # `update-ca-trust extract`: the latter needs root, because p11-kit chmods
+        # extracted/pem/directory-hash to 0555 mid-run and then fails to symlink
+        # into it. This form writes one file and runs happily as the pod's
+        # non-root UID.
+        - name: update-ca-trust
+          image: {{ include "mcp-kubecost.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              trust extract --format=pem-bundle --filter=ca-anchors
+              --purpose server-auth --overwrite {{ $extracted }}/tls-ca-bundle.pem
+          securityContext:
+            {{- include "mcp-kubecost.containerSecurityContext" . | nindent 12 }}
+          {{- with $ca.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: ca-certs
+              mountPath: {{ $ca.caCertsMountPath | quote }}
+              readOnly: true
+            - name: ssl-path
+              mountPath: {{ $extracted | quote }}
+      {{- end }}
       containers:
         - name: mcp-kubecost
           image: {{ include "mcp-kubecost.image" . | quote }}
@@ -125,11 +157,7 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
-            allowPrivilegeEscalation: {{ .Values.containerSecurityContext.allowPrivilegeEscalation }}
-            readOnlyRootFilesystem: {{ .Values.containerSecurityContext.readOnlyRootFilesystem }}
-            capabilities:
-              drop:
-                {{- toYaml .Values.containerSecurityContext.capabilitiesDrop | nindent 16 }}
+            {{- include "mcp-kubecost.containerSecurityContext" . | nindent 12 }}
           {{- if .Values.probes.enabled }}
           startupProbe:
             httpGet:
@@ -173,6 +201,11 @@ spec:
               subPath: {{ .Values.config.ssl.caBundle.key }}
               readOnly: true
           {{- end }}
+          {{- if include "mcp-kubecost.updateCaTrustEnabled" . }}
+            - name: ssl-path
+              mountPath: {{ include "mcp-kubecost.caTrustExtractedDir" . | quote }}
+              readOnly: true
+          {{- end }}
       volumes:
         - name: oauth-storage
           {{- if include "mcp-kubecost.persistenceEnabled" . }}
@@ -185,6 +218,24 @@ spec:
         - name: ca-bundle
           secret:
             secretName: {{ .Values.config.ssl.caBundle.existingSecret }}
+      {{- end }}
+      {{- if include "mcp-kubecost.updateCaTrustEnabled" . }}
+      {{- $ca := ((.Values.global).updateCaTrust) }}
+        - name: ca-certs
+          {{- if $ca.caCertsSecret }}
+          secret:
+            secretName: {{ $ca.caCertsSecret }}
+            defaultMode: 420
+          {{- else }}
+          configMap:
+            name: {{ $ca.caCertsConfig }}
+            defaultMode: 420
+          {{- end }}
+        # Writable trust store for the init container's output. An emptyDir keeps
+        # readOnlyRootFilesystem intact and is repopulated on every pod start, so
+        # the bundle can never go stale against the image's public anchors.
+        - name: ssl-path
+          emptyDir: {}
       {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
