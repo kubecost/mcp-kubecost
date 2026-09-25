@@ -17,7 +17,7 @@ import truststore
 
 from mcp_kubecost.auth import KUBECOST_API_KEY_HEADER, resolve_api_key
 from mcp_kubecost.config.settings import get_settings
-from mcp_kubecost.errors import ErrorCode, ToolError
+from mcp_kubecost.errors import ConfigError, ErrorCode, ToolError
 
 logger = logging.getLogger(__name__)
 
@@ -219,9 +219,33 @@ class KubecostClientError(Exception):
             )
 
 
+_NO_BASE_URL_MESSAGE = (
+    "KUBECOST_BASE_URL is not set, so there is no Kubecost endpoint to call. "
+    "Set it to your Kubecost URL, or — if this server is embedded in a host "
+    "application — have the host install its transport with "
+    "client.set_http_backend() before registering the tools."
+)
+
+
+def require_direct_transport_config() -> None:
+    """Fail fast when the built-in transport is the one that will be used.
+
+    ``KUBECOST_BASE_URL`` is optional in settings because an embedding host can
+    replace the transport entirely via :func:`set_http_backend`. A standalone
+    server has no such host, so it must still validate the URL at startup rather
+    than surfacing the misconfiguration as a per-tool error later.
+    """
+    if _backend_get is not None and _backend_post is not None:
+        return
+    if get_settings().kubecost_base_url is None:
+        raise ConfigError(_NO_BASE_URL_MESSAGE)
+
+
 def _get_base_url() -> str:
     """Return the Kubecost base URL from settings."""
     base_url = get_settings().kubecost_base_url
+    if base_url is None:
+        raise ConfigError(_NO_BASE_URL_MESSAGE)
     logger.debug(f"Base URL: {base_url}")
     return base_url
 

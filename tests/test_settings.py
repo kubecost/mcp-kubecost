@@ -13,6 +13,12 @@ import fastmcp
 import pytest
 from cryptography.fernet import Fernet
 
+from mcp_kubecost.client import (
+    get,
+    require_direct_transport_config,
+    reset_http_backend,
+    set_http_backend,
+)
 from mcp_kubecost.config.settings import AuthMode, _get_auth_mode, apply_http_rich_logging, get_settings, is_http_mode
 from mcp_kubecost.errors import ConfigError
 
@@ -447,3 +453,68 @@ class TestOidcAllowedClientRedirectUrisSetting:
     def test_rejects_invalid_values(self, monkeypatch, value):
         with pytest.raises(ConfigError, match="OIDC_ALLOWED_CLIENT_REDIRECT_URIS"):
             _load_settings(monkeypatch, OIDC_ALLOWED_CLIENT_REDIRECT_URIS=value)
+
+
+class TestOptionalBaseUrl:
+    """KUBECOST_BASE_URL is optional so this server can be embedded as a library.
+
+    An embedding host replaces the transport wholesale with
+    ``client.set_http_backend``, which bypasses the base URL, the API-key headers
+    and the retry loop — there is no endpoint left for this server to dial, so
+    demanding one would force the host to invent a placeholder. Standalone runs
+    still require it; ``client.require_direct_transport_config`` is what enforces
+    that, and ``create_server`` calls it before any tool is reachable.
+    """
+
+    def test_unset_base_url_loads_as_none(self, monkeypatch):
+        monkeypatch.delenv("KUBECOST_BASE_URL", raising=False)
+        get_settings.cache_clear()
+        try:
+            assert get_settings().kubecost_base_url is None
+        finally:
+            get_settings.cache_clear()
+
+    def test_set_base_url_is_still_validated(self, monkeypatch):
+        monkeypatch.setenv("KUBECOST_BASE_URL", "not-a-url")
+        get_settings.cache_clear()
+        try:
+            with pytest.raises(ConfigError, match="Invalid URL for KUBECOST_BASE_URL"):
+                get_settings()
+        finally:
+            get_settings.cache_clear()
+
+    def test_trailing_slash_is_stripped(self, monkeypatch):
+        assert _load_settings(monkeypatch, KUBECOST_BASE_URL="http://localhost:9090/").kubecost_base_url == (
+            "http://localhost:9090"
+        )
+
+    def test_direct_transport_requires_a_base_url(self, monkeypatch):
+        monkeypatch.delenv("KUBECOST_BASE_URL", raising=False)
+        get_settings.cache_clear()
+        try:
+            with pytest.raises(ConfigError, match="KUBECOST_BASE_URL is not set"):
+                require_direct_transport_config()
+        finally:
+            get_settings.cache_clear()
+
+    def test_installed_backend_needs_no_base_url(self, monkeypatch):
+        async def _backend(*_args, **_kwargs):  # pragma: no cover - never awaited
+            raise AssertionError("not called")
+
+        monkeypatch.delenv("KUBECOST_BASE_URL", raising=False)
+        get_settings.cache_clear()
+        set_http_backend(_backend, _backend)
+        try:
+            require_direct_transport_config()  # does not raise
+        finally:
+            reset_http_backend()
+            get_settings.cache_clear()
+
+    async def test_request_without_a_base_url_fails_clearly(self, monkeypatch):
+        monkeypatch.delenv("KUBECOST_BASE_URL", raising=False)
+        get_settings.cache_clear()
+        try:
+            with pytest.raises(ConfigError, match="KUBECOST_BASE_URL is not set"):
+                await get("/model/allocation")
+        finally:
+            get_settings.cache_clear()
