@@ -342,6 +342,34 @@ class TestCreateOidcProvider:
             else:
                 raise AssertionError("expected ConfigError")
 
+    def test_tls_verification_failure_hint_names_the_trust_store(self, tmp_path):
+        """A failed handshake fetched nothing, so the hint must not blame the response body."""
+        import ssl
+
+        failure = ssl.SSLCertVerificationError(
+            "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate"
+        )
+        transport_error = type("ConnectError", (Exception,), {})("handshake failed")
+        transport_error.__cause__ = failure
+        with patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy", side_effect=transport_error):
+            with pytest.raises(ConfigError) as caught:
+                create_oidc_provider(_settings(**{**_OIDC, "oidc_storage_path": str(tmp_path)}))
+        message = str(caught.value)
+        assert "trust store" in message
+        assert "ca-trust/source/anchors" in message
+        assert "HTML" not in message
+
+    def test_connect_failure_hint_names_egress(self, tmp_path):
+        with patch(
+            "mcp_kubecost.config.oidc.AdaptiveOidcProxy",
+            side_effect=OSError("[Errno -2] Name or service not known"),
+        ):
+            with pytest.raises(ConfigError) as caught:
+                create_oidc_provider(_settings(**{**_OIDC, "oidc_storage_path": str(tmp_path)}))
+        message = str(caught.value)
+        assert "egress" in message
+        assert "HTML" not in message
+
     def test_invalid_storage_encryption_key_is_config_error(self, tmp_path):
         with pytest.raises(ConfigError, match="OIDC provider initialization failed"):
             create_oidc_provider(

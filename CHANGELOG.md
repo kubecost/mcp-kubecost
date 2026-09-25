@@ -23,6 +23,11 @@ Package, Helm chart, and git tags currently use **0.17.0** (`v0.17.0`). That is 
 - `FASTMCP_TELEMETRY_MODE` is now read by FastMCP itself as well as by this server's entrypoint. Both accept `off` and `native`, so existing values keep working, but `off` now also disables FastMCP's own native MCP spans in addition to skipping the `opentelemetry-instrument` wrapper. `propagation_only` is newly accepted by FastMCP.
 - Default container image tag is now the git/ICR tag with a leading `v` (`icr.io/kubecost/mcp-kubecost:vX.Y.Z`). Helm chart `version` is still unprefixed SemVer. The unprefixed image tag is no longer published on new releases.
 
+### Fixed
+
+- Container image now carries a populated CA trust store. The runtime rootfs installs `ca-certificates` with rpm scriptlets disabled, so `update-ca-trust extract` never ran and its generated bundles were absent, leaving `/etc/pki/tls/cert.pem` dangling and OpenSSL with zero trusted anchors. This surfaced only after the FastMCP 4 upgrade, because FastMCP 4 verifies TLS against the system trust store (via `truststore`) where FastMCP 3 used certifi's bundled PEM — OIDC discovery against a publicly trusted issuer failed with `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` and the server crash-looped. Private CAs mounted into `/etc/pki/ca-trust/source/anchors` are honoured.
+- OIDC startup failures now explain the failure that actually occurred. A TLS verification failure points at the trust store and private-CA mounting, and a connection failure points at DNS and pod egress, instead of both claiming the issuer returned an HTML login page.
+
 ## [0.17.0] - 2026-09-16
 
 General availability of the Kubecost FinOps MCP server: a read-only MCP interface over Kubecost cost allocation and optimization APIs.
