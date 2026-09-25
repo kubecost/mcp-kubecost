@@ -85,10 +85,14 @@ DEFAULT_WINDOW: str = get_settings().default_window
 # schema the model sees carries that default.
 DEFAULT_VIEW_ID: str | None = get_settings().default_view_id
 
-_VIEW_ID_DESCRIPTION = (
-    'View ID restricting which resources the query can see. Use "0" for unrestricted access. '
-    "Leave unset on a Kubecost installation that does not use views."
-)
+# The trailing hint is conditional because it is only true of an unconfigured
+# deployment. Kubecost OSS wants no ``viewId`` at all, but a view-scoped API in
+# front of this server may *require* one — Cloudability's proxy answers 403 "View-based
+# filtering is not yet implemented for this endpoint" when the parameter is missing.
+# Telling the model to leave it unset there would walk it straight into that error.
+_VIEW_ID_DESCRIPTION = 'View ID restricting which resources the query can see. Use "0" for unrestricted access.'
+if DEFAULT_VIEW_ID is None:
+    _VIEW_ID_DESCRIPTION += " Leave unset on a Kubecost installation that does not use views."
 
 OptionalViewId = Annotated[
     str | None,
