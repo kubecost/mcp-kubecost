@@ -37,15 +37,19 @@ _HTTP_TRANSPORTS = frozenset({"http", "sse", "streamable-http"})
 class Settings:
     """Runtime settings used by transport and tool layers."""
 
-    kubecost_base_url: str
+    # ``None`` when this process is embedded in a host application that installs
+    # its own transport via ``client.set_http_backend`` — the host owns the URL
+    # and credentials, so there is nothing for this server to dial. Standalone
+    # runs still require it; ``create_server`` enforces that at startup.
+    kubecost_base_url: str | None
     kubecost_api_base_path: str
     KUBECOST_API_KEY: str | None
     require_client_api_key: bool
-    use_cac_views: bool
     ssl_verify: bool | str  # passed directly to httpx verify=
     request_timeout_seconds: float
     retry_count: int
     default_window: str
+    default_view_id: str | None
     log_level: str
     rate_limit_requests_per_second: float
     rate_limit_burst_capacity: int
@@ -134,7 +138,19 @@ def _get_required_env(name: str) -> str:
 
 def _get_url_env(name: str) -> str:
     """Return a required env var that must be an http(s) URL."""
-    value = _get_required_env(name).rstrip("/")
+    return _validate_url(name, _get_required_env(name))
+
+
+def _get_optional_url_env(name: str) -> str | None:
+    """Return an optional env var that must be an http(s) URL when set."""
+    value = os.getenv(name, "").strip()
+    if not value:
+        return None
+    return _validate_url(name, value)
+
+
+def _validate_url(name: str, value: str) -> str:
+    value = value.rstrip("/")
     parsed = urlparse(value)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ConfigError(f"Invalid URL for {name}: {value!r} (expected http(s)://host[...])")
@@ -279,7 +295,7 @@ def _get_oidc_storage_path() -> str:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Load and cache settings from environment."""
-    kubecost_base_url = _get_url_env("KUBECOST_BASE_URL")
+    kubecost_base_url = _get_optional_url_env("KUBECOST_BASE_URL")
 
     auth_mode = _get_auth_mode()
 
@@ -362,6 +378,14 @@ def get_settings() -> Settings:
     if max_concurrent_tool_calls <= 0:
         raise ConfigError("MCP_MAX_CONCURRENT_TOOL_CALLS must be greater than 0")
 
+    # Default view scope sent as ``viewId`` by every tool that queries the API.
+    # Unset means no ``viewId`` is sent, which is what Kubecost OSS expects.
+    # Validated here rather than at the tool boundary so a typo fails at startup
+    # instead of on the first tool call.
+    default_view_id = os.getenv("DEFAULT_VIEW_ID", "").strip() or None
+    if default_view_id is not None and not default_view_id.isdigit():
+        raise ConfigError('DEFAULT_VIEW_ID must be a non-negative integer, e.g. "0"')
+
     return Settings(
         kubecost_base_url=kubecost_base_url,
         kubecost_api_base_path=os.getenv("KUBECOST_API_BASE_PATH", "/model").strip().rstrip("/"),
@@ -372,11 +396,11 @@ def get_settings() -> Settings:
         tool_call_timeout_seconds=tool_call_timeout_seconds,
         retry_count=retry_count,
         default_window=os.getenv("DEFAULT_WINDOW", "15d").strip(),
+        default_view_id=default_view_id,
         log_level=os.getenv("FASTMCP_LOG_LEVEL", "INFO").upper(),
         rate_limit_requests_per_second=rate_limit_requests_per_second,
         rate_limit_burst_capacity=rate_limit_burst_capacity,
         max_concurrent_tool_calls=max_concurrent_tool_calls,
-        use_cac_views=_get_bool_env("USE_CAC_VIEWS", False),
         auth_mode=auth_mode,
         oidc_issuer_url=oidc_issuer_url,
         oidc_client_id=oidc_client_id,

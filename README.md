@@ -99,7 +99,7 @@ Point your assistant at the server's `/mcp` endpoint. [docs/clients/README.md](d
 | `top_spenders`                  | Show top cost drivers across clusters and namespaces for a given window.                             |
 | `cost_trend`                    | Show daily cost trend for a given aggregation dimension.                                             |
 | `explore_abandoned_workloads`   | Start a guided abandoned-workload investigation. Walks the user through threshold and scope choices. |
-| `optimization`                  | Guidance for rightsizing resources and diagnosing Kubernetes cost anomalies.                         |
+| `container_optimization`        | Guidance for rightsizing resources and diagnosing Kubernetes cost anomalies.                         |
 | `kubecost_cost_allocation`      | Guidance for investigating Kubernetes cluster costs and container allocation.                        |
 
 ### Container sizing profiles

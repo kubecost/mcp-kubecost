@@ -6,7 +6,13 @@ result sets are bounded via a ``top_n`` parameter with a ``truncated`` flag
 (client-side sort+slice), or true server-side ``limit``/``offset`` pagination
 where the upstream API supports it (e.g. ``get_resource_quota_recommendations``).
 
-Contract version: 10.0
+Contract version: 11.0
+
+11.0 renamed every response row field from camelCase to snake_case. FastMCP 4 defaults
+Pydantic serialization to ``by_alias=False`` (FastMCP 3 defaulted to ``True``), so the
+camelCase ``Field(alias=...)`` values below are now input aliases only -- they still
+match the raw Kubecost API keys these rows are validated from, but they are no longer
+the names clients see.
 """
 
 from __future__ import annotations
@@ -39,11 +45,13 @@ from mcp_kubecost.domain.kubecost.sizing_guidance import (
 )
 from mcp_kubecost.errors import ErrorCode
 from mcp_kubecost.tools._common import (
+    DEFAULT_VIEW_ID,
     DEFAULT_WINDOW,
     MIN_QUANTILE_WINDOW,
     BaseToolResponse,
     CostRowStatus,
     McpToolError,
+    OptionalViewId,
     QueryStatus,
     ResolvedWindow,
     call_get_api,
@@ -60,7 +68,7 @@ from mcp_kubecost.tools._common import (
 
 logger = logging.getLogger(__name__)
 
-_VERSION = "10.0"
+_VERSION = "11.0"
 
 # ---------------------------------------------------------------------------
 # API path segments — combined with get_settings().kubecost_api_base_path at call time
@@ -125,7 +133,7 @@ How the results are trimmed. Use this to explain results, or ask which the user 
 
 ---
 **Savings threshold (`min_monthly_savings`)** — keeps reduction candidates where
-`monthlySavings_total >= min_monthly_savings`.
+`monthly_savings_total >= min_monthly_savings`.
 
 - **Omit / null (default)** — every reduction candidate.
 - **`5.0` (recommended for noise reduction)** — material opportunities only.
@@ -631,8 +639,8 @@ _UNALLOCATED = "__unallocated__"
 # Idle capacity is shared into every row (see _fetch_allocation), which the caller cannot infer.
 _IDLE_SHARED_NOTE = (
     "Idle (unused but provisioned) capacity is distributed proportionally into each row. "
-    "cpuCostIdle, ramCostIdle, and gpuCostIdle are portions already included in the corresponding "
-    "resource costs and totalCost; do not add them again. No separate idle row is returned."
+    "cpu_cost_idle, ram_cost_idle, and gpu_cost_idle are portions already included in the corresponding "
+    "resource costs and total_cost; do not add them again. No separate idle row is returned."
 )
 
 
@@ -1041,22 +1049,22 @@ class AllocationRow(BaseModel):
     cpu_cost: float = Field(
         default=0.0,
         alias="cpuCost",
-        description="CPU request cost including the cpuCostIdle portion (USD).",
+        description="CPU request cost including the cpu_cost_idle portion (USD).",
     )
     cpu_cost_idle: float = Field(
         default=0.0,
         alias="cpuCostIdle",
-        description="Idle portion already included in cpuCost and totalCost; do not add it again (USD).",
+        description="Idle portion already included in cpu_cost and total_cost; do not add it again (USD).",
     )
     ram_cost: float = Field(
         default=0.0,
         alias="ramCost",
-        description="RAM request cost including the ramCostIdle portion (USD).",
+        description="RAM request cost including the ram_cost_idle portion (USD).",
     )
     ram_cost_idle: float = Field(
         default=0.0,
         alias="ramCostIdle",
-        description="Idle portion already included in ramCost and totalCost; do not add it again (USD).",
+        description="Idle portion already included in ram_cost and total_cost; do not add it again (USD).",
     )
     network_cost: float = Field(
         default=0.0,
@@ -1071,12 +1079,12 @@ class AllocationRow(BaseModel):
     gpu_cost: float = Field(
         default=0.0,
         alias="gpuCost",
-        description="GPU cost including the gpuCostIdle portion (USD).",
+        description="GPU cost including the gpu_cost_idle portion (USD).",
     )
     gpu_cost_idle: float = Field(
         default=0.0,
         alias="gpuCostIdle",
-        description="Idle portion already included in gpuCost and totalCost; do not add it again (USD).",
+        description="Idle portion already included in gpu_cost and total_cost; do not add it again (USD).",
     )
     load_balancer_cost: float = Field(
         default=0.0,
@@ -1134,19 +1142,19 @@ class KubecostAllocationResponse(BaseToolResponse):
     )
     total_cost: float = Field(
         default=0.0,
-        description="Sum of totalCost across all rows, including proportionally distributed idle cost (USD).",
+        description="Sum of total_cost across all rows, including proportionally distributed idle cost (USD).",
     )
     row_count: int = Field(default=0, description="Total number of rows returned.")
     rows: list[AllocationRow] = Field(
         default_factory=list,
         description=(
-            "Aggregated allocation rows sorted by window_start ascending then totalCost "
+            "Aggregated allocation rows sorted by window_start ascending then total_cost "
             "descending — with accumulate=true there is a single window, so this is simply "
-            "totalCost descending; with accumulate=false there is one row per dimension key "
+            "total_cost descending; with accumulate=false there is one row per dimension key "
             "per day, in date order. Each row contains the requested dimension values "
             "(e.g. cluster, namespace), the window_start/window_end dates it covers, "
-            "plus cost fields: totalCost, cpuCost, ramCost, networkCost, pvCost, "
-            "gpuCost, sharedCost, and idle percentages cpuIdlePct, ramIdlePct, totalIdlePct."
+            "plus cost fields: total_cost, cpu_cost, ram_cost, network_cost, pv_cost, "
+            "gpu_cost, shared_cost, and idle percentages cpu_idle_pct, ram_idle_pct, total_idle_pct."
         ),
     )
     truncated: bool = Field(
@@ -2041,12 +2049,13 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             float,
             Field(
                 description=(
-                    "Minimum totalCost (USD) to include a row. Rows below this threshold "
+                    "Minimum total_cost (USD) to include a row. Rows below this threshold "
                     "are excluded as trivial noise. Default $1.00; set 0.0 to include all."
                 ),
                 ge=0.0,
             ),
         ] = 1.0,
+        view_id: OptionalViewId = DEFAULT_VIEW_ID,
     ) -> KubecostAllocationResponse:
         """Return Kubernetes cost allocation from Kubecost grouped by chosen dimensions.
 
@@ -2084,6 +2093,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 accumulate=accumulate,
                 limit=limit,
                 filter_str=applied_filter,
+                view_id=view_id,
             )
         except McpToolError as exc:
             _err_msg, _err_action = mcp_error_response_fields(exc)
@@ -2127,7 +2137,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             return KubecostAllocationResponse(
                 status=QueryStatus.EMPTY,
                 message=(
-                    f"No rows with totalCost >= ${min_total_cost:,.2f} for window {window_display}. "
+                    f"No rows with total_cost >= ${min_total_cost:,.2f} for window {window_display}. "
                     f"({len(aggregated)} rows totaling ${total:,.2f} were below the threshold.)"
                 ),
                 recommended_action="Lower min_total_cost or widen the window to surface more rows.",
@@ -2242,6 +2252,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 le=10000,
             ),
         ] = 20,
+        view_id: OptionalViewId = DEFAULT_VIEW_ID,
     ) -> CostComparisonResponse:
         """Compare Kubernetes cost allocation between two time windows to find cost changes and spikes.
 
@@ -2289,6 +2300,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 accumulate=True,
                 limit=100000,
                 filter_str=applied_filter,
+                view_id=view_id,
             )
             baseline_response = await _fetch_allocation(
                 aggregate=aggregate,
@@ -2296,6 +2308,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 accumulate=True,
                 limit=100000,
                 filter_str=applied_filter,
+                view_id=view_id,
             )
         except McpToolError as exc:
             _err_msg, _err_action = mcp_error_response_fields(exc)
@@ -2479,6 +2492,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 ),
             ),
         ] = "containerName",
+        view_id: OptionalViewId = DEFAULT_VIEW_ID,
     ) -> ContainerSavingsResponse:
         """Return Kubernetes container request-sizing candidates and request opportunity.
 
@@ -2565,6 +2579,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 target_ram_utilization=resolved_target_ram,
                 filter_str=applied_filter,
                 limit=_SAVINGS_API_FETCH_LIMIT,
+                view_id=view_id,
             )
         except McpToolError as exc:
             _err_msg, _err_action = mcp_error_response_fields(exc)
@@ -2767,6 +2782,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 ge=0,
             ),
         ] = 0,
+        view_id: OptionalViewId = DEFAULT_VIEW_ID,
     ) -> AbandonedWorkloadsResponse:
         """Return pods with abnormally low network traffic — possible abandoned workloads.
 
@@ -2809,6 +2825,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 days=days,
                 threshold=threshold,
                 cluster=cluster,
+                view_id=view_id,
             )
         except McpToolError as exc:
             _err_msg, _err_action = mcp_error_response_fields(exc)
@@ -2930,7 +2947,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         version=_VERSION,
         annotations=_read_only("Get Savings Overview"),
     )
-    async def get_savings_overview() -> SavingsOverviewResponse:
+    async def get_savings_overview(
+        view_id: OptionalViewId = DEFAULT_VIEW_ID,
+    ) -> SavingsOverviewResponse:
         """Return a ranked summary of all Kubecost savings categories.
 
         WHAT: Calls GET /model/savings and returns all 8 savings categories ranked
@@ -2947,7 +2966,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         (e.g. "show me container rightsizing") — call the drill-down tool directly.
         """
         try:
-            raw = await _fetch_savings_overview()
+            raw = await _fetch_savings_overview(view_id=view_id)
         except McpToolError as exc:
             _err_msg, _err_action = mcp_error_response_fields(exc)
             return SavingsOverviewResponse(
@@ -3042,6 +3061,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             float,
             Field(description="Minimum monthly savings (USD) to include a recommendation. Default $1.00.", ge=0.0),
         ] = 1.0,
+        view_id: OptionalViewId = DEFAULT_VIEW_ID,
     ) -> PVSizingResponse:
         """Return PersistentVolumeClaim right-sizing recommendations ranked by monthly savings.
 
@@ -3060,7 +3080,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
         try:
-            raw = await _fetch_pv_sizing(window=window, overhead_percent=overhead_percent)
+            raw = await _fetch_pv_sizing(window=window, overhead_percent=overhead_percent, view_id=view_id)
         except McpToolError as exc:
             _err_msg, _err_action = mcp_error_response_fields(exc)
             return PVSizingResponse(
@@ -3141,6 +3161,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             float,
             Field(description="Minimum monthly savings (USD) to include a disk. Default $1.00.", ge=0.0),
         ] = 1.0,
+        view_id: OptionalViewId = DEFAULT_VIEW_ID,
     ) -> LocalDiskSavingsResponse:
         """Return underutilized node-local disk savings recommendations.
 
@@ -3160,7 +3181,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
         try:
-            raw = await _fetch_local_disks(window=window, overhead_percent=overhead_percent)
+            raw = await _fetch_local_disks(window=window, overhead_percent=overhead_percent, view_id=view_id)
         except McpToolError as exc:
             _err_msg, _err_action = mcp_error_response_fields(exc)
             return LocalDiskSavingsResponse(
@@ -3241,6 +3262,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 )
             ),
         ] = "production",
+        view_id: OptionalViewId = DEFAULT_VIEW_ID,
     ) -> ClusterRightsizingResponse:
         """Return node group scale-in/scale-out/instance-type recommendations for a cluster.
 
@@ -3272,7 +3294,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
         try:
-            raw = await _fetch_node_group_sizing(cluster=cluster, window=window, profile=profile)
+            raw = await _fetch_node_group_sizing(cluster=cluster, window=window, profile=profile, view_id=view_id)
         except McpToolError as exc:
             _err_msg, _err_action = mcp_error_response_fields(exc)
             return ClusterRightsizingResponse(
@@ -3421,6 +3443,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             float,
             Field(description="Minimum monthly cost (USD) to include a volume. Default $1.00.", ge=0.0),
         ] = 1.0,
+        view_id: OptionalViewId = DEFAULT_VIEW_ID,
     ) -> UnclaimedVolumesResponse:
         """Return PersistentVolumes that are provisioned but not bound to any PVC.
 
@@ -3439,7 +3462,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
         try:
-            raw = await _fetch_unclaimed_volumes(window=window)
+            raw = await _fetch_unclaimed_volumes(window=window, view_id=view_id)
         except McpToolError as exc:
             _err_msg, _err_action = mcp_error_response_fields(exc)
             return UnclaimedVolumesResponse(
@@ -3532,6 +3555,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             int,
             Field(description="Pagination offset (0-based). Default 0.", ge=0),
         ] = 0,
+        view_id: OptionalViewId = DEFAULT_VIEW_ID,
     ) -> ResourceQuotaResponse:
         """Return namespace-level ResourceQuota sizing recommendations.
 
@@ -3560,7 +3584,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         window_display = resolved_window.display if resolved_window else window
         try:
             raw = await _fetch_resource_quota_recommendations(
-                window=window, profile=profile, limit=limit, offset=offset
+                window=window, profile=profile, limit=limit, offset=offset, view_id=view_id
             )
         except McpToolError as exc:
             _err_msg, _err_action = mcp_error_response_fields(exc)
@@ -3708,18 +3732,18 @@ filter_str:
     def cost_fields_schema() -> str:
         """Definitions of cost columns returned by get_kubecost_workload_costs."""
         return """\
-cpuCost          — CPU request cost, including cpuCostIdle
-cpuCostIdle      — idle portion already included in cpuCost and totalCost
-ramCost          — RAM request cost, including ramCostIdle
-ramCostIdle      — idle portion already included in ramCost and totalCost
-networkCost      — egress/ingress network cost
-pvCost           — persistent volume storage cost
-gpuCost          — GPU cost, including gpuCostIdle
-gpuCostIdle      — idle portion already included in gpuCost and totalCost
-loadBalancerCost — load balancer cost
-sharedCost       — shared namespace overhead allocation
-totalCost        — sum of all cost components, including idle portions
-totalEfficiency  — utilization ratio 0–1 (request vs actual use)
+cpu_cost           — CPU request cost, including cpu_cost_idle
+cpu_cost_idle      — idle portion already included in cpu_cost and total_cost
+ram_cost           — RAM request cost, including ram_cost_idle
+ram_cost_idle      — idle portion already included in ram_cost and total_cost
+network_cost       — egress/ingress network cost
+pv_cost            — persistent volume storage cost
+gpu_cost           — GPU cost, including gpu_cost_idle
+gpu_cost_idle      — idle portion already included in gpu_cost and total_cost
+load_balancer_cost — load balancer cost
+shared_cost        — shared namespace overhead allocation
+total_cost         — sum of all cost components, including idle portions
+total_efficiency   — utilization ratio 0–1 (request vs actual use)
 """
 
     @mcp.resource("kubecost://schema/sizing-profiles")
@@ -3971,7 +3995,7 @@ Wait for their reply, then call `get_kubecost_workload_costs` with:
 
 Then present:
 1. A 2-3 bullet Executive Summary of the biggest cost drivers and any anomalies.
-2. An SVG bar chart of the top 10 by totalCost.
+2. An SVG bar chart of the top 10 by total_cost.
 """
 
     @mcp.prompt()
@@ -3989,7 +4013,7 @@ Wait for their reply, then call `get_kubecost_workload_costs` with:
 
 Then present:
 1. A 2-3 bullet summary of trend direction and any notable spikes.
-2. An SVG line chart (date on X axis, totalCost on Y axis, one line per {aggregate}).
+2. An SVG line chart (date on X axis, total_cost on Y axis, one line per {aggregate}).
 """
 
     @mcp.prompt()
@@ -4047,6 +4071,18 @@ def _unwrap_data(result: Any) -> dict[str, Any]:
     return result if isinstance(result, dict) else {}
 
 
+def _with_view_id(params: dict[str, Any], view_id: str | None) -> dict[str, Any]:
+    """Add ``viewId`` to *params* when a view scope is set.
+
+    An unset ``view_id`` sends no ``viewId`` at all, which is what a Kubecost
+    installation without views expects. Mutates and returns *params* so fetch
+    helpers can wrap their existing dict in place.
+    """
+    if view_id is not None:
+        params["viewId"] = view_id
+    return params
+
+
 async def _fetch_request_sizing(
     window: str,
     algorithm_cpu: str,
@@ -4057,6 +4093,7 @@ async def _fetch_request_sizing(
     target_ram_utilization: float,
     filter_str: str | None,
     limit: int,
+    view_id: str | None,
 ) -> dict[str, Any]:
     """Fetch container savings recommendations via the shared API wrapper."""
     params: dict[str, Any] = {
@@ -4074,7 +4111,7 @@ async def _fetch_request_sizing(
         params["filter"] = filter_str
     path = f"{get_settings().kubecost_api_base_path}{_SEG_CONTAINER_SAVINGS}"
     logger.debug("Kubecost request sizing: path=%s window=%s", path, window)
-    return await call_get_api(path, params=params)
+    return await call_get_api(path, params=_with_view_id(params, view_id))
 
 
 async def _fetch_allocation(
@@ -4083,6 +4120,7 @@ async def _fetch_allocation(
     accumulate: bool,
     limit: int,
     filter_str: str | None,
+    view_id: str | None,
 ) -> dict[str, Any]:
     """Fetch allocation data via the shared API wrapper.
 
@@ -4105,7 +4143,7 @@ async def _fetch_allocation(
         params["filter"] = filter_str
     path = f"{get_settings().kubecost_api_base_path}{_SEG_ALLOCATION}"
     logger.debug("Kubecost allocation: path=%s window=%s", path, window)
-    return await call_get_api(path, params=params)
+    return await call_get_api(path, params=_with_view_id(params, view_id))
 
 
 def _unwrap_abandoned_workloads_payload(result: Any) -> list[dict[str, Any]]:
@@ -4128,6 +4166,7 @@ async def _fetch_abandoned_workloads_page(
     cluster: str,
     limit: int,
     offset: int,
+    view_id: str | None,
 ) -> list[dict[str, Any]]:
     """Fetch one page from GET .../savings/abandonedWorkloads."""
     params: dict[str, Any] = {
@@ -4146,13 +4185,14 @@ async def _fetch_abandoned_workloads_page(
         offset,
         limit,
     )
-    return _unwrap_abandoned_workloads_payload(await call_get_api(path, params=params))
+    return _unwrap_abandoned_workloads_payload(await call_get_api(path, params=_with_view_id(params, view_id)))
 
 
 async def _fetch_abandoned_workloads(
     days: int,
     threshold: int,
     cluster: str,
+    view_id: str | None,
 ) -> tuple[list[dict[str, Any]], bool]:
     """Page the abandonedWorkloads API until exhausted or ``_ABANDONED_API_MAX_ROWS``.
 
@@ -4173,6 +4213,7 @@ async def _fetch_abandoned_workloads(
             cluster=cluster,
             limit=page_limit,
             offset=fetch_offset,
+            view_id=view_id,
         )
         rows.extend(page)
         if len(page) < page_limit:
@@ -4216,15 +4257,15 @@ def _parse_abandoned_workloads_response(raw: list[dict[str, Any]]) -> list[dict[
     return rows
 
 
-async def _fetch_savings_overview() -> dict[str, Any]:
+async def _fetch_savings_overview(view_id: str | None) -> dict[str, Any]:
     """Fetch the savings overview from GET /model/savings."""
     path = f"{get_settings().kubecost_api_base_path}{_SEG_SAVINGS_OVERVIEW}"
     logger.debug("Kubecost savings overview: path=%s", path)
-    result = await call_get_api(path, params={})
+    result = await call_get_api(path, params=_with_view_id({}, view_id))
     return _unwrap_data(result)
 
 
-async def _fetch_pv_sizing(window: str, overhead_percent: int) -> dict[str, Any]:
+async def _fetch_pv_sizing(window: str, overhead_percent: int, view_id: str | None) -> dict[str, Any]:
     """Fetch PV sizing recommendations with a broad fixed limit so callers can sort before slicing."""
     params: dict[str, Any] = {
         "window": to_api_window(window),
@@ -4234,11 +4275,11 @@ async def _fetch_pv_sizing(window: str, overhead_percent: int) -> dict[str, Any]
     }
     path = f"{get_settings().kubecost_api_base_path}{_SEG_PV_SIZING}"
     logger.debug("Kubecost PV sizing: path=%s window=%s", path, window)
-    result = await call_get_api(path, params=params)
+    result = await call_get_api(path, params=_with_view_id(params, view_id))
     return _unwrap_data(result)
 
 
-async def _fetch_local_disks(window: str, overhead_percent: int) -> dict[str, Any]:
+async def _fetch_local_disks(window: str, overhead_percent: int, view_id: str | None) -> dict[str, Any]:
     """Fetch local disk savings recommendations."""
     params: dict[str, Any] = {
         "window": to_api_window(window),
@@ -4246,14 +4287,14 @@ async def _fetch_local_disks(window: str, overhead_percent: int) -> dict[str, An
     }
     path = f"{get_settings().kubecost_api_base_path}{_SEG_LOCAL_DISKS}"
     logger.debug("Kubecost local disks: path=%s window=%s", path, window)
-    result = await call_get_api(path, params=params)
+    result = await call_get_api(path, params=_with_view_id(params, view_id))
     # API returns { unutilizedDisks: [...] } directly (no code/data wrapper)
     if isinstance(result, dict):
         return result
     return {}
 
 
-async def _fetch_node_group_sizing(cluster: str, window: str, profile: str) -> dict[str, Any]:
+async def _fetch_node_group_sizing(cluster: str, window: str, profile: str, view_id: str | None) -> dict[str, Any]:
     """Fetch node group sizing recommendations; unwraps the { code, data } wrapper."""
     params: dict[str, Any] = {
         "cluster": cluster,
@@ -4262,16 +4303,16 @@ async def _fetch_node_group_sizing(cluster: str, window: str, profile: str) -> d
     }
     path = f"{get_settings().kubecost_api_base_path}{_SEG_NODE_GROUP_SIZING}"
     logger.debug("Kubecost node group sizing: path=%s cluster=%s", path, cluster)
-    result = await call_get_api(path, params=params)
+    result = await call_get_api(path, params=_with_view_id(params, view_id))
     return _unwrap_data(result)
 
 
-async def _fetch_unclaimed_volumes(window: str) -> dict[str, Any]:
+async def _fetch_unclaimed_volumes(window: str, view_id: str | None) -> dict[str, Any]:
     """Fetch unclaimed volumes; unwraps the { code, data } wrapper."""
     params: dict[str, Any] = {"window": to_api_window(window)}
     path = f"{get_settings().kubecost_api_base_path}{_SEG_UNCLAIMED_VOLUMES}"
     logger.debug("Kubecost unclaimed volumes: path=%s window=%s", path, window)
-    result = await call_get_api(path, params=params)
+    result = await call_get_api(path, params=_with_view_id(params, view_id))
     return _unwrap_data(result)
 
 
@@ -4280,6 +4321,7 @@ async def _fetch_resource_quota_recommendations(
     profile: str,
     limit: int,
     offset: int,
+    view_id: str | None,
 ) -> dict[str, Any]:
     """Fetch resource quota recommendations; hardcodes show='all' (only confirmed valid value)."""
     params: dict[str, Any] = {
@@ -4291,5 +4333,5 @@ async def _fetch_resource_quota_recommendations(
     }
     path = f"{get_settings().kubecost_api_base_path}{_SEG_RESOURCE_QUOTA}"
     logger.debug("Kubecost resource quota: path=%s window=%s", path, window)
-    result = await call_get_api(path, params=params)
+    result = await call_get_api(path, params=_with_view_id(params, view_id))
     return _unwrap_data(result)

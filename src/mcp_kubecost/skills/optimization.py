@@ -106,7 +106,7 @@ value.
 3. Compare `total_monthly_savings` / `total_count` with get_savings_overview —
    `returned_monthly_savings` is this page only. While `truncated=True`, call again
    with `offset=next_offset`
-4. Sort results by `monthlySavings` -- focus review on highest-cost idle pods
+4. Sort results by `monthly_savings` -- focus review on highest-cost idle pods
 5. Check `owner_kind` on every row. Network traffic is the only signal, so scheduled work is
    flagged by construction: a weekly job is silent on 5 of 7 days, and a 2-day lookback
    cannot tell it from a dead workload. Re-run with `days` past the job's interval (7 for
@@ -147,7 +147,7 @@ def register_optimization_skill(mcp: FastMCP) -> None:
     """Register the optimization skill as an MCP prompt."""
 
     @mcp.prompt()
-    def optimization() -> str:
+    def container_optimization() -> str:
         """Guidance for rightsizing resources and diagnosing Kubernetes cost anomalies.
 
         Use when investigating savings opportunities, rightsizing workloads or nodes,

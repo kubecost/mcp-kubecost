@@ -4,7 +4,7 @@ Development guide for AI coding agents working on this repository.
 
 ## Project Overview
 
-FinOps MCP server that exposes read-only Kubecost cost allocation and container rightsizing data to MCP clients. Built with Python 3.12+, FastMCP 3.4+, and httpx.
+FinOps MCP server that exposes read-only Kubecost cost allocation and container rightsizing data to MCP clients. Built with Python 3.12+, FastMCP 4.0+, and httpx.
 
 Entry point: [`src/mcp_kubecost/server.py`](src/mcp_kubecost/server.py) — creates the FastMCP instance, registers tools, skills, and the `/health` and `/version` HTTP routes.
 
@@ -180,7 +180,18 @@ uv run scripts/show_sizing_profiles.py --check  # invariants only, exit 1 on fai
 
 FastMCP serializes each returned Pydantic model **twice** — once as a JSON `TextContent` block and once as `structuredContent`. This is deliberate: the MCP specification (2025-11-25) says a tool returning structured content SHOULD also return the serialized JSON in a text block, for clients that do not read `structuredContent`. Do not "optimize" it away with `ToolResult` or middleware. To shrink a response, shrink the payload — fewer fields, lower `top_n`.
 
-`_VERSION` in `kubecost_tools.py` is a single module constant applied to **every** tool's `version=`, so bumping it relabels all 11. Bump on a breaking response-shape change and update the "Contract version" line in the module docstring to match. Currently **10.0**.
+`_VERSION` in `kubecost_tools.py` is a single module constant applied to **every** tool's `version=`, so bumping it relabels all 11. Bump on a breaking response-shape change and update the "Contract version" line in the module docstring to match. Currently **11.0**.
+
+### Rows serialize by field name, not by alias
+
+Four row models — `AllocationRow`, `ContainerSavingsRow`, `QuotaResourceChange`, `AbandonedWorkloadRow` — carry camelCase `Field(alias=...)` values. Those are **input** aliases: they match the raw Kubecost API keys the rows are validated from, and they must stay. They are *not* the names clients see.
+
+FastMCP 3 defaulted Pydantic serialization to `by_alias=True`, so the aliases doubled as the wire format. FastMCP 4 defaults to `by_alias=False` (`fastmcp/tools/function_parsing.py`), which made every response field snake_case — the breaking change behind contract **11.0**. We accepted the new default rather than pinning `serialize_by_alias=True`, so:
+
+- **Do not add `serialize_by_alias=True`** to these models to "restore" camelCase. That would silently revert the 11.0 contract.
+- Response prose, tool docstrings, and `Field(description=...)` text name the **snake_case** field. Raw-API-key references in the domain layer (`sizing_guidance.py`'s `monthlySavings_cpu`, the flatteners' `Recommended_cpuInMilliCores`, every `tests/conftest.py` fixture) stay camelCase — the two roles are unrelated and only one changed.
+- `TestWireContractFieldNames` in `tests/test_tool_handlers.py` pins the emitted key set for all four models and asserts no camelCase key survives. If it fails after a dependency bump, the framework default moved again — fix the framework pin, not the field names.
+- `QuotaResourceChange` renames *semantically* as well: the API's `used` / `recommended` are exposed as `current_quota` / `recommended_quota`, because `used` is the existing quota cap, never observed pod usage.
 
 ## Code Conventions
 
@@ -197,11 +208,24 @@ FastMCP serializes each returned Pydantic model **twice** — once as a JSON `Te
 
 All configuration flows through `get_settings()` in [`config/settings.py`](src/mcp_kubecost/config/settings.py) — `client.py` reads no environment variables directly. [`.env.example`](.env.example) is the complete, accurate template; copy it to `.env`.
 
-`KUBECOST_BASE_URL` is the only universally required variable. OIDC additionally requires `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and `MCP_EXTERNAL_URL` (the public origin of this server, e.g. `https://kubecost.example.com`, with no path). The MCP endpoint (`/mcp`), the OAuth authorization-server prefix (`/oauth/mcp`), and the OAuth callback (`/oauth/mcp/callback`) are fixed and not configurable. The rest have defaults: `KUBECOST_API_BASE_PATH`, `KUBECOST_API_KEY`, `REQUIRE_CLIENT_API_KEY`, `KUBECOST_SSL_VERIFY`, `SSL_CA_BUNDLE`, `REQUEST_TIMEOUT_SECONDS`, `REQUEST_RETRY_COUNT`, `DEFAULT_WINDOW`, `USE_CAC_VIEWS`, `FASTMCP_LOG_LEVEL`, `FASTMCP_ENABLE_RICH_LOGGING` (forced off in HTTP mode), `FASTMCP_TELEMETRY_MODE`, `OTEL_*`, and `OIDC_STORAGE_PATH` (`/var/lib/mcp-kubecost/oauth`). Opaque OIDC access tokens are detected from the token response — there is no `OIDC_VERIFY_ID_TOKEN` setting. `MCP_SERVER_NAME` is read in `server.py` and is not in `.env.example`.
+`KUBECOST_BASE_URL` is the only universally required variable. OIDC additionally requires `OIDC_ISSUER_URL`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, and `MCP_EXTERNAL_URL` (the public origin of this server, e.g. `https://kubecost.example.com`, with no path). The MCP endpoint (`/mcp`), the OAuth authorization-server prefix (`/oauth/mcp`), and the OAuth callback (`/oauth/mcp/callback`) are fixed and not configurable. The rest have defaults: `KUBECOST_API_BASE_PATH`, `KUBECOST_API_KEY`, `REQUIRE_CLIENT_API_KEY`, `KUBECOST_SSL_VERIFY`, `SSL_CA_BUNDLE`, `REQUEST_TIMEOUT_SECONDS`, `REQUEST_RETRY_COUNT`, `DEFAULT_WINDOW`, `DEFAULT_VIEW_ID`, `FASTMCP_LOG_LEVEL`, `FASTMCP_ENABLE_RICH_LOGGING` (forced off in HTTP mode), `FASTMCP_TELEMETRY_MODE`, `OTEL_*`, and `OIDC_STORAGE_PATH` (`/var/lib/mcp-kubecost/oauth`). Opaque OIDC access tokens are detected from the token response — there is no `OIDC_VERIFY_ID_TOKEN` setting. `MCP_SERVER_NAME` is read in `server.py` and is not in `.env.example`.
 
 One variable is read outside `get_settings()`, in [`otel_entrypoint.py`](src/mcp_kubecost/otel_entrypoint.py), because it shapes the `fastmcp run` argv before the server process exists: `FASTMCP_TELEMETRY_MODE`. The entrypoint always launches `fastmcp run` with `--path /mcp` — the MCP endpoint route is fixed, not configurable via environment. The entrypoint calls `load_dotenv()` itself so `.env` still works. Running `fastmcp run config/fastmcp-http.json` directly bypasses the entrypoint and defaults to FastMCP's own `/mcp` path anyway.
 
 Add new settings to `Settings` and `.env.example` together; do not read `os.getenv` from a tool or client module.
+
+### TLS trust — two clients, one trust store
+
+There are two independent outbound TLS paths, and both now anchor on the **operating system** trust store:
+
+| Path | Client | Resolution |
+|---|---|---|
+| Kubecost API | `httpx` in [`client.py`](src/mcp_kubecost/client.py) | `SSL_CA_BUNDLE` path > `KUBECOST_SSL_VERIFY=false` > `_resolve_verify(True)` → `truststore.SSLContext` |
+| OIDC discovery | `httpx2` inside FastMCP 4 | `SSL_CERT_FILE` > `SSL_CERT_DIR` > `truststore.SSLContext` |
+
+`_resolve_verify()` exists so that `verify=True` means the OS store rather than httpx's bundled **certifi** PEM, which is what FastMCP's `httpx2` already does. One private CA installed into the container's trust store therefore covers both. `truststore` is a direct dependency for this reason, not just a transitive one — do not drop it back to transitive, and do not "simplify" `_resolve_verify()` back to passing `settings.ssl_verify` through.
+
+`SSL_CA_BUNDLE` stays a narrow override that trusts one bundle *instead of* the public roots, and reaches Kubecost calls only. In the chart that is `config.ssl.caBundle`; `global.updateCaTrust` is the additive, both-paths mechanism, whose keys mirror the Kubecost parent chart. Its init container runs `trust extract` as the pod's non-root UID and writes the merged bundle into an emptyDir over `/etc/pki/ca-trust/extracted/pem`. The parent's `update-ca-trust extract` needs root (p11-kit chmods `extracted/pem/directory-hash` to 0555 mid-run, then fails to symlink into it), which is why `global.updateCaTrust.securityContext` is deliberately ignored here — honouring its `runAsUser: 0` default would contradict `podSecurityContext.runAsNonRoot` and the OpenShift restricted-v2 SCC. Note the parent ships a **non-empty** `caCertsSecret` default, so rendering gates on `enabled` alone.
 
 ## Kubecost Authentication
 
@@ -225,12 +249,12 @@ FastMCP renders the browser-facing OAuth pages (consent, OAuth errors, unregiste
 1. `server.py` passes `icons=server_icons()` and `website_url=` to `FastMCP()`. FastMCP reads both off the server instance when rendering, which sets the page logo and hyperlinks the server name. This is supported API — no patching.
 2. `install_oauth_page_branding()`, called from `create_oidc_provider()`, rebinds FastMCP's three page builders to wrappers that append a Kubecost stylesheet plus an inline `<link rel="icon">` to the returned HTML, and rewrite the handful of strings that name FastMCP to the reader.
 
-There is no theming hook in FastMCP 3.4.7 — `fastmcp.utilities.ui` composes its palette into a `<style>` block at render time, and `require_authorization_consent="external"` means "host consent yourself", not "restyle it". Rebinding the builders is the only option short of reimplementing FastMCP's CSRF and cookie handling, so keep the overlay **purely presentational**: never touch the consent form, its CSRF token, or the transaction fields.
+There is no theming hook in FastMCP 4.0.9 — `fastmcp.utilities.ui` composes its palette into a `<style>` block at render time, and `require_authorization_consent="external"` means "host consent yourself", not "restyle it". Rebinding the builders is the only option short of reimplementing FastMCP's CSRF and cookie handling, so keep the overlay **purely presentational**: never touch the consent form, its CSRF token, or the transaction fields.
 
 Rules to preserve:
 
 - The palette and font stack come from the **Kubecost UI's own design tokens** (`demo.kubecost.xyz` stylesheet). Change the constants in `branding.py`, not individual CSS rules.
-- Keep the logo an inline SVG `data:` URI and the CSS inline. The pages must fetch nothing external — otherwise they need new reverse-proxy rules (see [docs/auth/auth-technical.md](docs/auth/auth-technical.md)) and break in air-gapped clusters.
+- The pages must fetch nothing external — otherwise they need new reverse-proxy rules (see [docs/auth/auth-technical.md](docs/auth/auth-technical.md)) and break in air-gapped clusters.
 - Do not set `consent_csp_policy`. `style-src 'unsafe-inline'` and `img-src data:` are already in FastMCP's default consent CSP, so the overlay needs no CSP relaxation. Adding a webfont would, which is why Space Grotesk is declared but never fetched.
 - Copy substitutions in `_COPY_SUBSTITUTIONS` must each be a **single-line** substring of FastMCP's template; nothing may span a line break, or reindentation upstream silently breaks it.
 - Branding is installed only under `AUTH_MODE=oidc`; the other modes serve no browser pages. `install_oauth_page_branding()` is idempotent and warns rather than raises when a builder has been renamed — un-branded pages are cosmetic, not a startup failure.
@@ -284,7 +308,7 @@ Do not try to verify consent branding through the Kiro power or `just inspect` �
 - **HTTP:** `uv run fastmcp run config/fastmcp-http.json` (port 3030)
 - **Docker:** `CMD` is `/app/.venv/bin/mcp-kubecost-http` ([`otel_entrypoint.py`](src/mcp_kubecost/otel_entrypoint.py)), which wraps the server with `opentelemetry-instrument` unless `FASTMCP_TELEMETRY_MODE=off`
 
-OpenTelemetry lives in an optional `otel` extra; the Dockerfile installs it with `--extra otel`, plain `uv sync --extra dev` does not. Nothing under `src/` imports `opentelemetry` — `otel_entrypoint.py` only names the binary in an `execvp` argv, and falls back to starting untraced if it is missing. `FASTMCP_TELEMETRY_MODE` is this server's own switch: FastMCP 3.4.7 does not read it (verified — zero hits in the installed package). The `0.65b0` versions are OpenTelemetry's permanent prerelease track for instrumentation, not a maturity signal; see [docs/development/README.md](docs/development/README.md#telemetry) before "upgrading" away from them.
+OpenTelemetry lives in an optional `otel` extra; the Dockerfile installs it with `--extra otel`, plain `uv sync --extra dev` does not. Nothing under `src/` imports `opentelemetry` — `otel_entrypoint.py` only names the binary in an `execvp` argv, and falls back to starting untraced if it is missing. `FASTMCP_TELEMETRY_MODE` is **shared** as of FastMCP 4: it is this server's switch for wrapping the process with `opentelemetry-instrument`, and FastMCP 4 also reads it itself (`fastmcp/settings.py:155`, `Literal["native", "propagation_only", "off"]`) to gate its own native MCP spans. Our two values are both valid there, so nothing breaks — but the Dockerfile's `off` now disables FastMCP's native spans as well as the wrapper. The `0.65b0` versions are OpenTelemetry's permanent prerelease track for instrumentation, not a maturity signal; see [docs/development/README.md](docs/development/README.md#telemetry) before "upgrading" away from them.
 
 There is no `run_http()` helper — use the FastMCP config files above.
 

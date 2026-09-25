@@ -1,4 +1,4 @@
-"""Tests for client.py error mapping and USE_CAC_VIEWS param injection."""
+"""Tests for client.py error mapping and outbound query-parameter fidelity."""
 
 from __future__ import annotations
 
@@ -10,9 +10,16 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import truststore
 from pytest_httpx import HTTPXMock
 
-from mcp_kubecost.client import KubecostClientError, _build_params, get, kubecost_client_lifespan, post
+from mcp_kubecost.client import (
+    KubecostClientError,
+    _resolve_verify,
+    get,
+    kubecost_client_lifespan,
+    post,
+)
 from mcp_kubecost.config.settings import AuthMode, Settings
 from mcp_kubecost.errors import ErrorCode
 
@@ -98,7 +105,7 @@ class TestKubecostClientErrorToToolError:
 
 
 # ---------------------------------------------------------------------------
-# _build_params — USE_CAC_VIEWS injection
+# Outbound query parameters
 # ---------------------------------------------------------------------------
 
 _BASE_SETTINGS: dict[str, Any] = dict(
@@ -110,6 +117,7 @@ _BASE_SETTINGS: dict[str, Any] = dict(
     request_timeout_seconds=300.0,
     retry_count=2,
     default_window="15d",
+    default_view_id=None,
     log_level="INFO",
     rate_limit_requests_per_second=10.0,
     rate_limit_burst_capacity=20,
@@ -129,80 +137,45 @@ _BASE_SETTINGS: dict[str, Any] = dict(
 )
 
 
-def _settings(use_cac_views: bool) -> Settings:
-    return Settings(**_BASE_SETTINGS, use_cac_views=use_cac_views)
-
-
-class TestBuildParams:
-    def test_cac_views_false_no_view_id_added(self):
-        with patch("mcp_kubecost.client.get_settings", return_value=_settings(False)):
-            result = _build_params({"window": "7d"})
-        assert "viewId" not in result
-
-    def test_cac_views_false_none_input_returns_none(self):
-        with patch("mcp_kubecost.client.get_settings", return_value=_settings(False)):
-            result = _build_params(None)
-        assert result is None
-
-    def test_cac_views_true_adds_view_id_zero(self):
-        with patch("mcp_kubecost.client.get_settings", return_value=_settings(True)):
-            result = _build_params({"window": "7d"})
-        assert result["viewId"] == 0
-        assert result["window"] == "7d"
-
-    def test_cac_views_true_none_input_adds_view_id_zero(self):
-        with patch("mcp_kubecost.client.get_settings", return_value=_settings(True)):
-            result = _build_params(None)
-        assert result == {"viewId": 0}
-
-    def test_cac_views_true_does_not_override_existing_view_id(self):
-        """Caller-provided viewId must not be overwritten."""
-        with patch("mcp_kubecost.client.get_settings", return_value=_settings(True)):
-            result = _build_params({"viewId": 5})
-        assert result["viewId"] == 5
-
-    def test_cac_views_true_preserves_all_caller_params(self):
-        caller = {"window": "30d", "aggregate": "namespace", "accumulate": True}
-        with patch("mcp_kubecost.client.get_settings", return_value=_settings(True)):
-            result = _build_params(caller)
-        assert result["window"] == "30d"
-        assert result["aggregate"] == "namespace"
-        assert result["viewId"] == 0
-
-
-# ---------------------------------------------------------------------------
-# Integration: viewId appears on the outbound HTTP request
-# ---------------------------------------------------------------------------
+def _settings() -> Settings:
+    return Settings(**_BASE_SETTINGS)
 
 
 @pytest.mark.asyncio
-async def test_get_sends_view_id_when_cac_views_enabled(httpx_mock: HTTPXMock):
+async def test_get_sends_caller_params_verbatim(httpx_mock: HTTPXMock):
+    """The client is a pass-through: it adds no query parameters of its own.
+
+    ``viewId`` used to be injected here under the ``USE_CAC_VIEWS`` setting. It is
+    now an explicit ``view_id`` tool parameter threaded through the fetch helpers,
+    so the transport must not second-guess what a tool asked for.
+    """
     httpx_mock.add_response(
         method="GET",
         url=re.compile(r"http://localhost:9090/model/allocation"),
         json={"data": []},
     )
-    with patch("mcp_kubecost.client.get_settings", return_value=_settings(True)):
-        await get("/model/allocation", params={"window": "7d"})
+    with patch("mcp_kubecost.client.get_settings", return_value=_settings()):
+        await get("/model/allocation", params={"window": "7d", "viewId": "0"})
 
     request = httpx_mock.get_request()
     assert request is not None
-    assert "viewId=0" in str(request.url)
+    assert request.url.params["window"] == "7d"
+    assert request.url.params["viewId"] == "0"
 
 
 @pytest.mark.asyncio
-async def test_get_omits_view_id_when_cac_views_disabled(httpx_mock: HTTPXMock):
+async def test_get_injects_no_view_id_of_its_own(httpx_mock: HTTPXMock):
     httpx_mock.add_response(
         method="GET",
         url=re.compile(r"http://localhost:9090/model/allocation"),
         json={"data": []},
     )
-    with patch("mcp_kubecost.client.get_settings", return_value=_settings(False)):
+    with patch("mcp_kubecost.client.get_settings", return_value=_settings()):
         await get("/model/allocation", params={"window": "7d"})
 
     request = httpx_mock.get_request()
     assert request is not None
-    assert "viewId" not in str(request.url)
+    assert "viewId" not in request.url.params
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +185,7 @@ async def test_get_omits_view_id_when_cac_views_disabled(httpx_mock: HTTPXMock):
 
 def _auth_settings(**overrides: Any) -> Settings:
     """Settings for the auth path; overrides apply on top of the base dict."""
-    merged: dict[str, Any] = {**_BASE_SETTINGS, "use_cac_views": False, **overrides}
+    merged: dict[str, Any] = {**_BASE_SETTINGS, **overrides}
     return Settings(**merged)
 
 
@@ -515,3 +488,22 @@ async def test_get_honors_http_date_retry_after(httpx_mock: HTTPXMock):
     sleep.assert_awaited_once()
     delay = sleep.await_args_list[0].args[0]
     assert 8.0 <= delay <= 10.0
+
+
+class TestResolveVerify:
+    """``verify=True`` must mean the OS trust store, not httpx's bundled certifi PEM.
+
+    That is what FastMCP's ``httpx2`` client uses for OIDC discovery, so anchoring
+    both paths on the same certificates is what lets one private CA — mounted via
+    the chart's ``global.updateCaTrust`` — cover Kubecost and the identity provider.
+    """
+
+    def test_true_resolves_to_the_os_trust_store(self):
+        context = _resolve_verify(True)
+        assert isinstance(context, truststore.SSLContext)
+
+    def test_false_disables_verification(self):
+        assert _resolve_verify(False) is False
+
+    def test_bundle_path_passes_through(self):
+        assert _resolve_verify("/etc/mcp-kubecost/ca/ca.crt") == "/etc/mcp-kubecost/ca/ca.crt"

@@ -247,7 +247,7 @@ class TestIntegrationAllocationRowCounts:
         daily_response = allocation_call(window, accumulate=False)
         daily = daily_response["total_cost"]
 
-        assert daily == pytest.approx(sum(r["totalCost"] for r in daily_response["rows"]), abs=0.05)
+        assert daily == pytest.approx(sum(r["total_cost"] for r in daily_response["rows"]), abs=0.05)
         # The two calls are seconds apart and the in-progress day keeps accruing,
         # so compare within a tolerance rather than exactly.
         assert daily == pytest.approx(accumulated, rel=0.01)

@@ -29,7 +29,10 @@ from starlette.requests import Request  # noqa: E402
 from starlette.responses import JSONResponse, Response  # noqa: E402
 
 from mcp_kubecost.branding import FAVICON_MEDIA_TYPE, FAVICON_PNG, KUBECOST_WEBSITE_URL, server_icons  # noqa: E402
-from mcp_kubecost.client import kubecost_client_lifespan  # noqa: E402
+from mcp_kubecost.client import (  # noqa: E402
+    kubecost_client_lifespan,
+    require_direct_transport_config,
+)
 from mcp_kubecost.config.oidc import create_oidc_provider  # noqa: E402
 from mcp_kubecost.config.settings import AuthMode, apply_http_rich_logging, get_settings  # noqa: E402
 from mcp_kubecost.errors import ConfigError  # noqa: E402
@@ -194,6 +197,11 @@ class KubecostMCP(FastMCP):
 
 def create_server(server_name) -> FastMCP:
     """Create and configure FastMCP with tools, prompts, and resources."""
+
+    # This is the standalone entry point, so nothing has installed an HTTP
+    # backend: KUBECOST_BASE_URL has to be present and valid before any tool is
+    # reachable. Embedding hosts skip this path entirely.
+    require_direct_transport_config()
 
     # Build OIDC auth provider (None when OIDC is not enabled)
     auth = create_oidc_provider()

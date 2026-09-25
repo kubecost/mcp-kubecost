@@ -203,7 +203,30 @@ The referenced Secret must contain `OIDC_CLIENT_ID` and `OIDC_CLIENT_SECRET`. Pr
 
 The chart defaults to a non-root UID/GID, RuntimeDefault seccomp, a read-only root filesystem, dropped capabilities, disabled privilege escalation, and no service-account token. OAuth state is written only to its dedicated volume.
 
-For a custom CA, set `config.ssl.caBundle.existingSecret` and `key`. The chart mounts it read-only and sets `SSL_CA_BUNDLE`.
+### Custom CAs
+
+There are two mechanisms, and they reach different traffic. This server makes two kinds of outbound TLS connection — FastMCP's own client fetches the OIDC discovery document, and the Kubecost client calls the cost APIs — so which one you need depends on what is privately signed.
+
+**`global.updateCaTrust` — a private CA that must cover everything.** An init container merges the certificates you supply with the image's public roots and writes the result to the trust store both clients verify against, so the CA is trusted *in addition to* the public roots, for the identity provider and Kubecost alike. The keys mirror the Kubecost umbrella chart, so an umbrella install that already sets `global.updateCaTrust` covers this pod with no MCP-specific value.
+
+```bash
+kubectl create secret generic corporate-ca --from-file=ca.crt=corporate-root.pem -n mcp-kubecost
+helm upgrade --install mcp-kubecost kubecost/mcp-kubecost \
+  --set global.updateCaTrust.enabled=true \
+  --set global.updateCaTrust.caCertsSecret=corporate-ca
+```
+
+Set exactly one of `caCertsSecret` and `caCertsConfig` (a ConfigMap); the chart fails the render otherwise. Either may hold more than one PEM certificate. Unlike the parent chart, the init container runs as the pod's non-root UID — `trust extract` needs no root — so `global.updateCaTrust.securityContext` is deliberately ignored and the OpenShift restricted-v2 path keeps working.
+
+**`config.ssl.caBundle` — a narrow Kubecost-only override.** The chart mounts the Secret read-only and sets `SSL_CA_BUNDLE`, which makes the Kubecost client trust that bundle *instead of* the public roots. It has no effect on OIDC discovery. Use it only when Kubecost alone is privately signed and you want nothing else trusted.
+
+```bash
+helm upgrade --install mcp-kubecost kubecost/mcp-kubecost \
+  --set config.ssl.caBundle.existingSecret=kubecost-ca \
+  --set config.ssl.caBundle.key=ca.crt
+```
+
+Without either, both clients verify against the operating system trust store in the image, which carries the public roots.
 
 ## STDIO vs HTTP
 
@@ -248,4 +271,4 @@ The items below are gaps in FastMCP `3.4.x` relative to the 2026-07-28 MCP Autho
 | RFC 9207 `iss` parameter in authorization responses | SHOULD (flagged to become MUST) | Missing from FastMCP. The callback redirect does not carry `iss` and `authorization_response_iss_parameter_supported` is absent from the AS metadata. |
 | `scope` in `WWW-Authenticate` 401 challenge | SHOULD | FastMCP emits only `resource_metadata`. Once available, wire `OIDC_REQUIRED_SCOPES` into it. |
 
-Watch [FastMCP releases](https://gofastmcp.com/updates) for these items. Bump the `>=3.4.7,<4.0` pin and re-run the full suite (including `just check-consent-branding`) against every FastMCP minor release.
+Watch [FastMCP releases](https://gofastmcp.com/updates) for these items. Bump the `>=4.0.9,<5.0` pin and re-run the full suite (including `just check-consent-branding`) against every FastMCP minor release.

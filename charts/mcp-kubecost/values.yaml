@@ -21,6 +21,46 @@ global:
   # global.additionalLabels are added to this chart's resources and pod template.
   # They are never added to selector labels, which must stay immutable.
   additionalLabels: {}
+  # global.updateCaTrust installs custom CA certificates into this pod's trust
+  # store, so a privately signed OIDC issuer, egress proxy, or Kubecost endpoint
+  # is trusted in addition to the public roots the image already carries.
+  # Keys mirror the Kubecost parent chart, which means that a kubecost install that
+  # sets global.updateCaTrust covers this pod with no MCP-specific value.
+  #
+  # An init container extracts the mounted anchors plus the image's public
+  # anchors into a shared emptyDir, which both containers mount over
+  # /etc/pki/ca-trust/extracted/pem. That is the file /etc/pki/tls/cert.pem
+  # resolves to, and OpenSSL's default store is what both of this server's HTTP
+  # clients verify against — FastMCP's httpx2 client for OIDC discovery, and the
+  # Kubecost client. Unlike config.ssl.caBundle below, which replaces the public
+  # roots for Kubecost calls only, this applies everywhere and adds rather than
+  # replaces.
+  #
+  # AI note: two deliberate differences from the parent chart:
+  #   - The parent's global.updateCaTrust.securityContext is ignored. It defaults
+  #     to runAsUser 0 / runAsNonRoot false, and that default reaches this
+  #     subchart whether or not the feature is enabled. A root init container
+  #     would contradict podSecurityContext.runAsNonRoot and be rejected by the
+  #     OpenShift restricted-v2 SCC that global.platforms.openshift supports. The
+  #     `trust extract` command used here needs no root, so the init container
+  #     reuses this chart's own containerSecurityContext instead.
+  #   - The emptyDir covers only .../extracted/pem, not the whole extracted
+  #     directory, so the image's java/, openssl/ and edk2/ bundles survive.
+  updateCaTrust:
+    # Set to true to mount and extract custom CA certificates.
+    enabled: false
+    # Name of a Secret holding one or more PEM certificates. Set exactly one of
+    # caCertsSecret and caCertsConfig. Only read when enabled is true — the
+    # non-empty default matches the parent chart.
+    caCertsSecret: ca-certs-secret
+    # Name of a ConfigMap holding one or more PEM certificates, as an
+    # alternative to caCertsSecret.
+    # caCertsConfig: ca-certs-config
+    # Where the certificates are mounted for extraction. Must be a p11-kit
+    # source anchor directory.
+    caCertsMountPath: /etc/pki/ca-trust/source/anchors
+    # Resource requests and limits for the init container. Empty omits them.
+    resources: {}
   platforms:
     # global.platforms.openshift matches the Kubecost parent-chart OpenShift block.
     openshift:
@@ -263,8 +303,6 @@ config:
   defaultWindow: 15d
   # config.logLevel is the FastMCP log level ('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL').
   logLevel: INFO
-  # config.useCacViews enables Kubecost CAC views.
-  useCacViews: false
   # config.externalUrl is the public origin of this MCP server, with no path.
   # Required for OIDC unless the chart can infer it from exactly one enabled
   # Ingress or HTTPRoute containing exactly one non-wildcard hostname.
@@ -303,6 +341,10 @@ config:
   ssl:
     # config.ssl.verify controls Kubecost TLS certificate verification.
     verify: true
+    # config.ssl.caBundle is a narrow override that affects Kubecost API calls
+    # only, and trusts the supplied bundle *instead of* the public roots. For a
+    # private CA that should also cover the OIDC issuer, and that should be
+    # trusted alongside the public roots, use global.updateCaTrust instead.
     caBundle:
       # config.ssl.caBundle.existingSecret is the Secret containing a custom CA certificate.
       existingSecret: ""
@@ -341,6 +383,22 @@ config:
     storageEncryptionKey: ""
     # Pre-created Secret containing the four OIDC secret values above.
     existingSecret: ""
+
+# extraEnv holds additional container environment variables as standard Kubernetes
+# EnvVar entries, so `valueFrom` (secretKeyRef, configMapKeyRef, fieldRef) works here
+# too. These are appended after everything the chart renders itself, and Kubernetes
+# resolves duplicate names last-wins, so an entry here overrides the same variable
+# from the ConfigMap. Use it for settings the chart has no dedicated value for, e.g.:
+#
+#   extraEnv:
+#     - name: DEFAULT_VIEW_ID
+#       value: "0"
+#     - name: SOME_TOKEN
+#       valueFrom:
+#         secretKeyRef:
+#           name: my-secret
+#           key: token
+extraEnv: []
 
 nodeSelector: {}
 tolerations: []

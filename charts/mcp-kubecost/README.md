@@ -63,6 +63,28 @@ When this chart is a subchart, the parent `global` values are merged in and take
 | `global.platforms.openshift.enabled`                                       | Replaces `podSecurityContext` with `global.platforms.openshift.securityContext`, because the OpenShift restricted-v2 SCC rejects an explicit `runAsUser`/`runAsGroup`. |
 | `global.platforms.cicd.enabled` + `global.platforms.cicd.skipSanityChecks` | Skip Secret existence lookups. Set both when Helm cannot see the live cluster (Argo CD) or Secrets are created in a later sync wave.                                   |
 
+## Additional environment variables
+
+`extraEnv` takes standard Kubernetes `EnvVar` entries and appends them after every variable the
+chart renders itself. It is the escape hatch for settings that have no dedicated value, and
+because Kubernetes resolves duplicate names last-wins, an entry here also overrides the same
+variable from the ConfigMap.
+
+```yaml
+extraEnv:
+  - name: DEFAULT_VIEW_ID # no dedicated chart value; see .env.example for the full list
+    value: "0"
+  - name: SOME_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: my-secret
+        key: token
+```
+
+Prefer a dedicated value where one exists: those are schema-validated and, for secrets, routed
+through a Secret rather than the ConfigMap. `extraEnv` values are validated only as EnvVar
+shapes, so a typo in a variable name fails at runtime rather than at `helm template` time.
+
 ## Optional proxy-header trust
 
 `config.forwardedAllowIps` defaults to `""`, disabling uvicorn's trust in forwarded client addresses and schemes. Set it only when those headers are needed, using known proxy IPs or CIDRs. Use `"*"` only when every path to the pod passes through a proxy that overwrites client-supplied headers. This setting does not authorize clients.

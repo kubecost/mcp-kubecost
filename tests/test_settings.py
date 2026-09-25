@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
 import sys
+import textwrap
 
 import fastmcp
 import pytest
 from cryptography.fernet import Fernet
 
+from mcp_kubecost.client import (
+    get,
+    require_direct_transport_config,
+    reset_http_backend,
+    set_http_backend,
+)
 from mcp_kubecost.config.settings import AuthMode, _get_auth_mode, apply_http_rich_logging, get_settings, is_http_mode
 from mcp_kubecost.errors import ConfigError
 
@@ -131,6 +139,62 @@ class TestRequestSettings:
             env=environment,
         )
         assert result.stdout.strip() == "30d"
+
+
+class TestDefaultViewIdSetting:
+    def test_unset_means_no_view_scope(self, monkeypatch):
+        monkeypatch.delenv("DEFAULT_VIEW_ID", raising=False)
+        assert _load_settings(monkeypatch).default_view_id is None
+
+    def test_blank_is_treated_as_unset(self, monkeypatch):
+        assert _load_settings(monkeypatch, DEFAULT_VIEW_ID="   ").default_view_id is None
+
+    @pytest.mark.parametrize("value", ["0", "7", "1234"])
+    def test_accepts_non_negative_integers(self, monkeypatch, value):
+        assert _load_settings(monkeypatch, DEFAULT_VIEW_ID=value).default_view_id == value
+
+    def test_surrounding_whitespace_is_stripped(self, monkeypatch):
+        assert _load_settings(monkeypatch, DEFAULT_VIEW_ID=" 12 ").default_view_id == "12"
+
+    @pytest.mark.parametrize("value", ["-1", "abc", "1.5", "0x0", "1,2"])
+    def test_rejects_non_integer_values(self, monkeypatch, value):
+        with pytest.raises(ConfigError, match="DEFAULT_VIEW_ID must be a non-negative integer"):
+            _load_settings(monkeypatch, DEFAULT_VIEW_ID=value)
+
+    def test_reaches_the_tool_schema_default(self, monkeypatch):
+        """`view_id` defaults are baked into the tool signatures at import time, so the
+        env var has to be visible to a fresh interpreter to land in the schema."""
+        environment = os.environ.copy()
+        environment["KUBECOST_BASE_URL"] = "http://localhost:9090"
+        environment["DEFAULT_VIEW_ID"] = "9"
+        program = textwrap.dedent("""
+            import asyncio, json
+            from fastmcp import FastMCP
+            from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
+
+            mcp = FastMCP("t")
+            register_kubecost_tools(mcp)
+            tools = asyncio.run(mcp.list_tools())
+            print(
+                json.dumps(
+                    {
+                        tool.name: tool.parameters["properties"]["view_id"].get("default")
+                        for tool in tools
+                        if "view_id" in tool.parameters["properties"]
+                    }
+                )
+            )
+            """)
+        result = subprocess.run(
+            [sys.executable, "-c", program],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=environment,
+        )
+        defaults = json.loads(result.stdout)
+        assert defaults, "no tool exposed a view_id parameter"
+        assert set(defaults.values()) == {"9"}
 
 
 class TestRequestLimitSettings:
@@ -389,3 +453,68 @@ class TestOidcAllowedClientRedirectUrisSetting:
     def test_rejects_invalid_values(self, monkeypatch, value):
         with pytest.raises(ConfigError, match="OIDC_ALLOWED_CLIENT_REDIRECT_URIS"):
             _load_settings(monkeypatch, OIDC_ALLOWED_CLIENT_REDIRECT_URIS=value)
+
+
+class TestOptionalBaseUrl:
+    """KUBECOST_BASE_URL is optional so this server can be embedded as a library.
+
+    An embedding host replaces the transport wholesale with
+    ``client.set_http_backend``, which bypasses the base URL, the API-key headers
+    and the retry loop — there is no endpoint left for this server to dial, so
+    demanding one would force the host to invent a placeholder. Standalone runs
+    still require it; ``client.require_direct_transport_config`` is what enforces
+    that, and ``create_server`` calls it before any tool is reachable.
+    """
+
+    def test_unset_base_url_loads_as_none(self, monkeypatch):
+        monkeypatch.delenv("KUBECOST_BASE_URL", raising=False)
+        get_settings.cache_clear()
+        try:
+            assert get_settings().kubecost_base_url is None
+        finally:
+            get_settings.cache_clear()
+
+    def test_set_base_url_is_still_validated(self, monkeypatch):
+        monkeypatch.setenv("KUBECOST_BASE_URL", "not-a-url")
+        get_settings.cache_clear()
+        try:
+            with pytest.raises(ConfigError, match="Invalid URL for KUBECOST_BASE_URL"):
+                get_settings()
+        finally:
+            get_settings.cache_clear()
+
+    def test_trailing_slash_is_stripped(self, monkeypatch):
+        assert _load_settings(monkeypatch, KUBECOST_BASE_URL="http://localhost:9090/").kubecost_base_url == (
+            "http://localhost:9090"
+        )
+
+    def test_direct_transport_requires_a_base_url(self, monkeypatch):
+        monkeypatch.delenv("KUBECOST_BASE_URL", raising=False)
+        get_settings.cache_clear()
+        try:
+            with pytest.raises(ConfigError, match="KUBECOST_BASE_URL is not set"):
+                require_direct_transport_config()
+        finally:
+            get_settings.cache_clear()
+
+    def test_installed_backend_needs_no_base_url(self, monkeypatch):
+        async def _backend(*_args, **_kwargs):  # pragma: no cover - never awaited
+            raise AssertionError("not called")
+
+        monkeypatch.delenv("KUBECOST_BASE_URL", raising=False)
+        get_settings.cache_clear()
+        set_http_backend(_backend, _backend)
+        try:
+            require_direct_transport_config()  # does not raise
+        finally:
+            reset_http_backend()
+            get_settings.cache_clear()
+
+    async def test_request_without_a_base_url_fails_clearly(self, monkeypatch):
+        monkeypatch.delenv("KUBECOST_BASE_URL", raising=False)
+        get_settings.cache_clear()
+        try:
+            with pytest.raises(ConfigError, match="KUBECOST_BASE_URL is not set"):
+                await get("/model/allocation")
+        finally:
+            get_settings.cache_clear()

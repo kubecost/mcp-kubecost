@@ -52,11 +52,11 @@ _SETTINGS: dict[str, Any] = dict(
     kubecost_api_base_path="/model",
     KUBECOST_API_KEY=None,
     require_client_api_key=False,
-    use_cac_views=False,
     ssl_verify=True,
     request_timeout_seconds=300.0,
     retry_count=2,
     default_window="15d",
+    default_view_id=None,
     log_level="INFO",
     rate_limit_requests_per_second=10.0,
     rate_limit_burst_capacity=20,
@@ -147,6 +147,10 @@ def _dcr_proxy(
     proxy._default_scope_str = "openid profile"
     proxy._cimd_manager = None  # get_client skips CIMD refresh
     proxy._upstream_client_id = "upstream-client-id"  # needed by OAuthProxy.get_client fallback
+    # FastMCP 4's register_client consults this to decide whether registered clients may
+    # present the SEP-990 jwt-bearer (ID-JAG) grant. We do not configure identity
+    # assertion, so None is the production value.
+    proxy._identity_assertion = None
     proxy._storage_dir = Path("/tmp/mcp-kubecost-test-oauth")  # named in DecryptionError logs
     proxy._client_store = PydanticAdapter[ProxyDCRClient](
         key_value=MemoryStore(),
@@ -155,6 +159,19 @@ def _dcr_proxy(
         raise_on_validation_error=True,
     )
     return proxy
+
+
+def _dcr_request(body: dict) -> MagicMock:
+    """Mock a Starlette Request for the SDK's RegistrationHandler.
+
+    MCP SDK v2 reads ``await request.body()`` and validates the raw JSON; v1 read
+    ``await request.json()``. Set both so the mock does not depend on which one the
+    handler happens to call.
+    """
+    request = MagicMock()
+    request.body = AsyncMock(return_value=json.dumps(body).encode())
+    request.json = AsyncMock(return_value=body)
+    return request
 
 
 class TestFixedPublicRoutes:
@@ -325,6 +342,34 @@ class TestCreateOidcProvider:
             else:
                 raise AssertionError("expected ConfigError")
 
+    def test_tls_verification_failure_hint_names_the_trust_store(self, tmp_path):
+        """A failed handshake fetched nothing, so the hint must not blame the response body."""
+        import ssl
+
+        failure = ssl.SSLCertVerificationError(
+            "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate"
+        )
+        transport_error = type("ConnectError", (Exception,), {})("handshake failed")
+        transport_error.__cause__ = failure
+        with patch("mcp_kubecost.config.oidc.AdaptiveOidcProxy", side_effect=transport_error):
+            with pytest.raises(ConfigError) as caught:
+                create_oidc_provider(_settings(**{**_OIDC, "oidc_storage_path": str(tmp_path)}))
+        message = str(caught.value)
+        assert "trust store" in message
+        assert "ca-trust/source/anchors" in message
+        assert "HTML" not in message
+
+    def test_connect_failure_hint_names_egress(self, tmp_path):
+        with patch(
+            "mcp_kubecost.config.oidc.AdaptiveOidcProxy",
+            side_effect=OSError("[Errno -2] Name or service not known"),
+        ):
+            with pytest.raises(ConfigError) as caught:
+                create_oidc_provider(_settings(**{**_OIDC, "oidc_storage_path": str(tmp_path)}))
+        message = str(caught.value)
+        assert "egress" in message
+        assert "HTML" not in message
+
     def test_invalid_storage_encryption_key_is_config_error(self, tmp_path):
         with pytest.raises(ConfigError, match="OIDC provider initialization failed"):
             create_oidc_provider(
@@ -448,8 +493,7 @@ class TestIdempotentClientRegistration:
         # The two concurrent /register calls seen in mcp.log.
         issued = []
         for _ in range(2):
-            request = MagicMock()
-            request.json = AsyncMock(return_value=body)
+            request = _dcr_request(body)
             response = await handler.handle(request)
             assert response.status_code == 201
             issued.append(json.loads(bytes(response.body))["client_id"])
@@ -772,8 +816,7 @@ class TestDCRRegistrationContractSnapshot:
             "token_endpoint_auth_method": "none",
         }
 
-        request = MagicMock()
-        request.json = AsyncMock(return_value=body)
+        request = _dcr_request(body)
         response = await handler.handle(request)
 
         assert response.status_code == 201, f"Expected 201, got {response.status_code}"
@@ -801,8 +844,7 @@ class TestDCRRegistrationContractSnapshot:
         }
 
         handler = RegistrationHandler(provider=proxy, options=ClientRegistrationOptions(enabled=True))
-        request = MagicMock()
-        request.json = AsyncMock(return_value=body)
+        request = _dcr_request(body)
         response = await handler.handle(request)
         data = json.loads(bytes(response.body))
         # The exact UUID is computed from the HMAC of the sorted JSON of the five
@@ -845,8 +887,7 @@ class TestDCRNativeApplicationType:
             "application_type": "native",
         }
 
-        request = MagicMock()
-        request.json = AsyncMock(return_value=body)
+        request = _dcr_request(body)
         response = await handler.handle(request)
 
         assert response.status_code == 201, f"native application_type should succeed; got {response.status_code}"
