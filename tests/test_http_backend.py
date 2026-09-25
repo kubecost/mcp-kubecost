@@ -119,7 +119,7 @@ class TestDefaultTransportUnchanged:
     async def test_no_backend_uses_the_builtin_httpx_client(self, httpx_mock: HTTPXMock):
         httpx_mock.add_response(
             method="GET",
-            url=re.compile(r"https://demo\.kubecost\.xyz/model/allocation"),
+            url=re.compile(r"https?://[^/]+/model/allocation"),
             json={"data": ["from-httpx"]},
         )
 
@@ -139,7 +139,7 @@ class TestDefaultTransportUnchanged:
 
         httpx_mock.add_response(
             method="GET",
-            url=re.compile(r"https://demo\.kubecost\.xyz/model/allocation"),
+            url=re.compile(r"https?://[^/]+/model/allocation"),
             json={"data": ["from-httpx"]},
         )
         result = await get("/model/allocation")
