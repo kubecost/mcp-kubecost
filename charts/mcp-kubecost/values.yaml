@@ -24,7 +24,7 @@ global:
   # global.updateCaTrust installs custom CA certificates into this pod's trust
   # store, so a privately signed OIDC issuer, egress proxy, or Kubecost endpoint
   # is trusted in addition to the public roots the image already carries.
-  # Keys mirror the Kubecost parent chart, which means that a kubercost install that
+  # Keys mirror the Kubecost parent chart, which means that a kubecost install that
   # sets global.updateCaTrust covers this pod with no MCP-specific value.
   #
   # An init container extracts the mounted anchors plus the image's public
