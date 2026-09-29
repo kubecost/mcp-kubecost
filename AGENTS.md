@@ -242,6 +242,36 @@ The per-request read uses FastMCP's `get_http_headers()`, which returns `{}` whe
 
 `REQUIRE_CLIENT_API_KEY=true` rejects HTTP requests with no header, raising `MissingClientApiKeyError` → `ErrorCode.AUTHENTICATION_FAILED`. The check sits *between* steps 1 and 2, so a configured `KUBECOST_API_KEY` does not satisfy it. It is skipped entirely on STDIO, where a client cannot send headers.
 
+### None of this applies to an embedding host
+
+A host that consumes this package as a **library** and installs its own transport with
+`client.set_http_backend()` uses neither the `X-API-KEY` header nor `KUBECOST_API_KEY`.
+A backend owns the entire transport, so everything `client.py` would otherwise supply is
+bypassed — base URL, auth headers, retry loop, shared `httpx` client, and the POST
+authentication guard. `auth.py` is never reached.
+
+Cloudability (CAC) is that case today: it reaches Kubecost through its own API proxy and
+authenticates with an OpenToken, and **will never send `X-API-KEY`**. Do not "fix" a report
+of a missing API key there by threading a key through the tool layer; there is no key.
+
+Settings still apply to an embedding host, and two of them are read at **import time**.
+`DEFAULT_WINDOW` and `DEFAULT_VIEW_ID` become default argument values in the tool signatures,
+so `tools/_common.py` resolves them via `get_settings()` when it is first imported. A host must
+set them in the environment *before* importing `mcp_kubecost.tools`; setting them afterwards
+changes nothing, because `get_settings()` is cached.
+
+This has one consequence for maintainers of this file's error mapping.
+`KubecostClientError.to_tool_error()` writes its **401, 403 and 404** remediation for a
+standalone install — verify `X-API-KEY`, set `KUBECOST_API_KEY`, read
+[docs/auth](docs/auth/README.md), and `redacted_url`'s `https://YOUR_KUBECOST_URL...`
+placeholder. Correct standalone; actively misleading when embedded, where an expired host
+credential lands on the 401 branch and the advice cannot fix anything. An embedding host is
+therefore expected to subclass `KubecostClientError` and override those three statuses;
+Cloudability does exactly that. Keep 402, 429 and 5xx generic to Kubecost — they describe
+the product and the upstream's health rather than any host's configuration, so hosts
+inherit them unchanged. If you add a new status branch, decide which of those two groups it
+belongs to and say so in a comment.
+
 ## OAuth Page Branding
 
 FastMCP renders the browser-facing OAuth pages (consent, OAuth errors, unregistered client) and styles them with **its own** logo and palette. [`branding.py`](src/mcp_kubecost/branding.py) makes them read as Kubecost, using two seams:

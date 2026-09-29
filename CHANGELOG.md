@@ -13,6 +13,7 @@ Package, Helm chart, and git tags currently use **0.17.1** (`v0.17.1`); 0.17.0 i
 
 - Kubecost filter expressions for workload costs and cost comparison, with a consistent `applied_filter` echo across allocation and container sizing responses
 - Custom CA support via `global.updateCaTrust` in the Helm chart, mirroring the Kubecost umbrella chart's keys — an umbrella install that already sets it covers this pod with no MCP-specific value. An init container merges the certificates from a Secret (`caCertsSecret`) or ConfigMap (`caCertsConfig`) with the image's public roots and writes the result to the trust store both outbound clients verify against, so a privately signed OIDC issuer, egress proxy, or Kubecost endpoint is trusted *in addition to* the public roots. Unlike the parent chart, the init container runs as the pod's non-root UID, so `global.updateCaTrust.securityContext` is ignored and the OpenShift restricted-v2 path keeps working.
+- `client.set_http_backend()` / `client.reset_http_backend()` let a host application that embeds this package as a library route every Kubecost call through its own transport, with its own base URL, credentials, and tracing.
 
 ### Changed
 
