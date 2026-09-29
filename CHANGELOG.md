@@ -16,13 +16,60 @@ Package, Helm chart, and git tags currently use **0.17.1** (`v0.17.1`); 0.17.0 i
 
 ### Changed
 
+- **BREAKING (contract 11.0 → 12.0): all tool and prompt names are now prefixed `kubecost_<verb>_<noun>`.** The surface was using three patterns (`kubecost_list_windows`, `get_kubecost_*`, and bare `get_*`); everything is now consistently self-namespaced so library-embedding hosts (which receive no `Namespace` mount) can assemble a flat tool list without collisions. No response field renames — the snake_case 11.0 wire contract is unchanged.
+
+  Full tool rename mapping:
+
+  | Old name | New name |
+  |---|---|
+  | `kubecost_list_windows` | `kubecost_list_windows` *(unchanged)* |
+  | `get_kubecost_workload_costs` | `kubecost_get_workload_costs` |
+  | `get_kubecost_cost_comparison` | `kubecost_get_cost_comparison` |
+  | `get_container_savings_recommendations` | `kubecost_get_container_sizing` |
+  | `get_abandoned_workloads` | `kubecost_get_abandoned_workloads` |
+  | `get_savings_overview` | `kubecost_get_savings_overview` |
+  | `get_pv_sizing_recommendations` | `kubecost_get_pv_sizing` |
+  | `get_local_disk_savings` | `kubecost_get_local_disk_savings` |
+  | `get_cluster_rightsizing_recommendations` | `kubecost_get_cluster_rightsizing` |
+  | `get_unclaimed_volumes` | `kubecost_get_unclaimed_volumes` |
+  | `get_resource_quota_recommendations` | `kubecost_get_quota_sizing` |
+
+  Full prompt rename mapping. The verb after `kubecost_` names the kind of prompt: `explore` (guided walkthrough), `guide` (methodology), `help` (parameter explainer), `review` (end-to-end workflow), or `skill` (reference guidance). Arguments are unchanged, including `window` and `aggregate` on `kubecost_explore_cost_trend`.
+
+  | Old name | New name |
+  |---|---|
+  | `container_rightsizing_guide` | `kubecost_guide_container_sizing` |
+  | `explore_container_savings` | `kubecost_explore_container_sizing` |
+  | `rightsizing_review` | `kubecost_review_rightsizing` |
+  | `container_savings_window_help` | `kubecost_help_container_sizing_window` |
+  | `container_savings_filter_help` | `kubecost_help_container_sizing_filter` |
+  | `explore_costs` | `kubecost_explore_costs` |
+  | `explore_cost_comparison` | `kubecost_explore_cost_comparison` |
+  | `top_spenders` | `kubecost_explore_top_spenders` |
+  | `cost_trend` | `kubecost_explore_cost_trend` |
+  | `explore_abandoned_workloads` | `kubecost_explore_abandoned_workloads` |
+  | `optimization` | `kubecost_skill_optimization` |
+  | `kubecost_cost_allocation` | `kubecost_skill_cost_allocation` |
+
+  The `drill_down_tool` field in `kubecost_get_savings_overview` responses carries tool names as wire data. All seven non-`null` values changed:
+
+  | Category key | Old `drill_down_tool` | New `drill_down_tool` |
+  |---|---|---|
+  | `containerRequestSizing` | `get_container_savings_recommendations` | `kubecost_get_container_sizing` |
+  | `abandonedWorkloads` | `get_abandoned_workloads` | `kubecost_get_abandoned_workloads` |
+  | `nodeGroupSizing` | `get_cluster_rightsizing_recommendations` | `kubecost_get_cluster_rightsizing` |
+  | `persistentVolumeSizing` | `get_pv_sizing_recommendations` | `kubecost_get_pv_sizing` |
+  | `underutilizedLocalDisks` | `get_local_disk_savings` | `kubecost_get_local_disk_savings` |
+  | `unclaimedVolumes` | `get_unclaimed_volumes` | `kubecost_get_unclaimed_volumes` |
+  | `resourceQuotaSizing` | `get_resource_quota_recommendations` | `kubecost_get_quota_sizing` |
+
 - `KUBECOST_BASE_URL` is now optional, so this package can be embedded as a library. Installing a transport with `client.set_http_backend()` bypasses the base URL, the API-key headers and the retry loop entirely, leaving nothing for the embedding host to point it at — it no longer has to invent a placeholder URL to get past startup. Standalone runs are unchanged: `create_server()` calls the new `client.require_direct_transport_config()`, which still fails at startup, before any tool is reachable, when no backend is installed and the variable is missing or not an `http(s)` URL.
 - **BREAKING (response contract 10.0 → 11.0): tool response fields are now snake_case.** Upgrading to FastMCP 4 changed the default Pydantic serialization from `by_alias=True` to `by_alias=False`, so row fields are emitted under their field names instead of the camelCase Kubecost API aliases. Rename the keys you read:
   - `get_kubecost_workload_costs` rows — `totalCost` → `total_cost`, `cpuCost` → `cpu_cost`, `cpuCostIdle` → `cpu_cost_idle`, `ramCost` → `ram_cost`, `ramCostIdle` → `ram_cost_idle`, `networkCost` → `network_cost`, `pvCost` → `pv_cost`, `gpuCost` → `gpu_cost`, `gpuCostIdle` → `gpu_cost_idle`, `loadBalancerCost` → `load_balancer_cost`, `sharedCost` → `shared_cost`, `cpuIdlePct` → `cpu_idle_pct`, `ramIdlePct` → `ram_idle_pct`, `gpuIdlePct` → `gpu_idle_pct`, `totalIdlePct` → `total_idle_pct`
   - `get_container_savings_recommendations` rows — `clusterID` → `cluster_id`, `controllerKind` → `controller_kind`, `controllerName` → `controller_name`, `containerName` → `container_name`, `monthlySavings_total` → `monthly_savings_total`, `monthlySavings_cpu` → `monthly_savings_cpu`, `monthlySavings_memory` → `monthly_savings_memory`, `Recommended_cpuInMilliCores` → `recommended_cpu_in_milli_cores`, `Recommended_memoryInMiB` → `recommended_memory_in_mib`, `current_cpuInMilliCores` → `current_cpu_in_milli_cores`, `current_memoryInMiB` → `current_memory_in_mib`, `currentEfficiency_cpu` → `current_efficiency_cpu`, `currentEfficiency_memory` → `current_efficiency_memory`, `currentEfficiency` → `current_efficiency`, `AvgUsage_cpuInMilliCores` → `avg_usage_cpu_in_milli_cores`, `AvgUsage_memoryInMiB` → `avg_usage_memory_in_mib`, `MaxUsage_cpuInMilliCores` → `max_usage_cpu_in_milli_cores`, `MaxUsage_memoryInMiB` → `max_usage_memory_in_mib`
   - `get_abandoned_workloads` rows — `clusterId` → `cluster_id`, `ingressBytesPerSecond` → `ingress_bytes_per_second`, `egressBytesPerSecond` → `egress_bytes_per_second`, `monthlySavings` → `monthly_savings`
   - `get_resource_quota_recommendations` resource changes — `used` → `current_quota` and `recommended` → `recommended_quota`. This pair also renames *semantically*: the API's `used` is the namespace's existing ResourceQuota cap, not observed pod usage.
-- Upgraded to FastMCP 4 (`fastmcp>=4.0.9,<5.0`, from `>=3.4.7,<4.0`), which moves the server onto MCP Python SDK 2.x and the sessionless `2026-07-28` protocol with protocol-era negotiation. Tool, prompt, and resource names and parameters are unchanged.
+- Upgraded to FastMCP 4 (`fastmcp>=4.0.9,<5.0`, from `>=3.4.7,<4.0`), which moves the server onto MCP Python SDK 2.x and the sessionless `2026-07-28` protocol with protocol-era negotiation.
 - `FASTMCP_TELEMETRY_MODE` is now read by FastMCP itself as well as by this server's entrypoint. Both accept `off` and `native`, so existing values keep working, but `off` now also disables FastMCP's own native MCP spans in addition to skipping the `opentelemetry-instrument` wrapper. `propagation_only` is newly accepted by FastMCP.
 - Kubecost API calls now verify TLS against the operating system trust store instead of the certifi bundle `httpx` ships with. This matches how FastMCP verifies OIDC discovery, so one CA installed into the container's trust store covers both. `SSL_CA_BUNDLE` (chart: `config.ssl.caBundle`) is unchanged and still trusts that one bundle *instead of* the public roots, for Kubecost calls only; `KUBECOST_SSL_VERIFY=false` still disables verification. Deployments relying on a CA that is in certifi but not in the image's trust store should move it to `global.updateCaTrust`.
 

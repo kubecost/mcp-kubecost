@@ -27,24 +27,24 @@ _EMPTY_LIST = {"data": []}
 _EMPTY_WRAPPED = {"code": 200, "data": {"recommendations": []}}
 
 HTTP_TOOLS: list[tuple[str, dict[str, Any], dict[str, Any]]] = [
-    ("get_kubecost_workload_costs", {"window": "7d"}, _EMPTY_LIST),
+    ("kubecost_get_workload_costs", {"window": "7d"}, _EMPTY_LIST),
     (
         # The tool rejects bare relative windows for a diff, so both sides are explicit ranges.
-        "get_kubecost_cost_comparison",
+        "kubecost_get_cost_comparison",
         {
             "current_window": "2026-06-08T00:00:00Z,2026-06-15T00:00:00Z",
             "baseline_window": "2026-06-01T00:00:00Z,2026-06-08T00:00:00Z",
         },
         _EMPTY_LIST,
     ),
-    ("get_container_savings_recommendations", {}, _EMPTY_LIST),
-    ("get_abandoned_workloads", {}, _EMPTY_LIST),
-    ("get_savings_overview", {}, _EMPTY_LIST),
-    ("get_pv_sizing_recommendations", {}, _EMPTY_LIST),
-    ("get_local_disk_savings", {}, _EMPTY_LIST),
-    ("get_cluster_rightsizing_recommendations", {"cluster": "cluster-one"}, _EMPTY_WRAPPED),
-    ("get_unclaimed_volumes", {}, _EMPTY_LIST),
-    ("get_resource_quota_recommendations", {}, _EMPTY_WRAPPED),
+    ("kubecost_get_container_sizing", {}, _EMPTY_LIST),
+    ("kubecost_get_abandoned_workloads", {}, _EMPTY_LIST),
+    ("kubecost_get_savings_overview", {}, _EMPTY_LIST),
+    ("kubecost_get_pv_sizing", {}, _EMPTY_LIST),
+    ("kubecost_get_local_disk_savings", {}, _EMPTY_LIST),
+    ("kubecost_get_cluster_rightsizing", {"cluster": "cluster-one"}, _EMPTY_WRAPPED),
+    ("kubecost_get_unclaimed_volumes", {}, _EMPTY_LIST),
+    ("kubecost_get_quota_sizing", {}, _EMPTY_WRAPPED),
 ]
 _TOOL_IDS = [name for name, _args, _payload in HTTP_TOOLS]
 
@@ -122,15 +122,15 @@ class TestViewIdReachesUpstream:
     async def test_view_id_zero_is_sent_rather_than_treated_as_absent(self, recorder: _ParamRecorder):
         """ "0" is the unrestricted view, not a missing value — it has to reach the API."""
         async with Client(_app()) as client:
-            await client.call_tool("get_savings_overview", {"view_id": "0"})
+            await client.call_tool("kubecost_get_savings_overview", {"view_id": "0"})
 
         assert recorder.view_ids() == ["0"]
 
     @pytest.mark.asyncio
     async def test_paged_tool_scopes_every_page(self, recorder: _ParamRecorder):
-        """`get_abandoned_workloads` pages internally; each page must stay in the view."""
+        """`kubecost_get_abandoned_workloads` pages internally; each page must stay in the view."""
         async with Client(_app()) as client:
-            await client.call_tool("get_abandoned_workloads", {"view_id": "7"})
+            await client.call_tool("kubecost_get_abandoned_workloads", {"view_id": "7"})
 
         assert recorder.params, "the tool made no upstream call"
         assert all(view_id == "7" for view_id in recorder.view_ids())
@@ -142,14 +142,14 @@ class TestViewIdSchemaValidation:
     async def test_invalid_value_is_rejected_before_any_upstream_call(self, recorder: _ParamRecorder, value: str):
         async with Client(_app()) as client:
             with pytest.raises(ToolError):
-                await client.call_tool("get_savings_overview", {"view_id": value})
+                await client.call_tool("kubecost_get_savings_overview", {"view_id": value})
 
         assert recorder.params == []
 
     @pytest.mark.asyncio
     async def test_null_is_accepted_as_no_view_scope(self, recorder: _ParamRecorder):
         async with Client(_app()) as client:
-            result = await client.call_tool("get_savings_overview", {"view_id": None})
+            result = await client.call_tool("kubecost_get_savings_overview", {"view_id": None})
 
         assert _sc(result)["status"] in {"ok", "empty"}
         assert recorder.view_ids() == [None]

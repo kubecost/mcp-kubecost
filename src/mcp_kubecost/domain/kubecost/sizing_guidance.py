@@ -226,7 +226,7 @@ Mechanism for both: `kubecost://guides/sizing-mechanics`.
 
 ## Profiles
 
-Use the `profile` parameter on `get_container_savings_recommendations`. The same three
+Use the `profile` parameter on `kubecost_get_container_sizing`. The same three
 names are accepted by the node-group and resource-quota tools, so there is one sizing
 vocabulary across the server. They are not the same mechanism, though: this tool expands
 a profile into sizing knobs you can override individually, while the other tools pass the
@@ -277,7 +277,7 @@ Two consequences:
 Reducing requests frees reserved capacity. The invoice changes one step later, when
 that freed capacity lets pods pack onto fewer nodes and a node is actually removed.
 Read these figures as the size of the opportunity, then call
-`get_cluster_rightsizing_recommendations` to see whether it can be realized.
+`kubecost_get_cluster_rightsizing` to see whether it can be realized.
 
 ## Practical Workflow
 
@@ -291,7 +291,7 @@ Read these figures as the size of the opportunity, then call
 6. Revisit every 30 to 60 days or after traffic changes. Record the window and sizing
    parameters alongside any approval, so a later reviewer knows which evidence it rested on
 
-Call `get_container_savings_recommendations` with your chosen profile to get data-backed
+Call `kubecost_get_container_sizing` with your chosen profile to get data-backed
 recommendations.
 """
 
@@ -651,14 +651,14 @@ def build_result_interpretation(
             "",
             "**Before applying:**",
             "- These are requests, not limits. The figures are request opportunity — the invoice moves "
-            "once freed capacity lets nodes consolidate (`get_cluster_rightsizing_recommendations`).",
+            "once freed capacity lets nodes consolidate (`kubecost_get_cluster_rightsizing`).",
             "- Not accounted for: CPU throttling, out-of-memory history, quality-of-service class, "
             "workload revision. Replicas and revisions are pooled into one distribution.",
             "- Reducing CPU: confirm the workload is not already being throttled. Low CPU usage can be "
             "the symptom rather than spare headroom.",
             "- Reducing memory: confirm the pod is not Guaranteed (request equals limit) — changing the "
             "request alone alters its quality-of-service class.",
-            "- Methodology: `container_rightsizing_guide` prompt. Mechanism: `kubecost://guides/sizing-mechanics`.",
+            "- Methodology: `kubecost_guide_container_sizing` prompt. Mechanism: `kubecost://guides/sizing-mechanics`.",
         ]
     )
     return "\n".join(lines)

@@ -55,13 +55,13 @@ def cluster_from_result(result: Any) -> str:
 
 
 def tool_arguments(name: str, cluster: str) -> dict[str, Any]:
-    if name == "get_cluster_rightsizing_recommendations":
+    if name == "kubecost_get_cluster_rightsizing":
         return {"cluster": cluster}
     return {}
 
 
 def prompt_arguments(name: str) -> dict[str, str]:
-    if name == "cost_trend":
+    if name == "kubecost_explore_cost_trend":
         return {"window": "15d", "aggregate": "namespace"}
     return {}
 
@@ -76,7 +76,7 @@ async def call_all(config_path: Path, cluster: str) -> None:
             prompts = await client.list_prompts()
 
             workload_tool = next(
-                (tool for tool in tools if tool.name == "get_kubecost_workload_costs"),
+                (tool for tool in tools if tool.name == "kubecost_get_workload_costs"),
                 None,
             )
             if workload_tool is not None:

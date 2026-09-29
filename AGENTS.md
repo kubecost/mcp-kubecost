@@ -54,16 +54,16 @@ Current MCP surface — **11 tools**, **12 prompts** (10 inline in `kubecost_too
 
 | Tools | |
 |---|---|
-| `kubecost_list_windows` | `get_kubecost_workload_costs` |
-| `get_kubecost_cost_comparison` | `get_container_savings_recommendations` |
-| `get_abandoned_workloads` | `get_savings_overview` |
-| `get_pv_sizing_recommendations` | `get_local_disk_savings` |
-| `get_cluster_rightsizing_recommendations` | `get_unclaimed_volumes` |
-| `get_resource_quota_recommendations` | |
+| `kubecost_list_windows` | `kubecost_get_workload_costs` |
+| `kubecost_get_cost_comparison` | `kubecost_get_container_sizing` |
+| `kubecost_get_abandoned_workloads` | `kubecost_get_savings_overview` |
+| `kubecost_get_pv_sizing` | `kubecost_get_local_disk_savings` |
+| `kubecost_get_cluster_rightsizing` | `kubecost_get_unclaimed_volumes` |
+| `kubecost_get_quota_sizing` | |
 
 Resources: `kubecost://schema/allocation-params`, `kubecost://schema/cost-fields`, `kubecost://schema/sizing-profiles`, `kubecost://guides/container-sizing`, `kubecost://guides/sizing-mechanics`.
 
-`rightsizing_review` is the tenth inline prompt: the end-to-end review workflow (candidates → undersized rows → node-group realization → evidence gaps → the four closing questions). `kubecost://guides/sizing-mechanics` is the depth layer behind the FinOps-level prose in tool responses — quality-of-service derivation, eviction order, CPU throttling, exclusive CPUs. Keep mechanism detail there and outcome language in responses.
+`kubecost_review_rightsizing` is the tenth inline prompt: the end-to-end review workflow (candidates → undersized rows → node-group realization → evidence gaps → the four closing questions). `kubecost://guides/sizing-mechanics` is the depth layer behind the FinOps-level prose in tool responses — quality-of-service derivation, eviction order, CPU throttling, exclusive CPUs. Keep mechanism detail there and outcome language in responses.
 
 ### `tools/_common.py` — shared contract
 
@@ -75,7 +75,7 @@ Every tool response extends `BaseToolResponse` (`status: QueryStatus`, `message`
 - `raise_tool_error(ErrorCode..., ...)` — the LLM-facing failure path (wraps `errors.ToolError`); prefer it over raising bare exceptions
 - `extract_list()`, `validate_response()`, `safe_path_segment()`
 
-### `get_kubecost_cost_comparison` — window rules and row contract
+### `kubecost_get_cost_comparison` — window rules and row contract
 
 - Both windows must be **explicit RFC3339 ranges** ending before today (UTC).
 - **All named aliases are rejected** (`lastweek`, `lastmonth`, `7d`, `today`, etc.) — there is no alias for "the period before lastmonth", making aliases a dead end for comparisons.
@@ -105,25 +105,25 @@ API call (broad fetch, large limit)
 
 | Tool | Cap | Client-side filter | Filter default |
 |------|-----|-------------------|----------------|
-| `get_kubecost_workload_costs` | `top_n=20` | `min_total_cost` | $1.00 |
-| `get_kubecost_cost_comparison` | `top_n=20` | (none — diff is already aggregated) | — |
-| `get_container_savings_recommendations` | `top_n=20` (per list) | `min_monthly_savings` (candidates only) | none (suggest $5.00) |
-| `get_abandoned_workloads` | `limit=20` + `offset` | (API-side threshold) | 500 bytes/s |
-| `get_pv_sizing_recommendations` | `top_n=20` | `min_monthly_savings` | $1.00 |
-| `get_local_disk_savings` | `top_n=20` | `min_monthly_savings` | $1.00 |
-| `get_unclaimed_volumes` | `top_n=20` | `min_monthly_cost` | $1.00 |
-| `get_resource_quota_recommendations` | `limit=20` | (none) | — |
+| `kubecost_get_workload_costs` | `top_n=20` | `min_total_cost` | $1.00 |
+| `kubecost_get_cost_comparison` | `top_n=20` | (none — diff is already aggregated) | — |
+| `kubecost_get_container_sizing` | `top_n=20` (per list) | `min_monthly_savings` (candidates only) | none (suggest $5.00) |
+| `kubecost_get_abandoned_workloads` | `limit=20` + `offset` | (API-side threshold) | 500 bytes/s |
+| `kubecost_get_pv_sizing` | `top_n=20` | `min_monthly_savings` | $1.00 |
+| `kubecost_get_local_disk_savings` | `top_n=20` | `min_monthly_savings` | $1.00 |
+| `kubecost_get_unclaimed_volumes` | `top_n=20` | `min_monthly_cost` | $1.00 |
+| `kubecost_get_quota_sizing` | `limit=20` | (none) | — |
 
 Design rules:
 - Default to **20 rows** in every tool response — enough for an LLM to reason over without token bloat.
 - Always expose a `top_n` or `limit` parameter so callers can request more when needed.
 - Response metadata (`total_cost`, `row_count`, `truncated`) must describe the full filtered population, not just the sliced rows.
-- `get_abandoned_workloads` additionally returns `returned_count` / `returned_monthly_savings` for the page and `total_count` / `total_monthly_savings` for the population, plus `next_offset` when `truncated=True`. The Kubecost endpoint has working `limit`/`offset` but no totals in the payload, so the tool pages internally then slices.
+- `kubecost_get_abandoned_workloads` additionally returns `returned_count` / `returned_monthly_savings` for the page and `total_count` / `total_monthly_savings` for the population, plus `next_offset` when `truncated=True`. The Kubecost endpoint has working `limit`/`offset` but no totals in the payload, so the tool pages internally then slices.
 - When the Kubecost API has no server-side filter for a field (e.g. `totalCost`), apply the filter client-side after fetch.
 - Set `truncated=True` when rows are sliced so the caller knows more data exists.
-- Note that `get_container_savings_recommendations` takes `min_monthly_savings=None` as the default (no filter). Pass `5.0` to cut noise. Profiles do not change this filter.
+- Note that `kubecost_get_container_sizing` takes `min_monthly_savings=None` as the default (no filter). Pass `5.0` to cut noise. Profiles do not change this filter.
 
-### `get_container_savings_recommendations` — two lists, not one
+### `kubecost_get_container_sizing` — two lists, not one
 
 The response splits the population **before** filtering, via `is_undersized(row)` in `sizing_guidance.py` (true when `monthlySavings_cpu < 0` **or** `monthlySavings_memory < 0`):
 
@@ -140,8 +140,8 @@ The response splits the population **before** filtering, via `is_undersized(row)
 
 Reducing requests frees reserved capacity; the bill moves only once pods repack and a node is removed. Kubecost's savings figures are **request opportunity**. Keep this distinction in the prose:
 
-- Container and quota sizing measure the opportunity. `get_cluster_rightsizing_recommendations` is the realization step.
-- `get_savings_overview`'s `total_savings_per_month` is an arithmetic sum of overlapping categories — `containerRequestSizing` and `nodeGroupSizing` are largely the same dollars at two stages, as are `persistentVolumeSizing` and `unclaimedVolumes`. The description, message, and `recommended_action` all say so. Do not "fix" this by presenting the sum as a target.
+- Container and quota sizing measure the opportunity. `kubecost_get_cluster_rightsizing` is the realization step.
+- `kubecost_get_savings_overview`'s `total_savings_per_month` is an arithmetic sum of overlapping categories — `containerRequestSizing` and `nodeGroupSizing` are largely the same dollars at two stages, as are `persistentVolumeSizing` and `unclaimedVolumes`. The description, message, and `recommended_action` all say so. Do not "fix" this by presenting the sum as a target.
 
 ### No safety claims
 
@@ -149,7 +149,7 @@ A usage percentile cannot establish that a value is safe for the application —
 
 ## Container Sizing Profiles
 
-`SIZING_PROFILES` in [`sizing_guidance.py`](src/mcp_kubecost/domain/kubecost/sizing_guidance.py) is the single source of truth for the `profile` parameter on `get_container_savings_recommendations`:
+`SIZING_PROFILES` in [`sizing_guidance.py`](src/mcp_kubecost/domain/kubecost/sizing_guidance.py) is the single source of truth for the `profile` parameter on `kubecost_get_container_sizing`:
 
 | Profile | Window | Quantiles | Target utilization (CPU / RAM) |
 |--------|--------|-----------|--------------------|
@@ -165,9 +165,9 @@ Rules to preserve when touching this:
 - No profile may set `target_ram_utilization` above `target_cpu_utilization`. CPU is compressible — an under-provisioned CPU request means the workload runs slower under contention and recovers on its own. Memory is not: a memory request below normal usage moves the pod up the node-pressure eviction order and worsens its standing with the kernel's out-of-memory killer. Note the failure is **eviction risk, not a deterministic OOM kill** — a memory *request* creates no ceiling; the *limit* does, and Kubecost does not recommend limits.
 - At least one profile must set `target_ram_utilization` **strictly below** `target_cpu_utilization`. The rule above passes vacuously when every profile sets them equal, which is exactly how "memory is not compressible" stayed documented but unimplemented for several releases. Both rules are enforced by tests and by `scripts/show_sizing_profiles.py`.
 - Every profile pins every key in `DEFAULT_SIZING_PARAMS` (also enforced by a test) so each dict is readable without cross-referencing the defaults. `production` must stay identical to `DEFAULT_SIZING_PARAMS`.
-- `PROFILE_DESCRIPTIONS` and the `explore_container_savings` prompt menu are **generated** from `SIZING_PROFILES`. Change values there only — never restate quantiles or targets in prose.
+- `PROFILE_DESCRIPTIONS` and the `kubecost_explore_container_sizing` prompt menu are **generated** from `SIZING_PROFILES`. Change values there only — never restate quantiles or targets in prose.
 - Profiles never apply a savings filter; `min_monthly_savings` stays `None` in all three.
-- These are the **same three names** `get_cluster_rightsizing_recommendations` and `get_resource_quota_recommendations` take on their `profile` parameter — one sizing vocabulary across the server, checked by an invariant. Kubecost owns that spelling (the node-group and quota tools send `profile` to the API verbatim), so if the two ever diverge, our side moves back, not theirs. The mechanisms still differ: here a profile expands into individually overridable sizing knobs; there it is an opaque pass-through enum.
+- These are the **same three names** `kubecost_get_cluster_rightsizing` and `kubecost_get_quota_sizing` take on their `profile` parameter — one sizing vocabulary across the server, checked by an invariant. Kubecost owns that spelling (the node-group and quota tools send `profile` to the API verbatim), so if the two ever diverge, our side moves back, not theirs. The mechanisms still differ: here a profile expands into individually overridable sizing knobs; there it is an opaque pass-through enum.
 
 Before and after changing a profile, run [`scripts/show_sizing_profiles.py`](scripts/show_sizing_profiles.py). It renders the parameters, the request multiplier each target implies (`0.50` → `2.00x` usage), a worked example, and the exact Kubecost query params — then checks every rule above. `--check` exits non-zero on a violation; `--json` for scripting.
 
@@ -180,13 +180,13 @@ uv run scripts/show_sizing_profiles.py --check  # invariants only, exit 1 on fai
 
 FastMCP serializes each returned Pydantic model **twice** — once as a JSON `TextContent` block and once as `structuredContent`. This is deliberate: the MCP specification (2025-11-25) says a tool returning structured content SHOULD also return the serialized JSON in a text block, for clients that do not read `structuredContent`. Do not "optimize" it away with `ToolResult` or middleware. To shrink a response, shrink the payload — fewer fields, lower `top_n`.
 
-`_VERSION` in `kubecost_tools.py` is a single module constant applied to **every** tool's `version=`, so bumping it relabels all 11. Bump on a breaking response-shape change and update the "Contract version" line in the module docstring to match. Currently **11.0**.
+`_VERSION` in `kubecost_tools.py` is a single module constant applied to **every** tool's `version=`, so bumping it relabels all 11. Bump on a breaking response-shape change and update the "Contract version" line in the module docstring to match. Currently **12.0**.
 
 ### Rows serialize by field name, not by alias
 
 Four row models — `AllocationRow`, `ContainerSavingsRow`, `QuotaResourceChange`, `AbandonedWorkloadRow` — carry camelCase `Field(alias=...)` values. Those are **input** aliases: they match the raw Kubecost API keys the rows are validated from, and they must stay. They are *not* the names clients see.
 
-FastMCP 3 defaulted Pydantic serialization to `by_alias=True`, so the aliases doubled as the wire format. FastMCP 4 defaults to `by_alias=False` (`fastmcp/tools/function_parsing.py`), which made every response field snake_case — the breaking change behind contract **11.0**. We accepted the new default rather than pinning `serialize_by_alias=True`, so:
+FastMCP 3 defaulted Pydantic serialization to `by_alias=True`, so the aliases doubled as the wire format. FastMCP 4 defaults to `by_alias=False` (`fastmcp/tools/function_parsing.py`), which made every response field snake_case — the breaking change behind contract **11.0**. 12.0 renamed all tool and prompt names to `kubecost_<verb>_<noun>`; no field names changed. We accepted the new default rather than pinning `serialize_by_alias=True`, so:
 
 - **Do not add `serialize_by_alias=True`** to these models to "restore" camelCase. That would silently revert the 11.0 contract.
 - Response prose, tool docstrings, and `Field(description=...)` text name the **snake_case** field. Raw-API-key references in the domain layer (`sizing_guidance.py`'s `monthlySavings_cpu`, the flatteners' `Recommended_cpuInMilliCores`, every `tests/conftest.py` fixture) stay camelCase — the two roles are unrelated and only one changed.
@@ -315,7 +315,7 @@ There is no `run_http()` helper — use the FastMCP config files above.
 Call a live tool against the public demo:
 
 ```bash
-just call-json get_kubecost_cost_comparison '{"aggregate": "namespace"}'
+just call-json kubecost_get_cost_comparison '{"aggregate": "namespace"}'
 ```
 
 ### Kiro power (local MCP client check)

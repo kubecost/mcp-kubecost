@@ -179,7 +179,7 @@ class TestBackendInterceptsRealToolCalls:
         set_http_backend(backend.get, backend.post)
 
         async with Client(self._app()) as client:
-            result = await client.call_tool("get_savings_overview", {})
+            result = await client.call_tool("kubecost_get_savings_overview", {})
 
         assert len(backend.get_calls) == 1
         path, _params = backend.get_calls[0]
@@ -193,7 +193,7 @@ class TestBackendInterceptsRealToolCalls:
         set_http_backend(backend.get, backend.post)
 
         async with Client(self._app()) as client:
-            result = await client.call_tool("get_kubecost_workload_costs", {"window": "7d"})
+            result = await client.call_tool("kubecost_get_workload_costs", {"window": "7d"})
 
         assert len(backend.get_calls) == 1
         path, params = backend.get_calls[0]
@@ -218,7 +218,7 @@ class TestBackendInterceptsRealToolCalls:
         set_http_backend(failing_get, backend.post)
 
         async with Client(self._app()) as client:
-            result = await client.call_tool("get_savings_overview", {})
+            result = await client.call_tool("kubecost_get_savings_overview", {})
 
         assert _sc(result)["status"] == "error"
         assert "not_found" in _sc(result)["message"]
@@ -234,7 +234,7 @@ class TestBackendInterceptsRealToolCalls:
         set_http_backend(timing_out_get, backend.post)
 
         async with Client(self._app()) as client:
-            result = await client.call_tool("get_savings_overview", {})
+            result = await client.call_tool("kubecost_get_savings_overview", {})
 
         assert _sc(result)["status"] == "error"
         assert "upstream_timeout" in _sc(result)["message"]

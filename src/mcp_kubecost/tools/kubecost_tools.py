@@ -4,9 +4,13 @@ Returns fully-typed Pydantic structured output — no in-memory
 resource store. Rows are returned directly in the response payload; large
 result sets are bounded via a ``top_n`` parameter with a ``truncated`` flag
 (client-side sort+slice), or true server-side ``limit``/``offset`` pagination
-where the upstream API supports it (e.g. ``get_resource_quota_recommendations``).
+where the upstream API supports it (e.g. ``kubecost_get_quota_sizing``).
 
-Contract version: 11.0
+Contract version: 12.0
+
+12.0 namespaced all tool and prompt names as ``kubecost_<verb>_<noun>``. ``drill_down_tool``
+wire values changed accordingly (see drill_down_map in kubecost_get_savings_overview). No response
+field renames; the snake_case 11.0 wire contract is unchanged.
 
 11.0 renamed every response row field from camelCase to snake_case. FastMCP 4 defaults
 Pydantic serialization to ``by_alias=False`` (FastMCP 3 defaulted to ``True``), so the
@@ -68,7 +72,7 @@ from mcp_kubecost.tools._common import (
 
 logger = logging.getLogger(__name__)
 
-_VERSION = "11.0"
+_VERSION = "12.0"
 
 # ---------------------------------------------------------------------------
 # API path segments — combined with get_settings().kubecost_api_base_path at call time
@@ -471,7 +475,7 @@ def _aggregate_by_dimensions(rows: list[dict[str, Any]], dimension_cols: list[st
 
 
 # ---------------------------------------------------------------------------
-# Cost comparison window validation & diffing (get_kubecost_cost_comparison)
+# Cost comparison window validation & diffing (kubecost_get_cost_comparison)
 # ---------------------------------------------------------------------------
 
 # Bare relative windows ("7d", "15d", ...) are resolved by Kubecost relative to
@@ -1026,7 +1030,7 @@ class WindowOptionsResponse(BaseToolResponse):
 
 
 class AllocationRow(BaseModel):
-    """One aggregated allocation row returned by get_kubecost_workload_costs.
+    """One aggregated allocation row returned by kubecost_get_workload_costs.
 
     Stable cost fields are typed explicitly. Dynamic dimension fields (cluster,
     namespace, pod, label, etc.) are carried as extra fields via ``extra="allow"``.
@@ -1125,7 +1129,7 @@ class AllocationRow(BaseModel):
 
 
 class KubecostAllocationResponse(BaseToolResponse):
-    """Response from get_kubecost_workload_costs."""
+    """Response from kubecost_get_workload_costs."""
 
     window: str | None = Field(description="Time window used for the query.")
     resolved_window: ResolvedWindow | None = Field(
@@ -1306,7 +1310,7 @@ class ContainerSavingsSummaryRow(BaseModel):
 
 
 class ContainerSavingsResponse(BaseToolResponse):
-    """Response from get_container_savings_recommendations."""
+    """Response from kubecost_get_container_sizing."""
 
     window: str = Field(description="Time window used for the query.")
     applied_filter: str | None = Field(
@@ -1324,7 +1328,7 @@ class ContainerSavingsResponse(BaseToolResponse):
             "This is REQUEST OPPORTUNITY, not an invoice reduction: lowering requests frees "
             "reserved capacity, and the bill changes only once that freed capacity lets pods "
             "pack onto fewer nodes and a node is removed. Call "
-            "get_cluster_rightsizing_recommendations to see whether it can be realized."
+            "kubecost_get_cluster_rightsizing to see whether it can be realized."
         )
     )
     container_count: int = Field(
@@ -1407,7 +1411,7 @@ class SavingsCategory(BaseModel):
 
 
 class SavingsOverviewResponse(BaseToolResponse):
-    """Response for get_savings_overview."""
+    """Response for kubecost_get_savings_overview."""
 
     categories: list[SavingsCategory] = Field(
         default_factory=list, description="All savings categories, ranked by savings_per_month."
@@ -1447,7 +1451,7 @@ class PVSizingRow(BaseModel):
 
 
 class PVSizingResponse(BaseToolResponse):
-    """Response for get_pv_sizing_recommendations."""
+    """Response for kubecost_get_pv_sizing."""
 
     rows: list[PVSizingRow] = Field(default_factory=list, description="PVC right-sizing recommendations.")
     resolved_window: ResolvedWindow | None = Field(
@@ -1486,7 +1490,7 @@ class LocalDiskRow(BaseModel):
 
 
 class LocalDiskSavingsResponse(BaseToolResponse):
-    """Response for get_local_disk_savings."""
+    """Response for kubecost_get_local_disk_savings."""
 
     rows: list[LocalDiskRow] = Field(default_factory=list, description="Underutilized disk recommendations.")
     resolved_window: ResolvedWindow | None = Field(
@@ -1585,7 +1589,7 @@ class NodeGroupRecommendation(BaseModel):
 
 
 class ClusterRightsizingResponse(BaseToolResponse):
-    """Response for get_cluster_rightsizing_recommendations."""
+    """Response for kubecost_get_cluster_rightsizing."""
 
     cluster: str = Field(default="", description="Cluster ID queried.")
     profile: str = Field(default="production", description="Sizing profile used.")
@@ -1640,7 +1644,7 @@ class UnclaimedVolumeRow(BaseModel):
 
 
 class UnclaimedVolumesResponse(BaseToolResponse):
-    """Response for get_unclaimed_volumes."""
+    """Response for kubecost_get_unclaimed_volumes."""
 
     rows: list[UnclaimedVolumeRow] = Field(default_factory=list, description="Unclaimed volumes.")
     resolved_window: ResolvedWindow | None = Field(
@@ -1708,7 +1712,7 @@ class QuotaNamespaceRecommendation(BaseModel):
 
 
 class ResourceQuotaResponse(BaseToolResponse):
-    """Response for get_resource_quota_recommendations."""
+    """Response for kubecost_get_quota_sizing."""
 
     recommendations: list[QuotaNamespaceRecommendation] = Field(
         default_factory=list, description="Namespace quota recommendations."
@@ -1778,7 +1782,7 @@ class AbandonedWorkloadRow(BaseModel):
 
 
 class AbandonedWorkloadsResponse(BaseToolResponse):
-    """Response from get_abandoned_workloads."""
+    """Response from kubecost_get_abandoned_workloads."""
 
     days: int = Field(description="Lookback window in days used for the query.")
     resolved_window: ResolvedWindow | None = Field(
@@ -1818,7 +1822,7 @@ class AbandonedWorkloadsResponse(BaseToolResponse):
         default=0.0,
         description=(
             "Sum of monthly_savings across the full matching population (USD). "
-            "This is the figure to compare with get_savings_overview's abandonedWorkloads "
+            "This is the figure to compare with kubecost_get_savings_overview's abandonedWorkloads "
             "category; returned_monthly_savings is only this page."
         ),
     )
@@ -1891,7 +1895,7 @@ class CostComparisonRow(BaseModel):
 
 
 class CostComparisonResponse(BaseToolResponse):
-    """Response from get_kubecost_cost_comparison."""
+    """Response from kubecost_get_cost_comparison."""
 
     current_window: str = Field(description="Normalized current-period window used for the query.")
     baseline_window: str = Field(description="Normalized baseline-period window used for the query.")
@@ -1993,7 +1997,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             openWorldHint=True,
         ),
     )
-    async def get_kubecost_workload_costs(
+    async def kubecost_get_workload_costs(
         window: Annotated[
             str,
             Field(
@@ -2066,8 +2070,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         If the user has not specified a window, call kubecost_list_windows first.
 
         WHEN NOT TO USE: For container rightsizing/savings use
-        get_container_savings_recommendations. For period-over-period cost
-        change / spike investigation, use get_kubecost_cost_comparison instead.
+        kubecost_get_container_sizing. For period-over-period cost
+        change / spike investigation, use kubecost_get_cost_comparison instead.
         """
         applied_filter = _normalize_kubecost_filter(filter_str)
         if not window:
@@ -2205,7 +2209,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
             openWorldHint=True,
         ),
     )
-    async def get_kubecost_cost_comparison(
+    async def kubecost_get_cost_comparison(
         current_window: Annotated[
             str | None,
             Field(
@@ -2264,10 +2268,10 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         30-day one at identical daily spend.
 
         WHEN TO USE: Investigating "why did costs change" or "what spiked." Once you've identified the
-        responsible dimension, drill into get_container_savings_recommendations, get_abandoned_workloads,
-        or get_cluster_rightsizing_recommendations for that dimension.
+        responsible dimension, drill into kubecost_get_container_sizing, kubecost_get_abandoned_workloads,
+        or kubecost_get_cluster_rightsizing for that dimension.
 
-        WHEN NOT TO USE: For a single-period snapshot with no comparison, use get_kubecost_workload_costs
+        WHEN NOT TO USE: For a single-period snapshot with no comparison, use kubecost_get_workload_costs
         instead.
 
         DEFAULTS: Omitting both window parameters performs a rolling week-over-week comparison (the 7
@@ -2393,8 +2397,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 f"{len(diffed)} row(s)" + (f" (showing top {top_n})" if truncated else "") + "." + top_mover_desc
             ),
             recommended_action=(
-                "Drill into get_container_savings_recommendations, get_abandoned_workloads, or "
-                "get_cluster_rightsizing_recommendations for the dimension(s) with the largest change."
+                "Drill into kubecost_get_container_sizing, kubecost_get_abandoned_workloads, or "
+                "kubecost_get_cluster_rightsizing for the dimension(s) with the largest change."
             ),
             current_window=current_window,
             baseline_window=baseline_window,
@@ -2416,14 +2420,14 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
     @mcp.tool(
         version=_VERSION,
         annotations=ToolAnnotations(
-            title="Get Container Savings Recommendations",
+            title="Get Container Sizing",
             readOnlyHint=True,
             destructiveHint=False,
             idempotentHint=True,
             openWorldHint=True,
         ),
     )
-    async def get_container_savings_recommendations(
+    async def kubecost_get_container_sizing(
         profile: Annotated[
             ProfileName | None,
             Field(description=FIELD_DESCRIPTIONS["profile"]),
@@ -2513,12 +2517,12 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
         WHEN TO USE: For Kubernetes container savings, over-provisioned pods/namespaces,
         or rightsizing recommendations. If the user asks HOW to rightsize (methodology,
-        quantiles, CPU vs memory strategy), invoke the container_rightsizing_guide
+        quantiles, CPU vs memory strategy), invoke the kubecost_guide_container_sizing
         prompt first. To walk a full review including the realization step, invoke the
-        rightsizing_review prompt.
+        kubecost_review_rightsizing prompt.
 
         WHEN NOT TO USE: For raw Kubernetes spend by cluster/namespace/pod, use
-        get_kubecost_workload_costs.
+        kubecost_get_workload_costs.
         """
         sizing = resolve_sizing_params(
             profile,
@@ -2723,7 +2727,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         version=_VERSION,
         annotations=_read_only("Get Abandoned Workloads"),
     )
-    async def get_abandoned_workloads(
+    async def kubecost_get_abandoned_workloads(
         days: Annotated[
             int,
             Field(
@@ -2796,7 +2800,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         total_count / total_monthly_savings cover the full match; returned_count /
         returned_monthly_savings cover this page. Follow next_offset while truncated=True
         rather than raising limit. Compare total_monthly_savings with
-        get_savings_overview's abandonedWorkloads category — not the page sum.
+        kubecost_get_savings_overview's abandonedWorkloads category — not the page sum.
 
         IMPORTANT — network traffic is the ONLY signal, so scheduled and queue-driven
         work is flagged by construction rather than because it is abandoned:
@@ -2815,8 +2819,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         Do not filter by cluster unless the user has indicated a specific cluster.
 
         WHEN NOT TO USE: For container rightsizing (over-provisioned but active workloads),
-        use get_container_savings_recommendations. For raw cost by namespace/cluster use
-        get_kubecost_workload_costs.
+        use kubecost_get_container_sizing. For raw cost by namespace/cluster use
+        kubecost_get_workload_costs.
         """
         resolved_window = _resolve_window_defensively(f"{days}d")
         window_display = resolved_window.display if resolved_window else f"{days} days"
@@ -2947,7 +2951,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         version=_VERSION,
         annotations=_read_only("Get Savings Overview"),
     )
-    async def get_savings_overview(
+    async def kubecost_get_savings_overview(
         view_id: OptionalViewId = DEFAULT_VIEW_ID,
     ) -> SavingsOverviewResponse:
         """Return a ranked summary of all Kubecost savings categories.
@@ -2979,13 +2983,13 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         # Strip non-category top-level keys
         skip_keys = {"cluster", "profile"}
         drill_down_map = {
-            "containerRequestSizing": "get_container_savings_recommendations",
-            "abandonedWorkloads": "get_abandoned_workloads",
-            "nodeGroupSizing": "get_cluster_rightsizing_recommendations",
-            "persistentVolumeSizing": "get_pv_sizing_recommendations",
-            "underutilizedLocalDisks": "get_local_disk_savings",
-            "unclaimedVolumes": "get_unclaimed_volumes",
-            "resourceQuotaSizing": "get_resource_quota_recommendations",
+            "containerRequestSizing": "kubecost_get_container_sizing",
+            "abandonedWorkloads": "kubecost_get_abandoned_workloads",
+            "nodeGroupSizing": "kubecost_get_cluster_rightsizing",
+            "persistentVolumeSizing": "kubecost_get_pv_sizing",
+            "underutilizedLocalDisks": "kubecost_get_local_disk_savings",
+            "unclaimedVolumes": "kubecost_get_unclaimed_volumes",
+            "resourceQuotaSizing": "kubecost_get_quota_sizing",
             "orphanedResources": None,
         }
         categories: list[SavingsCategory] = []
@@ -3031,9 +3035,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         version=_VERSION,
-        annotations=_read_only("Get PV Sizing Recommendations"),
+        annotations=_read_only("Get PV Sizing"),
     )
-    async def get_pv_sizing_recommendations(
+    async def kubecost_get_pv_sizing(
         window: Annotated[
             str,
             Field(description="Time window for usage data. Default '15d'. " + _WINDOW_RFC3339_NOTE),
@@ -3074,8 +3078,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN TO USE: When investigating storage over-provisioning or when the savings
         overview shows persistentVolumeSizing has significant savings.
 
-        WHEN NOT TO USE: For unclaimed (unbound) volumes, use get_unclaimed_volumes.
-        For node-level local disk savings, use get_local_disk_savings.
+        WHEN NOT TO USE: For unclaimed (unbound) volumes, use kubecost_get_unclaimed_volumes.
+        For node-level local disk savings, use kubecost_get_local_disk_savings.
         """
         window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
@@ -3140,7 +3144,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         version=_VERSION,
         annotations=_read_only("Get Local Disk Savings"),
     )
-    async def get_local_disk_savings(
+    async def kubecost_get_local_disk_savings(
         window: Annotated[
             str,
             Field(description="Time window for usage data. Default '15d'. " + _WINDOW_RFC3339_NOTE),
@@ -3175,8 +3179,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         savings overview shows underutilizedLocalDisks has significant savings.
 
         WHEN NOT TO USE: For right-sizing storage for workloads (pods):
-        use get_pv_sizing_recommendations.
-        For unclaimed volumes, use get_unclaimed_volumes.
+        use kubecost_get_pv_sizing.
+        For unclaimed volumes, use kubecost_get_unclaimed_volumes.
         """
         window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
@@ -3235,15 +3239,15 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         version=_VERSION,
-        annotations=_read_only("Get Cluster Rightsizing Recommendations"),
+        annotations=_read_only("Get Cluster Rightsizing"),
     )
-    async def get_cluster_rightsizing_recommendations(
+    async def kubecost_get_cluster_rightsizing(
         cluster: Annotated[
             str,
             Field(
                 description=(
                     "Required, non-empty Kubecost cluster ID to fetch node group sizing recommendations for. "
-                    "If you don't know the cluster name, call get_kubecost_workload_costs "
+                    "If you don't know the cluster name, call kubecost_get_workload_costs "
                     "with aggregate='cluster' first to discover available cluster IDs."
                 )
             ),
@@ -3277,8 +3281,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHEN TO USE: When investigating node-level infrastructure savings, or when the savings
         overview shows nodeGroupSizing has significant savings.
 
-        WHEN NOT TO USE: For container CPU/memory rightsizing, use get_container_savings_recommendations.
-        For abandoned pods, use get_abandoned_workloads.
+        WHEN NOT TO USE: For container CPU/memory rightsizing, use kubecost_get_container_sizing.
+        For abandoned pods, use kubecost_get_abandoned_workloads.
         """
         cluster = cluster.strip()
         if not cluster:
@@ -3287,7 +3291,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                 message="cluster ID is required for node group sizing recommendations.",
                 retryable=False,
                 suggested_action=(
-                    "Call get_kubecost_workload_costs with aggregate='cluster' first to discover available cluster IDs."
+                    "Call kubecost_get_workload_costs with aggregate='cluster' first to discover available cluster IDs."
                 ),
             )
 
@@ -3387,7 +3391,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
                     "Verify the cluster ID is correct and that Kubecost has usage data for it."
                 ),
                 recommended_action=(
-                    "Call get_kubecost_workload_costs with aggregate='cluster' to list available cluster IDs."
+                    "Call kubecost_get_workload_costs with aggregate='cluster' to list available cluster IDs."
                 ),
                 cluster=cluster,
                 profile=profile,
@@ -3430,7 +3434,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         version=_VERSION,
         annotations=_read_only("Get Unclaimed Volumes"),
     )
-    async def get_unclaimed_volumes(
+    async def kubecost_get_unclaimed_volumes(
         window: Annotated[
             str,
             Field(description="Time window for cost data. Default '15d'. " + _WINDOW_RFC3339_NOTE),
@@ -3457,7 +3461,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         overview shows unclaimedVolumes has significant savings.
 
         WHEN NOT TO USE: For over-provisioned PVCs that ARE in use, use
-        get_pv_sizing_recommendations. For node-local disk savings, use get_local_disk_savings.
+        kubecost_get_pv_sizing. For node-local disk savings, use kubecost_get_local_disk_savings.
         """
         window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
@@ -3523,9 +3527,9 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
     @mcp.tool(
         version=_VERSION,
-        annotations=_read_only("Get Resource Quota Recommendations"),
+        annotations=_read_only("Get Quota Sizing"),
     )
-    async def get_resource_quota_recommendations(
+    async def kubecost_get_quota_sizing(
         window: Annotated[
             str,
             Field(description="Time window for usage data. Default '15d'. " + _WINDOW_RFC3339_NOTE),
@@ -3562,8 +3566,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         WHAT: Calls GET /model/savings/resourceQuotaSizing/recommendations and returns
         per-namespace recommendations to create or resize ResourceQuota objects. Each
         recommendation covers one namespace and contains a list of resource type changes
-        (CPU requests, memory requests, etc.). isNewResourceQuota=true means no quota
-        exists yet (create action); isDownsize=true means reducing an existing quota.
+        (CPU requests, memory requests, etc.). is_new_resource_quota=true means no quota
+        exists yet (create action); is_downsize=true means reducing an existing quota.
 
         Note: total_monthly_savings may be 0 — this is a configuration-correctness tool,
         not primarily a dollar-savings tool. It helps prevent over-allocation and enforce
@@ -3577,8 +3581,8 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
         when the savings overview shows resourceQuotaSizing has recommendations.
 
         WHEN NOT TO USE: For container CPU/memory rightsizing within a namespace, use
-        get_container_savings_recommendations. For node-level savings, use
-        get_cluster_rightsizing_recommendations.
+        kubecost_get_container_sizing. For node-level savings, use
+        kubecost_get_cluster_rightsizing.
         """
         window, resolved_window = _normalize_and_resolve(window)
         window_display = resolved_window.display if resolved_window else window
@@ -3701,7 +3705,7 @@ def register_kubecost_tools(mcp: FastMCP) -> None:
 
     @mcp.resource("kubecost://schema/allocation-params")
     def allocation_params_schema() -> str:
-        """Valid parameter values for get_kubecost_workload_costs."""
+        """Valid parameter values for kubecost_get_workload_costs."""
         agg_lines = "\n".join(f"  {k:30s} — {v}" for k, v in _AGGREGATE_CHOICES.items())
         win_lines = "\n".join(f"  {k:12s} — {v}" for k, v in _WINDOW_CHOICES.items())
         return f"""\
@@ -3721,7 +3725,7 @@ accumulate:
 
 filter_str:
   Optional Kubecost filter applied before aggregation. Reuse the same expression
-  in get_kubecost_cost_comparison and get_container_savings_recommendations.
+  in kubecost_get_cost_comparison and kubecost_get_container_sizing.
   Example: cluster:"cluster-one"+(namespace:"prod"|namespace:"staging")
   + means AND; | means OR. Group mixed operators with parentheses.
   Pass the plain expression; the HTTP client handles URL encoding.
@@ -3730,7 +3734,7 @@ filter_str:
 
     @mcp.resource("kubecost://schema/cost-fields")
     def cost_fields_schema() -> str:
-        """Definitions of cost columns returned by get_kubecost_workload_costs."""
+        """Definitions of cost columns returned by kubecost_get_workload_costs."""
         return """\
 cpu_cost           — CPU request cost, including cpu_cost_idle
 cpu_cost_idle      — idle portion already included in cpu_cost and total_cost
@@ -3748,7 +3752,7 @@ total_efficiency   — utilization ratio 0–1 (request vs actual use)
 
     @mcp.resource("kubecost://schema/sizing-profiles")
     def sizing_profiles_schema() -> str:
-        """Named sizing profiles for get_container_savings_recommendations."""
+        """Named sizing profiles for kubecost_get_container_sizing."""
         return format_profiles_resource()
 
     @mcp.resource("kubecost://guides/container-sizing")
@@ -3767,16 +3771,16 @@ total_efficiency   — utilization ratio 0–1 (request vs actual use)
     # ── Prompts (Rule #17) ────────────────────────────────────────────────────
 
     @mcp.prompt()
-    def container_rightsizing_guide() -> str:
+    def kubecost_guide_container_sizing() -> str:
         """Explain how to properly size Kubernetes container CPU and memory requests.
 
         Use when the user asks about rightsizing methodology, quantiles, or
-        CPU vs memory sizing strategy — before calling the savings tool.
+        CPU vs memory sizing strategy — before calling the sizing tool.
         """
         return CONTAINER_SIZING_GUIDE
 
     @mcp.prompt()
-    def explore_container_savings() -> str:
+    def kubecost_explore_container_sizing() -> str:
         """Start a guided container rightsizing exploration. Presents choices step-by-step."""
         # Generated from SIZING_PROFILES so the menu can never drift from what the profiles send.
         profile_menu = "\n".join(
@@ -3809,12 +3813,12 @@ Pick a profile or describe your preferences.
 
 ---
 
-Once you've answered all three, call `get_container_savings_recommendations` with your choices.
+Once you've answered all three, call `kubecost_get_container_sizing` with your choices.
 Present the Executive Summary with a chart, the interpretation block, and a summary table.
 """
 
     @mcp.prompt()
-    def rightsizing_review() -> str:
+    def kubecost_review_rightsizing() -> str:
         """Run a full container rightsizing review — candidates, reliability risks, what would
         actually reduce the bill, and the checks to clear before anything is applied.
 
@@ -3827,7 +3831,7 @@ change the invoice. Five steps.
 ---
 
 **Step 1 — Get the candidates**
-Call `get_container_savings_recommendations` with `profile="production"`. If the user has
+Call `kubecost_get_container_sizing` with `profile="production"`. If the user has
 told you which workloads matter, pass `filter_str` to scope it (e.g. `namespace:"prod"`).
 
 Present the `summary` first, then the top `rows`. Rank by dollars by default; re-run with
@@ -3843,7 +3847,7 @@ a review that only reports savings is not a review.
 
 **Step 3 — Establish what would actually reduce the bill**
 Reducing requests frees reserved capacity. It does not lower the invoice on its own. Call
-`get_cluster_rightsizing_recommendations` for the affected cluster and look for `ScaleIn`
+`kubecost_get_cluster_rightsizing` for the affected cluster and look for `ScaleIn`
 or `ChangeInstanceType`. If nothing there can consolidate, say so plainly: the request
 opportunity is real, but it buys scheduling headroom and deferred capacity purchases
 rather than an immediate saving.
@@ -3890,17 +3894,17 @@ data supports a candidate value, not a verdict on application safety.
 """
 
     @mcp.prompt()
-    def container_savings_window_help() -> str:
-        """Explain the time window options for the container savings tool."""
+    def kubecost_help_container_sizing_window() -> str:
+        """Explain the time window options for the container sizing tool."""
         return _CONTAINER_SAVINGS_WINDOW_CLARIFICATION
 
     @mcp.prompt()
-    def container_savings_filter_help() -> str:
-        """Explain the min_monthly_savings filter for container savings."""
+    def kubecost_help_container_sizing_filter() -> str:
+        """Explain the min_monthly_savings filter for container sizing."""
         return _SAVINGS_FILTER_CLARIFICATION
 
     @mcp.prompt()
-    def explore_costs() -> str:
+    def kubecost_explore_costs() -> str:
         """Start a guided Kubernetes cost exploration. Presents choices step-by-step."""
         agg_menu = "\n".join(f"  {i + 1}. **{k}** — {v}" for i, (k, v) in enumerate(_AGGREGATE_CHOICES.items()))
         window_menu = "\n".join(f"  {i + 1}. **{k}** — {v}" for i, (k, v) in enumerate(_WINDOW_CHOICES.items()))
@@ -3934,12 +3938,12 @@ Pick an option or describe what you want
 
 ---
 
-Once you've answered all three, I'll call `get_kubecost_workload_costs` with your choices and
+Once you've answered all three, I'll call `kubecost_get_workload_costs` with your choices and
 present an Executive Summary with a chart.
 """
 
     @mcp.prompt()
-    def explore_cost_comparison() -> str:
+    def kubecost_explore_cost_comparison() -> str:
         """Start a guided cost anomaly / spike investigation using period-over-period comparison."""
         agg_menu = "\n".join(f"  - **{k}** — {v}" for k, v in _AGGREGATE_CHOICES.items())
         return f"""\
@@ -3966,7 +3970,7 @@ Ranges of different lengths are allowed; a warning will appear in the response w
 
 ---
 
-Once you've answered both, call `get_kubecost_cost_comparison` with current_window,
+Once you've answered both, call `kubecost_get_cost_comparison` with current_window,
 baseline_window, and aggregate.
 
 Then present:
@@ -3975,19 +3979,19 @@ Then present:
    is `new` or `removed`. When the response warns that the periods differ in length, quote
    `daily_change` and `normalized_pct_change` instead of `change` and `pct_change`.
 3. Based on which dimension changed most, suggest the matching drill-down tool:
-   - Container/pod-level increase → `get_container_savings_recommendations`
-   - Idle/dormant workload appeared → `get_abandoned_workloads`
-   - Node/cluster-level shift → `get_cluster_rightsizing_recommendations`
+   - Container/pod-level increase → `kubecost_get_container_sizing`
+   - Idle/dormant workload appeared → `kubecost_get_abandoned_workloads`
+   - Node/cluster-level shift → `kubecost_get_cluster_rightsizing`
 """
 
     @mcp.prompt()
-    def top_spenders() -> str:
+    def kubecost_explore_top_spenders() -> str:
         """Show top cost drivers across clusters and namespaces for a given window."""
         return """\
 Show me the top Kubernetes cost drivers.
 
 First, call `kubecost_list_windows` and present the window options to the user.
-Wait for their reply, then call `get_kubecost_workload_costs` with:
+Wait for their reply, then call `kubecost_get_workload_costs` with:
 - aggregate: "cluster,namespace"
 - window: <user's chosen window>
 - accumulate: true
@@ -3999,13 +4003,13 @@ Then present:
 """
 
     @mcp.prompt()
-    def cost_trend(window: str, aggregate: str) -> str:
+    def kubecost_explore_cost_trend(window: str, aggregate: str) -> str:
         """Show daily cost trend for a given aggregation dimension."""
         return f"""\
 Show me the daily cost trend for my clusters.
 
 First, call `kubecost_list_windows` and present the window options to the user.
-Wait for their reply, then call `get_kubecost_workload_costs` with:
+Wait for their reply, then call `kubecost_get_workload_costs` with:
 - aggregate: "{aggregate}"
 - window: <user's chosen window>
 - accumulate: false
@@ -4017,7 +4021,7 @@ Then present:
 """
 
     @mcp.prompt()
-    def explore_abandoned_workloads() -> str:
+    def kubecost_explore_abandoned_workloads() -> str:
         """Start a guided abandoned-workload investigation. Walks the user through threshold and scope choices."""
         return """\
 Let's find abandoned Kubernetes workloads — running pods that appear idle and are costing money.
@@ -4046,8 +4050,8 @@ Pods with average network traffic (both ingress AND egress) below this value are
 
 ---
 
-Once you've answered, call `get_abandoned_workloads` with your choices.
-Compare **total_monthly_savings** (full population) with get_savings_overview —
+Once you've answered, call `kubecost_get_abandoned_workloads` with your choices.
+Compare **total_monthly_savings** (full population) with kubecost_get_savings_overview —
 **returned_monthly_savings** is only the current page. While truncated=True, call
 again with offset=next_offset rather than raising limit.
 Present a summary table sorted by monthly savings, highlight the top 3 candidates, and

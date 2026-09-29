@@ -42,19 +42,25 @@ from mcp_kubecost.telemetry import log_telemetry_status  # noqa: E402
 from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools  # noqa: E402
 
 _SERVER_INSTRUCTIONS = (
-    "Read-only Kubecost MCP server for cost visibility and savings recommendations. "
-    "Start here: get_savings_overview for a ranked summary of all savings categories "
-    "on any general savings question; kubecost_list_windows to discover valid time "
-    "windows; get_kubecost_workload_costs for cost allocation by cluster, namespace, "
-    "or controller; get_kubecost_cost_comparison as the entry point for 'why did costs "
-    "change' or spike-investigation questions, diffing two periods. "
-    "Drill-down tools: get_container_savings_recommendations for container rightsizing, "
-    "get_abandoned_workloads to identify idle workloads and estimate decommission savings, "
-    "get_pv_sizing_recommendations for PVC storage right-sizing, "
-    "get_local_disk_savings for underutilized node-local disks, "
-    "get_cluster_rightsizing_recommendations for node group scale-in/out recommendations, "
-    "get_unclaimed_volumes for unbound PersistentVolumes, "
-    "and get_resource_quota_recommendations for namespace ResourceQuota governance."
+    # ── Cost entry points (≤512-char Codex prefix ends here) ──────────────────
+    "Read-only Kubecost MCP server. "
+    "Cost entry points: kubecost_get_workload_costs (allocation by cluster/namespace/pod/label), "
+    "kubecost_get_cost_comparison (period-over-period diff for spike investigation), "
+    "kubecost_get_savings_overview (ranked summary of all savings categories — start here for any savings question), "
+    "kubecost_list_windows (valid time windows). "
+    # ── Sizing drill-downs ─────────────────────────────────────────────────────
+    "Sizing: kubecost_get_container_sizing (CPU/RAM rightsizing candidates and undersized reliability findings), "
+    "kubecost_get_cluster_rightsizing (node group scale-in/out; the realization step after container sizing), "
+    "kubecost_get_pv_sizing (over-provisioned PVCs), "
+    "kubecost_get_quota_sizing (namespace ResourceQuota governance). "
+    # ── Waste drill-downs ──────────────────────────────────────────────────────
+    "Waste: kubecost_get_abandoned_workloads (idle pods by network traffic), "
+    "kubecost_get_local_disk_savings (underutilized node-local disks), "
+    "kubecost_get_unclaimed_volumes (unbound PersistentVolumes). "
+    # ── Guided workflows ───────────────────────────────────────────────────────
+    "Prompts for guided workflows: kubecost_explore_costs, kubecost_explore_cost_comparison, "
+    "kubecost_explore_top_spenders, kubecost_explore_cost_trend, kubecost_explore_container_sizing, "
+    "kubecost_review_rightsizing, kubecost_guide_container_sizing, kubecost_explore_abandoned_workloads."
 )
 
 
