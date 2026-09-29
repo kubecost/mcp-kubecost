@@ -65,10 +65,11 @@ When this chart is a subchart, the parent `global` values are merged in and take
 
 ## Additional environment variables
 
-`extraEnv` takes standard Kubernetes `EnvVar` entries and appends them after every variable the
-chart renders itself. It is the escape hatch for settings that have no dedicated value, and
-because Kubernetes resolves duplicate names last-wins, an entry here also overrides the same
-variable from the ConfigMap.
+`extraEnv` takes standard Kubernetes `EnvVar` entries and adds them to the container's `env`.
+It is the escape hatch for settings that have no dedicated value. Kubernetes gives `env`
+precedence over `envFrom`, so an entry here also overrides the same variable from the ConfigMap.
+Do not repeat a name the chart already sets in `env` (`KUBECOST_API_KEY` and the `OIDC_*`
+secrets): duplicate `env` names are rejected by server-side apply.
 
 ```yaml
 extraEnv:

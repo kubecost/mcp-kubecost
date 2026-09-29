@@ -36,7 +36,7 @@ global:
   # roots for Kubecost calls only, this applies everywhere and adds rather than
   # replaces.
   #
-  # AI note: two deliberate differences from the parent chart:
+  # Two deliberate differences from the parent chart:
   #   - The parent's global.updateCaTrust.securityContext is ignored. It defaults
   #     to runAsUser 0 / runAsNonRoot false, and that default reaches this
   #     subchart whether or not the feature is enabled. A root init container
@@ -386,9 +386,11 @@ config:
 
 # extraEnv holds additional container environment variables as standard Kubernetes
 # EnvVar entries, so `valueFrom` (secretKeyRef, configMapKeyRef, fieldRef) works here
-# too. These are appended after everything the chart renders itself, and Kubernetes
-# resolves duplicate names last-wins, so an entry here overrides the same variable
-# from the ConfigMap. Use it for settings the chart has no dedicated value for, e.g.:
+# too. Kubernetes gives container `env` precedence over `envFrom`, so an entry here
+# overrides the same variable from the chart's ConfigMap. Do not repeat a name the
+# chart already sets in `env` (KUBECOST_API_KEY, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET,
+# OIDC_JWT_SIGNING_KEY, OIDC_STORAGE_ENCRYPTION_KEY): duplicate `env` names are
+# rejected by server-side apply. Use it for settings the chart has no dedicated value for, e.g.:
 #
 #   extraEnv:
 #     - name: DEFAULT_VIEW_ID

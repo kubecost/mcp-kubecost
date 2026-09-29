@@ -14,6 +14,8 @@ Package, Helm chart, and git tags currently use **0.17.1** (`v0.17.1`); 0.17.0 i
 - Kubecost filter expressions for workload costs and cost comparison, with a consistent `applied_filter` echo across allocation and container sizing responses
 - Custom CA support via `global.updateCaTrust` in the Helm chart, mirroring the Kubecost umbrella chart's keys — an umbrella install that already sets it covers this pod with no MCP-specific value. An init container merges the certificates from a Secret (`caCertsSecret`) or ConfigMap (`caCertsConfig`) with the image's public roots and writes the result to the trust store both outbound clients verify against, so a privately signed OIDC issuer, egress proxy, or Kubecost endpoint is trusted *in addition to* the public roots. Unlike the parent chart, the init container runs as the pod's non-root UID, so `global.updateCaTrust.securityContext` is ignored and the OpenShift restricted-v2 path keeps working.
 - `client.set_http_backend()` / `client.reset_http_backend()` let a host application that embeds this package as a library route every Kubecost call through its own transport, with its own base URL, credentials, and tracing.
+- `view_id` parameter on the 10 tools that query Kubecost (every tool except `kubecost_list_windows`), sent upstream as `viewId`. Its default comes from the new `DEFAULT_VIEW_ID` setting; unset sends no `viewId`, which is what Kubecost OSS expects. The parameter description tells the model to leave it unset only when no default view is configured, since a view-scoped API may reject requests without one.
+- `extraEnv` in the Helm chart for settings with no dedicated chart value (for example `DEFAULT_VIEW_ID`). Entries are standard Kubernetes `EnvVar` objects, so `valueFrom` works, and they take precedence over the chart's ConfigMap.
 
 ### Changed
 
@@ -76,9 +78,12 @@ Package, Helm chart, and git tags currently use **0.17.1** (`v0.17.1`); 0.17.0 i
 
 ### Fixed
 
-- The `view_id` parameter description no longer tells the model to leave the view unset when `DEFAULT_VIEW_ID` is configured. That advice is true of Kubecost OSS, which wants no `viewId` at all, but a view-scoped API in front of this server may require one and reject the request without it — so the hint was steering callers into an error. It is now shown only when no default view is configured.
 - Container image now carries a populated CA trust store. The runtime rootfs installs `ca-certificates` with rpm scriptlets disabled, so `update-ca-trust extract` never ran and its generated bundles were absent, leaving `/etc/pki/tls/cert.pem` dangling and OpenSSL with zero trusted anchors. This surfaced only after the FastMCP 4 upgrade, because FastMCP 4 verifies TLS against the system trust store (via `truststore`) where FastMCP 3 used certifi's bundled PEM — OIDC discovery against a publicly trusted issuer failed with `CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` and the server crash-looped. Private CAs mounted into `/etc/pki/ca-trust/source/anchors` are honoured.
 - OIDC startup failures now explain the failure that actually occurred. A TLS verification failure points at the trust store and private-CA mounting, and a connection failure points at DNS and pod egress, instead of both claiming the issuer returned an HTML login page.
+
+### Removed
+
+- The `USE_CAC_VIEWS` setting and the chart's `config.useCacViews` value. It could only inject an invisible `viewId=0` on every request, with no way to choose another view; use the `view_id` parameter or `DEFAULT_VIEW_ID` instead. The chart schema still accepts `config.useCacViews` and ignores it, so existing values files keep upgrading.
 
 ## [0.17.1] - 2026-09-17
 

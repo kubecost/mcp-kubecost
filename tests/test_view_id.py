@@ -18,6 +18,7 @@ from fastmcp import Client, FastMCP
 from fastmcp.exceptions import ToolError
 
 from mcp_kubecost.client import set_http_backend
+from mcp_kubecost.tools import kubecost_tools as ktools
 from mcp_kubecost.tools.kubecost_tools import register_kubecost_tools
 
 # Every tool that issues an HTTP call: its name, arguments that reach that call,
@@ -127,13 +128,29 @@ class TestViewIdReachesUpstream:
         assert recorder.view_ids() == ["0"]
 
     @pytest.mark.asyncio
-    async def test_paged_tool_scopes_every_page(self, recorder: _ParamRecorder):
-        """`kubecost_get_abandoned_workloads` pages internally; each page must stay in the view."""
+    async def test_paged_tool_scopes_every_page(self, monkeypatch: pytest.MonkeyPatch):
+        """`kubecost_get_abandoned_workloads` pages internally; each page must stay in the view.
+
+        A page size of 2 and a full first page force a second fetch, so this covers the
+        paging loop rather than a single call.
+        """
+        monkeypatch.setattr(ktools, "_ABANDONED_API_PAGE_SIZE", 2)
+        pages = [[{"pod": "a"}, {"pod": "b"}], [{"pod": "c"}]]
+        params_seen: list[dict[str, Any] | None] = []
+
+        async def paged_get(path: str, params: dict[str, Any] | None = None) -> Any:
+            params_seen.append(params)
+            return pages[len(params_seen) - 1]
+
+        async def unused_post(path: str, json: Any = None, params: Any = None) -> Any:
+            raise AssertionError("no tool should POST")
+
+        set_http_backend(paged_get, unused_post)
         async with Client(_app()) as client:
             await client.call_tool("kubecost_get_abandoned_workloads", {"view_id": "7"})
 
-        assert recorder.params, "the tool made no upstream call"
-        assert all(view_id == "7" for view_id in recorder.view_ids())
+        assert len(params_seen) == 2, "expected the tool to fetch a second page"
+        assert [(p or {}).get("viewId") for p in params_seen] == ["7", "7"]
 
 
 class TestViewIdSchemaValidation:

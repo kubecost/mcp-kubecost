@@ -248,7 +248,6 @@
         "maxConcurrentToolCalls": { "type": "integer", "minimum": 1 },
         "defaultWindow": { "type": "string", "minLength": 1 },
         "logLevel": { "type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL", "debug", "info", "warning", "error", "critical"] },
-        "defaultViewId": { "type": ["string", "integer"], "description": "Accepted but ignored. The chart no longer renders a view scope; kept so that helm upgrade does not reject values files that still set it." },
         "useCacViews": { "type": "boolean", "description": "Accepted but ignored. Was never wired to anything usable; kept so that helm upgrade does not reject values files that still set it." },
         "authMode": { "type": "string", "enum": ["none", "open", "oidc", "api_key"] },
         "requireClientApiKey": { "type": "boolean" },
@@ -302,7 +301,7 @@
     },
     "extraEnv": {
       "type": "array",
-      "description": "Additional container environment variables as Kubernetes EnvVar entries. Appended last, so a duplicate name overrides the ConfigMap.",
+      "description": "Additional container environment variables as Kubernetes EnvVar entries. env takes precedence over envFrom, so an entry overrides the same ConfigMap variable. Do not repeat a name the chart already sets in env.",
       "items": {"type": "object", "additionalProperties": true, "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}, "value": {"type": "string"}, "valueFrom": {"type": "object"}}}
     },
     "nodeSelector": { "type": "object" },

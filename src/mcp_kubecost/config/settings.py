@@ -45,7 +45,7 @@ class Settings:
     kubecost_api_base_path: str
     KUBECOST_API_KEY: str | None
     require_client_api_key: bool
-    ssl_verify: bool | str  # passed directly to httpx verify=
+    ssl_verify: bool | str  # resolved by client._resolve_verify(); True means the OS trust store
     request_timeout_seconds: float
     retry_count: int
     default_window: str
