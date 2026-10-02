@@ -1,0 +1,16 @@
+pyproject.toml
+  h_cca6aa2712613d 3,9,12-13,29
+uv.lock
+  h_cca6aa2712613d 2,355,360-413,418,426,428,549,551,553,558,563,565,892,922,929,935,984,989,991,1248,1250,1252,1559,1561,1563,1787-1807,1912,1917,1921,1923
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d20f29c6ec96bee128649a3ddca6737fb062f88f",
+  "prompts": {},
+  "humans": {
+    "h_cca6aa2712613d": {
+      "author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
