@@ -925,7 +925,7 @@ requires-dist = [
     { name = "opentelemetry-distro", extras = ["otlp"], marker = "extra == 'otel'", specifier = ">=0.65b0" },
     { name = "opentelemetry-instrumentation-httpx", marker = "extra == 'otel'", specifier = ">=0.65b0" },
     { name = "opentelemetry-instrumentation-starlette", marker = "extra == 'otel'", specifier = ">=0.65b0" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.6.2" },
+    { name = "pre-commit", marker = "extra == 'dev'" },
     { name = "py-key-value-aio", extras = ["filetree"], specifier = ">=0.4.6" },
     { name = "pyrefly", marker = "extra == 'dev'" },
     { name = "pytest", marker = "extra == 'dev'" },
