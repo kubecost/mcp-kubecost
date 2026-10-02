@@ -6,8 +6,8 @@ These tests are NOT run by default. To run them:
 
 They call the real MCP server tools via the fastmcp CLI, matching commands like:
 
-    fastmcp call tests/mcp-demo.json get_kubecost_workload_costs --input-json '{"window": "15d"}'
-    fastmcp call http://localhost:3030/mcp get_local_disk_savings
+    fastmcp call tests/mcp-demo.json kubecost_get_workload_costs --input-json '{"window": "15d"}'
+    fastmcp call http://localhost:3030/mcp kubecost_get_local_disk_savings
 
 ``MCP_KUBECOST_TARGET`` selects what to test, and takes either form the fastmcp
 CLI accepts:
@@ -92,7 +92,7 @@ def mcp_target() -> str:
 
 class TestIntegrationGetKubecostWorkloadCosts:
     def test_returns_status_ok_or_empty(self, mcp_target):
-        result = _fastmcp("call", mcp_target, "get_kubecost_workload_costs", "--input-json", '{"window": "15d"}')
+        result = _fastmcp("call", mcp_target, "kubecost_get_workload_costs", "--input-json", '{"window": "15d"}')
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
         output = result.stdout
         assert '"status"' in output or "status" in output
@@ -103,7 +103,7 @@ class TestIntegrationGetKubecostWorkloadCosts:
         result = _fastmcp(
             "call",
             mcp_target,
-            "get_kubecost_workload_costs",
+            "kubecost_get_workload_costs",
             "--input-json",
             '{"window": "15d", "aggregate": "namespace"}',
         )
@@ -124,7 +124,7 @@ _WINDOW_CASES = [("3d", 3), ("7d", 7)]
 
 @pytest.fixture(scope="module")
 def allocation_call(mcp_target):
-    """Return a memoized caller for get_kubecost_workload_costs.
+    """Return a memoized caller for kubecost_get_workload_costs.
 
     Each (window, accumulate) pair costs a subprocess round-trip, so results are
     cached for the module rather than re-fetched per assertion.
@@ -136,7 +136,7 @@ def allocation_call(mcp_target):
         if key not in cache:
             response = _call_tool(
                 mcp_target,
-                "get_kubecost_workload_costs",
+                "kubecost_get_workload_costs",
                 {
                     "window": window,
                     "accumulate": accumulate,
@@ -247,7 +247,7 @@ class TestIntegrationAllocationRowCounts:
         daily_response = allocation_call(window, accumulate=False)
         daily = daily_response["total_cost"]
 
-        assert daily == pytest.approx(sum(r["totalCost"] for r in daily_response["rows"]), abs=0.05)
+        assert daily == pytest.approx(sum(r["total_cost"] for r in daily_response["rows"]), abs=0.05)
         # The two calls are seconds apart and the in-progress day keeps accruing,
         # so compare within a tolerance rather than exactly.
         assert daily == pytest.approx(accumulated, rel=0.01)
@@ -300,7 +300,7 @@ def savings_by_profile(mcp_target) -> dict[str, dict[str, Any]]:
     for profile in _PROFILES:
         response = _call_tool(
             mcp_target,
-            "get_container_savings_recommendations",
+            "kubecost_get_container_sizing",
             {
                 "profile": profile,
                 "window": "15d",
@@ -319,9 +319,7 @@ def savings_by_profile(mcp_target) -> dict[str, dict[str, Any]]:
 
 class TestIntegrationGetContainerSavingsRecommendations:
     def test_returns_status_ok_or_empty(self, mcp_target):
-        result = _fastmcp(
-            "call", mcp_target, "get_container_savings_recommendations", "--input-json", '{"window": "15d"}'
-        )
+        result = _fastmcp("call", mcp_target, "kubecost_get_container_sizing", "--input-json", '{"window": "15d"}')
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
         output = result.stdout
         assert '"status"' in output or "status" in output
@@ -330,7 +328,7 @@ class TestIntegrationGetContainerSavingsRecommendations:
         result = _fastmcp(
             "call",
             mcp_target,
-            "get_container_savings_recommendations",
+            "kubecost_get_container_sizing",
             "--input-json",
             '{"profile": "high-availability"}',
         )
@@ -340,7 +338,7 @@ class TestIntegrationGetContainerSavingsRecommendations:
         result = _fastmcp(
             "call",
             mcp_target,
-            "get_container_savings_recommendations",
+            "kubecost_get_container_sizing",
             "--input-json",
             '{"profile": "development"}',
         )
@@ -416,14 +414,14 @@ class TestIntegrationGetContainerSavingsRecommendations:
 
 class TestIntegrationGetAbandonedWorkloads:
     def test_returns_status_ok_or_empty(self, mcp_target):
-        result = _fastmcp("call", mcp_target, "get_abandoned_workloads", "--input-json", "{}")
+        result = _fastmcp("call", mcp_target, "kubecost_get_abandoned_workloads", "--input-json", "{}")
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
         output = result.stdout
         assert '"status"' in output or "status" in output
         assert '"error"' not in output or '"ok"' in output or '"empty"' in output
 
     def test_default_limit_returns_20(self, mcp_target):
-        result = _fastmcp("call", mcp_target, "get_abandoned_workloads", "--input-json", "{}")
+        result = _fastmcp("call", mcp_target, "kubecost_get_abandoned_workloads", "--input-json", "{}")
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
         output = result.stdout
         # Default limit is 20 — message should reflect a bounded workload count.
@@ -439,7 +437,7 @@ _RFC3339_RANGE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T00:00:00Z,\d{4}-\d{2}-\d{2}T
 class TestIntegrationGetKubecostCostComparison:
     def test_defaults_to_week_over_week(self, mcp_target):
         """Calling with no args should compute RFC3339 week-over-week defaults and return ok or empty."""
-        result = _fastmcp("call", mcp_target, "get_kubecost_cost_comparison", "--input-json", "{}")
+        result = _fastmcp("call", mcp_target, "kubecost_get_cost_comparison", "--input-json", "{}")
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
         response = json.loads(result.stdout)
         assert response.get("status") in {"ok", "empty"}, f"Unexpected status: {response.get('status')}"
@@ -461,7 +459,7 @@ class TestIntegrationGetKubecostCostComparison:
 
     def test_response_shape(self, mcp_target):
         """Response must include rows, row_count, and window echo fields."""
-        result = _fastmcp("call", mcp_target, "get_kubecost_cost_comparison", "--input-json", "{}")
+        result = _fastmcp("call", mcp_target, "kubecost_get_cost_comparison", "--input-json", "{}")
         assert result.returncode == 0, f"fastmcp exited {result.returncode}:\n{result.stderr}"
         response = json.loads(result.stdout)
         if response.get("status") == "empty":
@@ -503,8 +501,8 @@ def _rows_or_skip(response: dict[str, Any], tool: str) -> list[dict[str, Any]]:
 
 @pytest.fixture(scope="module")
 def local_disks(mcp_target) -> list[dict[str, Any]]:
-    response = _call_tool(mcp_target, "get_local_disk_savings", {"window": "15d", "top_n": 100})
-    return _rows_or_skip(response, "get_local_disk_savings")
+    response = _call_tool(mcp_target, "kubecost_get_local_disk_savings", {"window": "15d", "top_n": 100})
+    return _rows_or_skip(response, "kubecost_get_local_disk_savings")
 
 
 class TestIntegrationGetLocalDiskSavings:
@@ -558,8 +556,8 @@ class TestIntegrationGetLocalDiskSavings:
 
 @pytest.fixture(scope="module")
 def pv_rows(mcp_target) -> list[dict[str, Any]]:
-    response = _call_tool(mcp_target, "get_pv_sizing_recommendations", {"window": "15d", "top_n": 100})
-    return _rows_or_skip(response, "get_pv_sizing_recommendations")
+    response = _call_tool(mcp_target, "kubecost_get_pv_sizing", {"window": "15d", "top_n": 100})
+    return _rows_or_skip(response, "kubecost_get_pv_sizing")
 
 
 class TestIntegrationGetPvSizingRecommendations:

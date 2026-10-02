@@ -1,5 +1,5 @@
-"""Tests for the MCP tool handlers (kubecost_list_windows, get_kubecost_workload_costs,
-get_container_savings_recommendations).
+"""Tests for the MCP tool handlers (kubecost_list_windows, kubecost_get_workload_costs,
+kubecost_get_container_sizing).
 
 HTTP calls are intercepted with pytest-httpx so no real Kubecost endpoint is needed.
 The FastMCP `tool.run()` returns a `ToolResult` with `.structured_content` (dict).
@@ -204,7 +204,7 @@ class TestRemovedTools:
         assert "resolve_window" not in {tool.name for tool in await mcp_app.list_tools()}
 
 
-# ── get_kubecost_workload_costs ───────────────────────────────────────────────
+# ── kubecost_get_workload_costs ───────────────────────────────────────────────
 
 
 class TestGetKubecostWorkloadCosts:
@@ -212,7 +212,7 @@ class TestGetKubecostWorkloadCosts:
     async def test_compound_filter_is_sent_and_echoed(self, httpx_mock: HTTPXMock, mcp_app, allocation_response_one_ns):
         expression = 'cluster:"c1"+(namespace:"prod"|namespace:"staging")'
         httpx_mock.add_response(method="GET", url=_allocation_url(), json=allocation_response_one_ns)
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run({"filter_str": f"  {expression}  "})
 
         request = httpx_mock.get_request()
@@ -223,7 +223,7 @@ class TestGetKubecostWorkloadCosts:
     @pytest.mark.asyncio
     async def test_blank_filter_is_omitted_and_echoed_as_null(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run({"filter_str": "  "})
 
         request = httpx_mock.get_request()
@@ -235,7 +235,7 @@ class TestGetKubecostWorkloadCosts:
     @pytest.mark.asyncio
     async def test_error_echoes_filter(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(method="GET", url=_allocation_url(), status_code=400, text="invalid filter")
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run({"filter_str": 'namespace:"prod"'})
 
         assert _sc(result)["status"] == "error"
@@ -244,7 +244,7 @@ class TestGetKubecostWorkloadCosts:
     @pytest.mark.asyncio
     async def test_empty_string_window_returns_error(self, mcp_app):
         """Passing an explicit empty string should still return an error (guard kept for safety)."""
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run({"window": ""})
         assert _sc(result)["status"] == "error"
 
@@ -255,28 +255,28 @@ class TestGetKubecostWorkloadCosts:
             url=_allocation_url(),
             json=allocation_response_one_ns,
         )
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run({"window": "7d", "aggregate": "cluster,namespace"})
         sc = _sc(result)
         assert sc["status"] == "ok"
         assert sc["total_cost"] > 0
         row = sc["rows"][0]
-        assert row["cpuCostIdle"] + row["ramCostIdle"] > 0
-        assert row["totalCost"] == pytest.approx(
-            row["cpuCost"]
-            + row["ramCost"]
-            + row["networkCost"]
-            + row["pvCost"]
-            + row["gpuCost"]
-            + row["loadBalancerCost"]
-            + row["sharedCost"]
+        assert row["cpu_cost_idle"] + row["ram_cost_idle"] > 0
+        assert row["total_cost"] == pytest.approx(
+            row["cpu_cost"]
+            + row["ram_cost"]
+            + row["network_cost"]
+            + row["pv_cost"]
+            + row["gpu_cost"]
+            + row["load_balancer_cost"]
+            + row["shared_cost"]
         )
         assert any("already included" in note and "do not add them again" in note for note in sc["notes"])
 
     @pytest.mark.asyncio
     async def test_reversed_window_is_normalized_in_request_and_response(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run({"window": "2026-06-01T00:00:00Z,2026-05-01T00:00:00Z"})
 
         expected = "2026-05-01T00:00:00Z,2026-06-01T00:00:00Z"
@@ -293,7 +293,7 @@ class TestGetKubecostWorkloadCosts:
             url=_allocation_url(),
             json=allocation_response_one_ns,
         )
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run({"window": "7d", "aggregate": "cluster,namespace"})
         dims = _sc(result)["dimensions"]
         assert "cluster" in dims
@@ -306,14 +306,14 @@ class TestGetKubecostWorkloadCosts:
             url=_allocation_url(),
             json={"data": []},
         )
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run({"window": "7d"})
         assert _sc(result)["status"] == "empty"
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error_status(self, httpx_mock: HTTPXMock, mcp_app):
         _stub_http_500(httpx_mock, _allocation_url())
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run({"window": "7d"})
         assert _sc(result)["status"] == "error"
 
@@ -326,7 +326,7 @@ class TestGetKubecostWorkloadCosts:
             status_code=402,
             text=body,
         )
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run({"window": "30d"})
         sc = _sc(result)
         assert sc["status"] == "error"
@@ -340,7 +340,7 @@ class TestGetKubecostWorkloadCosts:
             url=_allocation_url(),
             json=allocation_response_multi_ns,
         )
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run({"window": "7d", "top_n": 1})
         sc = _sc(result)
         assert sc["truncated"] is True
@@ -349,7 +349,7 @@ class TestGetKubecostWorkloadCosts:
     @pytest.mark.asyncio
     async def test_rows_carry_window_end(self, httpx_mock: HTTPXMock, mcp_app, allocation_response_one_ns):
         httpx_mock.add_response(method="GET", url=_allocation_url(), json=allocation_response_one_ns)
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run({"window": "7d", "min_total_cost": 0.0})
         sc = _sc(result)
         assert sc["rows"][0]["window_start"] == "2024-01-01"
@@ -363,7 +363,7 @@ class TestGetKubecostWorkloadCosts:
     ):
         """Regression: accumulate=false reported 1 day and collapsed every day into one row."""
         httpx_mock.add_response(method="GET", url=_allocation_url(), json=allocation_response_daily_buckets)
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run(
             {"window": "3d", "aggregate": "cluster,namespace", "accumulate": False, "min_total_cost": 0.0}
         )
@@ -390,16 +390,16 @@ class TestGetKubecostWorkloadCosts:
     ):
         """One shared window must still yield one row per key, costliest first."""
         httpx_mock.add_response(method="GET", url=_allocation_url(), json=allocation_response_multi_ns)
-        tool = await mcp_app.get_tool("get_kubecost_workload_costs")
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
         result = await tool.run({"window": "7d", "aggregate": "cluster,namespace", "min_total_cost": 0.0})
         sc = _sc(result)
         assert sc["row_count"] == 2
         assert sc["resolved_window"]["days"] == 7
-        assert [r["totalCost"] for r in sc["rows"]] == [31.0, 7.2]
+        assert [r["total_cost"] for r in sc["rows"]] == [31.0, 7.2]
         assert "Daily breakdown" not in sc["message"]
 
 
-# ── get_container_savings_recommendations ────────────────────────────────────
+# ── kubecost_get_container_sizing ────────────────────────────────────────────
 
 
 class TestGetContainerSavingsRecommendations:
@@ -407,7 +407,7 @@ class TestGetContainerSavingsRecommendations:
     async def test_filter_is_sent_and_echoed(self, httpx_mock: HTTPXMock, mcp_app):
         expression = 'cluster:"c1"+namespace:"prod"'
         httpx_mock.add_response(method="GET", url=_savings_url(), json=_savings_payload(_savings_rec("a", cpu=10)))
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"filter_str": f" {expression} "})
 
         request = httpx_mock.get_request()
@@ -419,7 +419,7 @@ class TestGetContainerSavingsRecommendations:
     @pytest.mark.asyncio
     async def test_upstream_error_echoes_filter(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(method="GET", url=_savings_url(), status_code=400, text="invalid filter")
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"filter_str": 'namespace:"prod"'})
 
         assert _sc(result)["status"] == "error"
@@ -432,7 +432,7 @@ class TestGetContainerSavingsRecommendations:
             url=_savings_url(),
             json=savings_api_response,
         )
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d"})
         sc = _sc(result)
         assert sc["status"] == "ok"
@@ -445,7 +445,7 @@ class TestGetContainerSavingsRecommendations:
             url=_savings_url(),
             json=savings_api_response,
         )
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d"})
         sc = _sc(result)
         assert len(sc["rows"]) == 2
@@ -457,7 +457,7 @@ class TestGetContainerSavingsRecommendations:
             url=_savings_url(),
             json={"TotalMonthlySavings": 0.0, "Count": 0, "Recommendations": []},
         )
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d"})
         assert _sc(result)["status"] == "empty"
 
@@ -468,7 +468,7 @@ class TestGetContainerSavingsRecommendations:
             url=_savings_url(),
             status_code=401,
         )
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d"})
         assert _sc(result)["status"] == "error"
 
@@ -481,7 +481,7 @@ class TestGetContainerSavingsRecommendations:
             url=_savings_url(),
             json=savings_api_response,
         )
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"profile": "high-availability"})
         assert _sc(result)["window"] == "30d"
         assert _sc(result)["parameters"]["target_cpu_utilization"] == 0.50
@@ -499,7 +499,7 @@ class TestGetContainerSavingsRecommendations:
             url=_savings_url(),
             json=savings_api_response,
         )
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"profile": "development"})
         assert _sc(result)["parameters"]["target_cpu_utilization"] == 0.80
         # RAM stays at the production target — no profile buys savings on the axis that
@@ -518,7 +518,7 @@ class TestGetContainerSavingsRecommendations:
             url=_savings_url(),
             json=savings_api_response,
         )
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d", "min_monthly_savings": 9999.0})
         assert _sc(result)["status"] == "empty"
 
@@ -530,12 +530,12 @@ class TestGetContainerSavingsRecommendations:
             _savings_rec("leaky", cpu=5.0, memory=-20.0),
         )
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d"})
         sc = _sc(result)
         assert sc["status"] == "ok"
-        assert {r["containerName"] for r in sc["rows"]} == {"api"}
-        assert {r["containerName"] for r in sc["undersized_rows"]} == {"leaky"}
+        assert {r["container_name"] for r in sc["rows"]} == {"api"}
+        assert {r["container_name"] for r in sc["undersized_rows"]} == {"leaky"}
         assert sc["undersized_count"] == 1
         # Totals describe the reduction candidates only — an undersized row is not a saving.
         assert sc["total_monthly_savings"] == 25.0
@@ -549,10 +549,10 @@ class TestGetContainerSavingsRecommendations:
             _savings_rec("starved", cpu=-8.0, memory=3.0),
         )
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d"})
         sc = _sc(result)
-        assert {r["containerName"] for r in sc["undersized_rows"]} == {"starved"}
+        assert {r["container_name"] for r in sc["undersized_rows"]} == {"starved"}
 
     @pytest.mark.asyncio
     async def test_savings_filter_never_hides_undersized_rows(self, httpx_mock: HTTPXMock, mcp_app):
@@ -562,12 +562,12 @@ class TestGetContainerSavingsRecommendations:
             _savings_rec("leaky", cpu=5.0, memory=-20.0),
         )
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d", "min_monthly_savings": 5.0})
         sc = _sc(result)
         assert sc["status"] == "ok"
-        assert {r["containerName"] for r in sc["rows"]} == {"api"}  # 'small' trimmed
-        assert {r["containerName"] for r in sc["undersized_rows"]} == {"leaky"}  # never trimmed
+        assert {r["container_name"] for r in sc["rows"]} == {"api"}  # 'small' trimmed
+        assert {r["container_name"] for r in sc["undersized_rows"]} == {"leaky"}  # never trimmed
 
     @pytest.mark.asyncio
     async def test_filter_removing_every_candidate_still_reports_undersized(self, httpx_mock: HTTPXMock, mcp_app):
@@ -577,12 +577,12 @@ class TestGetContainerSavingsRecommendations:
             _savings_rec("leaky", cpu=5.0, memory=-20.0),
         )
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d", "min_monthly_savings": 1_000_000.0})
         sc = _sc(result)
         assert sc["status"] == "ok"
         assert sc["rows"] == []
-        assert {r["containerName"] for r in sc["undersized_rows"]} == {"leaky"}
+        assert {r["container_name"] for r in sc["undersized_rows"]} == {"leaky"}
         assert sc["undersized_count"] == 1
 
     @pytest.mark.asyncio
@@ -592,9 +592,9 @@ class TestGetContainerSavingsRecommendations:
             _savings_rec("unset", cpu=5.0, current_cpu=0.0, rec_cpu=50.0, current_ram=0.0, rec_ram=50.0),
         )
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d"})
-        by_name = {r["containerName"]: r for r in _sc(result)["rows"]}
+        by_name = {r["container_name"]: r for r in _sc(result)["rows"]}
         assert by_name["shrink"]["pct_change_cpu"] == -75.0
         assert by_name["shrink"]["pct_change_memory"] == -50.0
         # No current request means percent change is undefined, not -100%.
@@ -609,14 +609,14 @@ class TestGetContainerSavingsRecommendations:
             _savings_rec("small-drastic", cpu=5.0, current_cpu=200.0, rec_cpu=20.0),
         )
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
 
         by_dollars = await tool.run({"window": "15d"})
-        assert [r["containerName"] for r in _sc(by_dollars)["rows"]] == ["big-slight", "small-drastic"]
+        assert [r["container_name"] for r in _sc(by_dollars)["rows"]] == ["big-slight", "small-drastic"]
 
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
         by_pct = await tool.run({"window": "15d", "sort_by": "pct_change_cpu"})
-        assert [r["containerName"] for r in _sc(by_pct)["rows"]] == ["small-drastic", "big-slight"]
+        assert [r["container_name"] for r in _sc(by_pct)["rows"]] == ["small-drastic", "big-slight"]
         assert _sc(by_pct)["parameters"]["sort_by"] == "pct_change_cpu"
 
     @pytest.mark.asyncio
@@ -626,7 +626,7 @@ class TestGetContainerSavingsRecommendations:
             url=_savings_url(),
             json=savings_api_response,
         )
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d", "summary_aggregate": "namespace"})
         sc = _sc(result)
         assert sc["summary_aggregate"] == "namespace"
@@ -640,7 +640,7 @@ class TestGetContainerSavingsRecommendations:
             url=_savings_url(),
             json=savings_api_response,
         )
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d"})
         assert "interpretation" in _sc(result)
         assert len(_sc(result)["interpretation"]) > 0
@@ -652,7 +652,7 @@ class TestGetContainerSavingsRecommendations:
             url=_savings_url(),
             json=savings_api_response,
         )
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d", "q_cpu": 0.9})
         params = _sc(result)["parameters"]
         assert params["q_cpu"] == 0.9
@@ -664,7 +664,7 @@ class TestGetContainerSavingsRecommendations:
         """quantileOfAverages / quantileOfMaxes must raise ToolError for windows shorter than 15d."""
         from fastmcp.exceptions import ToolError as FastMcpToolError
 
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         with pytest.raises(FastMcpToolError, match="invalid_input"):
             await tool.run({"window": short_window, "algorithm_cpu": "quantileOfAverages"})
 
@@ -672,7 +672,7 @@ class TestGetContainerSavingsRecommendations:
     async def test_quantile_algorithm_accepts_15d_window(self, httpx_mock: HTTPXMock, mcp_app, savings_api_response):
         """15d is the minimum allowed window for quantile algorithms — must not error."""
         httpx_mock.add_response(method="GET", url=_savings_url(), json=savings_api_response)
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "15d", "algorithm_cpu": "quantileOfAverages"})
         assert not result.is_error
 
@@ -680,12 +680,12 @@ class TestGetContainerSavingsRecommendations:
     async def test_max_algorithm_accepts_short_window(self, httpx_mock: HTTPXMock, mcp_app, savings_api_response):
         """Non-quantile algorithms (max) should not be subject to the 15d minimum."""
         httpx_mock.add_response(method="GET", url=_savings_url(), json=savings_api_response)
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         result = await tool.run({"window": "7d", "algorithm_cpu": "max", "algorithm_ram": "max"})
         assert not result.is_error
 
 
-# ── get_abandoned_workloads ───────────────────────────────────────────────────
+# ── kubecost_get_abandoned_workloads ──────────────────────────────────────────
 
 ABANDONED_PATH = "/model/savings/abandonedWorkloads"
 
@@ -702,7 +702,7 @@ class TestGetAbandonedWorkloads:
             url=_abandoned_url(),
             json=abandoned_workloads_api_response,
         )
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         result = await tool.run({})
         sc = _sc(result)
         assert sc["status"] == "ok"
@@ -717,24 +717,24 @@ class TestGetAbandonedWorkloads:
     @pytest.mark.asyncio
     async def test_rows_sorted_by_savings_desc(self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response):
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         result = await tool.run({})
         rows = _sc(result)["rows"]
-        # FastMCP serialises Pydantic models by alias
-        savings = [r["monthlySavings"] for r in rows]
+        # FastMCP 4 serialises Pydantic models by field name, not by alias
+        savings = [r["monthly_savings"] for r in rows]
         assert savings == sorted(savings, reverse=True)
 
     @pytest.mark.asyncio
     async def test_empty_response_returns_empty_status(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=[])
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         result = await tool.run({})
         assert _sc(result)["status"] == "empty"
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error_status(self, httpx_mock: HTTPXMock, mcp_app):
         _stub_http_500(httpx_mock, _abandoned_url())
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         result = await tool.run({})
         assert _sc(result)["status"] == "error"
 
@@ -743,14 +743,14 @@ class TestGetAbandonedWorkloads:
         self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response
     ):
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         result = await tool.run({"cluster": "my-cluster"})
         assert _sc(result)["cluster_filter"] == "my-cluster"
 
     @pytest.mark.asyncio
     async def test_parameters_echoed(self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response):
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         result = await tool.run({"days": 7, "threshold": 1000})
         sc = _sc(result)
         assert sc["days"] == 7
@@ -761,7 +761,7 @@ class TestGetAbandonedWorkloads:
         self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response
     ):
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         # Full population has 2 rows and limit=2 — that is the complete set, not a hint of more.
         result = await tool.run({"limit": 2})
         sc = _sc(result)
@@ -786,7 +786,7 @@ class TestGetAbandonedWorkloads:
             for i in range(25)
         ]
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=payload)
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         sc = _sc(await tool.run({"limit": 20}))
         assert sc["truncated"] is True
         assert sc["returned_count"] == 20
@@ -816,7 +816,7 @@ class TestGetAbandonedWorkloads:
             for i in range(25)
         ]
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=payload)
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         sc = _sc(await tool.run({"limit": 20, "offset": 20}))
         assert sc["status"] == "ok"
         assert sc["returned_count"] == 5
@@ -831,7 +831,7 @@ class TestGetAbandonedWorkloads:
     @pytest.mark.asyncio
     async def test_offset_past_end_is_empty(self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response):
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         sc = _sc(await tool.run({"offset": 50}))
         assert sc["status"] == "empty"
         assert sc["total_count"] == 2
@@ -881,7 +881,7 @@ class TestGetAbandonedWorkloads:
         ]
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=page1)
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=page2)
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         sc = _sc(await tool.run({"limit": 20}))
         assert sc["total_count"] == 3
         assert sc["returned_count"] == 3
@@ -895,7 +895,7 @@ class TestGetAbandonedWorkloads:
         assert requests[1].url.params["limit"] == "2"
 
 
-# ── get_savings_overview ─────────────────────────────────────────────────────
+# ── kubecost_get_savings_overview ────────────────────────────────────────────
 
 SAVINGS_OVERVIEW_PATH = "/model/savings"
 PV_SIZING_PATH = "/model/savings/persistentVolumeSizing"
@@ -933,7 +933,7 @@ class TestGetSavingsOverview:
     @pytest.mark.asyncio
     async def test_success_response(self, httpx_mock: HTTPXMock, mcp_app, savings_overview_api_response):
         httpx_mock.add_response(method="GET", url=_savings_overview_url(), json=savings_overview_api_response)
-        tool = await mcp_app.get_tool("get_savings_overview")
+        tool = await mcp_app.get_tool("kubecost_get_savings_overview")
         result = await tool.run({})
         sc = _sc(result)
         assert sc["status"] == "ok"
@@ -943,7 +943,7 @@ class TestGetSavingsOverview:
     @pytest.mark.asyncio
     async def test_categories_sorted_desc(self, httpx_mock: HTTPXMock, mcp_app, savings_overview_api_response):
         httpx_mock.add_response(method="GET", url=_savings_overview_url(), json=savings_overview_api_response)
-        tool = await mcp_app.get_tool("get_savings_overview")
+        tool = await mcp_app.get_tool("kubecost_get_savings_overview")
         result = await tool.run({})
         savings = [c["savings_per_month"] for c in _sc(result)["categories"]]
         assert savings == sorted(savings, reverse=True)
@@ -951,23 +951,23 @@ class TestGetSavingsOverview:
     @pytest.mark.asyncio
     async def test_drill_down_tool_populated(self, httpx_mock: HTTPXMock, mcp_app, savings_overview_api_response):
         httpx_mock.add_response(method="GET", url=_savings_overview_url(), json=savings_overview_api_response)
-        tool = await mcp_app.get_tool("get_savings_overview")
+        tool = await mcp_app.get_tool("kubecost_get_savings_overview")
         result = await tool.run({})
         cats = {c["key"]: c for c in _sc(result)["categories"]}
-        assert cats["nodeGroupSizing"]["drill_down_tool"] == "get_cluster_rightsizing_recommendations"
+        assert cats["nodeGroupSizing"]["drill_down_tool"] == "kubecost_get_cluster_rightsizing"
         assert cats["orphanedResources"]["drill_down_tool"] is None
 
     @pytest.mark.asyncio
     async def test_empty_data_returns_empty_status(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(method="GET", url=_savings_overview_url(), json={"code": 200, "data": {}})
-        tool = await mcp_app.get_tool("get_savings_overview")
+        tool = await mcp_app.get_tool("kubecost_get_savings_overview")
         result = await tool.run({})
         assert _sc(result)["status"] == "empty"
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error_status(self, httpx_mock: HTTPXMock, mcp_app):
         _stub_http_500(httpx_mock, _savings_overview_url())
-        tool = await mcp_app.get_tool("get_savings_overview")
+        tool = await mcp_app.get_tool("kubecost_get_savings_overview")
         result = await tool.run({})
         assert _sc(result)["status"] == "error"
 
@@ -976,7 +976,7 @@ class TestGetPVSizingRecommendations:
     @pytest.mark.asyncio
     async def test_success_response(self, httpx_mock: HTTPXMock, mcp_app, pv_sizing_api_response):
         httpx_mock.add_response(method="GET", url=_pv_sizing_url(), json=pv_sizing_api_response)
-        tool = await mcp_app.get_tool("get_pv_sizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_pv_sizing")
         result = await tool.run({})
         sc = _sc(result)
         assert sc["status"] == "ok"
@@ -986,7 +986,7 @@ class TestGetPVSizingRecommendations:
     @pytest.mark.asyncio
     async def test_rows_sorted_desc(self, httpx_mock: HTTPXMock, mcp_app, pv_sizing_api_response):
         httpx_mock.add_response(method="GET", url=_pv_sizing_url(), json=pv_sizing_api_response)
-        tool = await mcp_app.get_tool("get_pv_sizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_pv_sizing")
         result = await tool.run({})
         savings = [r["savings_monthly"] for r in _sc(result)["rows"]]
         assert savings == sorted(savings, reverse=True)
@@ -994,7 +994,7 @@ class TestGetPVSizingRecommendations:
     @pytest.mark.asyncio
     async def test_min_savings_filter(self, httpx_mock: HTTPXMock, mcp_app, pv_sizing_api_response):
         httpx_mock.add_response(method="GET", url=_pv_sizing_url(), json=pv_sizing_api_response)
-        tool = await mcp_app.get_tool("get_pv_sizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_pv_sizing")
         result = await tool.run({"min_monthly_savings": 20.0})
         sc = _sc(result)
         assert sc["row_count"] == 1
@@ -1003,21 +1003,21 @@ class TestGetPVSizingRecommendations:
     @pytest.mark.asyncio
     async def test_empty_recommendations(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(method="GET", url=_pv_sizing_url(), json={"recommendations": []})
-        tool = await mcp_app.get_tool("get_pv_sizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_pv_sizing")
         result = await tool.run({})
         assert _sc(result)["status"] == "empty"
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error(self, httpx_mock: HTTPXMock, mcp_app):
         _stub_http_500(httpx_mock, _pv_sizing_url())
-        tool = await mcp_app.get_tool("get_pv_sizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_pv_sizing")
         result = await tool.run({})
         assert _sc(result)["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_truncated_flag(self, httpx_mock: HTTPXMock, mcp_app, pv_sizing_api_response):
         httpx_mock.add_response(method="GET", url=_pv_sizing_url(), json=pv_sizing_api_response)
-        tool = await mcp_app.get_tool("get_pv_sizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_pv_sizing")
         result = await tool.run({"top_n": 1})
         sc = _sc(result)
         assert sc["truncated"] is True
@@ -1029,7 +1029,7 @@ class TestGetLocalDiskSavings:
     @pytest.mark.asyncio
     async def test_success_response(self, httpx_mock: HTTPXMock, mcp_app, local_disks_api_response):
         httpx_mock.add_response(method="GET", url=_local_disks_url(), json=local_disks_api_response)
-        tool = await mcp_app.get_tool("get_local_disk_savings")
+        tool = await mcp_app.get_tool("kubecost_get_local_disk_savings")
         result = await tool.run({})
         sc = _sc(result)
         assert sc["status"] == "ok"
@@ -1045,7 +1045,7 @@ class TestGetLocalDiskSavings:
         cannot drift back to the 0-1 ratios that hid this bug.
         """
         httpx_mock.add_response(method="GET", url=_local_disks_url(), json=local_disks_api_response)
-        tool = await mcp_app.get_tool("get_local_disk_savings")
+        tool = await mcp_app.get_tool("kubecost_get_local_disk_savings")
         result = await tool.run({})
         for row in _sc(result)["rows"]:
             expected = row["current_usage_bytes"] / row["current_capacity_bytes"] * 100
@@ -1054,7 +1054,7 @@ class TestGetLocalDiskSavings:
     @pytest.mark.asyncio
     async def test_rows_sorted_desc(self, httpx_mock: HTTPXMock, mcp_app, local_disks_api_response):
         httpx_mock.add_response(method="GET", url=_local_disks_url(), json=local_disks_api_response)
-        tool = await mcp_app.get_tool("get_local_disk_savings")
+        tool = await mcp_app.get_tool("kubecost_get_local_disk_savings")
         result = await tool.run({})
         savings = [r["savings_monthly"] for r in _sc(result)["rows"]]
         assert savings == sorted(savings, reverse=True)
@@ -1062,14 +1062,14 @@ class TestGetLocalDiskSavings:
     @pytest.mark.asyncio
     async def test_empty_response(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(method="GET", url=_local_disks_url(), json={"unutilizedDisks": []})
-        tool = await mcp_app.get_tool("get_local_disk_savings")
+        tool = await mcp_app.get_tool("kubecost_get_local_disk_savings")
         result = await tool.run({})
         assert _sc(result)["status"] == "empty"
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error(self, httpx_mock: HTTPXMock, mcp_app):
         _stub_http_500(httpx_mock, _local_disks_url())
-        tool = await mcp_app.get_tool("get_local_disk_savings")
+        tool = await mcp_app.get_tool("kubecost_get_local_disk_savings")
         result = await tool.run({})
         assert _sc(result)["status"] == "error"
 
@@ -1078,14 +1078,14 @@ class TestGetClusterRightsizingRecommendations:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("cluster", ["", "   "])
     async def test_blank_cluster_is_rejected_before_api_call(self, mcp_app, cluster):
-        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_cluster_rightsizing")
         with pytest.raises(FastMcpToolError, match="cluster ID is required"):
             await tool.run({"cluster": cluster})
 
     @pytest.mark.asyncio
     async def test_success_response(self, httpx_mock: HTTPXMock, mcp_app, node_group_sizing_api_response):
         httpx_mock.add_response(method="GET", url=_node_group_url(), json=node_group_sizing_api_response)
-        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_cluster_rightsizing")
         result = await tool.run({"cluster": "kc-demo-prod"})
         sc = _sc(result)
         assert sc["status"] == "ok"
@@ -1095,7 +1095,7 @@ class TestGetClusterRightsizingRecommendations:
     @pytest.mark.asyncio
     async def test_recommendations_sorted_desc(self, httpx_mock: HTTPXMock, mcp_app, node_group_sizing_api_response):
         httpx_mock.add_response(method="GET", url=_node_group_url(), json=node_group_sizing_api_response)
-        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_cluster_rightsizing")
         result = await tool.run({"cluster": "kc-demo-prod"})
         savings = [r["savings_per_month"] for r in _sc(result)["recommendations"]]
         assert savings == sorted(savings, reverse=True)
@@ -1106,7 +1106,7 @@ class TestGetClusterRightsizingRecommendations:
     ):
         """ChangeInstanceType is an open-string recommendation value — must not raise."""
         httpx_mock.add_response(method="GET", url=_node_group_url(), json=node_group_sizing_api_response)
-        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_cluster_rightsizing")
         result = await tool.run({"cluster": "kc-demo-prod"})
         rec_values = {r["recommendation"] for r in _sc(result)["recommendations"]}
         assert "ChangeInstanceType" in rec_values
@@ -1114,7 +1114,7 @@ class TestGetClusterRightsizingRecommendations:
     @pytest.mark.asyncio
     async def test_warnings_surfaced(self, httpx_mock: HTTPXMock, mcp_app, node_group_sizing_api_response):
         httpx_mock.add_response(method="GET", url=_node_group_url(), json=node_group_sizing_api_response)
-        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_cluster_rightsizing")
         result = await tool.run({"cluster": "kc-demo-prod"})
         assert "warnings" in _sc(result)
 
@@ -1152,7 +1152,7 @@ class TestGetClusterRightsizingRecommendations:
             },
         }
         httpx_mock.add_response(method="GET", url=_node_group_url(), json=payload)
-        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_cluster_rightsizing")
         result = await tool.run({"cluster": "kcmocp2"})
         sc = _sc(result)
         assert sc["warnings"] == [MISSING_CLOUD_NODE_LABELS_NOTE]
@@ -1179,7 +1179,7 @@ class TestGetClusterRightsizingRecommendations:
             },
         }
         httpx_mock.add_response(method="GET", url=_node_group_url(), json=payload)
-        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_cluster_rightsizing")
         result = await tool.run({"cluster": "kc-demo-prod"})
         sc = _sc(result)
         assert sc["status"] == "ok"
@@ -1191,14 +1191,14 @@ class TestGetClusterRightsizingRecommendations:
     async def test_empty_recommendations(self, httpx_mock: HTTPXMock, mcp_app):
         empty = {"code": 200, "data": {"recommendations": [], "totalSavingsPerMonth": 0.0, "warnings": []}}
         httpx_mock.add_response(method="GET", url=_node_group_url(), json=empty)
-        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_cluster_rightsizing")
         result = await tool.run({"cluster": "kc-missing"})
         assert _sc(result)["status"] == "empty"
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error(self, httpx_mock: HTTPXMock, mcp_app):
         _stub_http_500(httpx_mock, _node_group_url())
-        tool = await mcp_app.get_tool("get_cluster_rightsizing_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_cluster_rightsizing")
         result = await tool.run({"cluster": "kc-demo-prod"})
         assert _sc(result)["status"] == "error"
 
@@ -1207,7 +1207,7 @@ class TestGetUnclaimedVolumes:
     @pytest.mark.asyncio
     async def test_success_response(self, httpx_mock: HTTPXMock, mcp_app, unclaimed_volumes_api_response):
         httpx_mock.add_response(method="GET", url=_unclaimed_volumes_url(), json=unclaimed_volumes_api_response)
-        tool = await mcp_app.get_tool("get_unclaimed_volumes")
+        tool = await mcp_app.get_tool("kubecost_get_unclaimed_volumes")
         result = await tool.run({})
         sc = _sc(result)
         assert sc["status"] == "ok"
@@ -1217,7 +1217,7 @@ class TestGetUnclaimedVolumes:
     @pytest.mark.asyncio
     async def test_properties_present(self, httpx_mock: HTTPXMock, mcp_app, unclaimed_volumes_api_response):
         httpx_mock.add_response(method="GET", url=_unclaimed_volumes_url(), json=unclaimed_volumes_api_response)
-        tool = await mcp_app.get_tool("get_unclaimed_volumes")
+        tool = await mcp_app.get_tool("kubecost_get_unclaimed_volumes")
         result = await tool.run({})
         row = _sc(result)["rows"][0]
         assert "properties" in row
@@ -1230,21 +1230,21 @@ class TestGetUnclaimedVolumes:
             url=_unclaimed_volumes_url(),
             json={"code": 200, "data": {"count": 0, "monthlyCost": 0.0, "volumes": []}},
         )
-        tool = await mcp_app.get_tool("get_unclaimed_volumes")
+        tool = await mcp_app.get_tool("kubecost_get_unclaimed_volumes")
         result = await tool.run({})
         assert _sc(result)["status"] == "empty"
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error(self, httpx_mock: HTTPXMock, mcp_app):
         _stub_http_500(httpx_mock, _unclaimed_volumes_url())
-        tool = await mcp_app.get_tool("get_unclaimed_volumes")
+        tool = await mcp_app.get_tool("kubecost_get_unclaimed_volumes")
         result = await tool.run({})
         assert _sc(result)["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_truncated_flag(self, httpx_mock: HTTPXMock, mcp_app, unclaimed_volumes_api_response):
         httpx_mock.add_response(method="GET", url=_unclaimed_volumes_url(), json=unclaimed_volumes_api_response)
-        tool = await mcp_app.get_tool("get_unclaimed_volumes")
+        tool = await mcp_app.get_tool("kubecost_get_unclaimed_volumes")
         result = await tool.run({"top_n": 1})
         sc = _sc(result)
         assert sc["truncated"] is True
@@ -1255,7 +1255,7 @@ class TestGetResourceQuotaRecommendations:
     @pytest.mark.asyncio
     async def test_success_response(self, httpx_mock: HTTPXMock, mcp_app, resource_quota_api_response):
         httpx_mock.add_response(method="GET", url=_resource_quota_url(), json=resource_quota_api_response)
-        tool = await mcp_app.get_tool("get_resource_quota_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_quota_sizing")
         result = await tool.run({})
         sc = _sc(result)
         assert sc["status"] == "ok"
@@ -1265,7 +1265,7 @@ class TestGetResourceQuotaRecommendations:
     @pytest.mark.asyncio
     async def test_resources_nested(self, httpx_mock: HTTPXMock, mcp_app, resource_quota_api_response):
         httpx_mock.add_response(method="GET", url=_resource_quota_url(), json=resource_quota_api_response)
-        tool = await mcp_app.get_tool("get_resource_quota_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_quota_sizing")
         result = await tool.run({})
         rec = _sc(result)["recommendations"][0]
         assert len(rec["resources"]) == 1
@@ -1274,7 +1274,7 @@ class TestGetResourceQuotaRecommendations:
     @pytest.mark.asyncio
     async def test_is_downsize_flag(self, httpx_mock: HTTPXMock, mcp_app, resource_quota_api_response):
         httpx_mock.add_response(method="GET", url=_resource_quota_url(), json=resource_quota_api_response)
-        tool = await mcp_app.get_tool("get_resource_quota_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_quota_sizing")
         result = await tool.run({})
         # Second recommendation has is_downsize=True
         rec_with_downsize = _sc(result)["recommendations"][1]
@@ -1286,7 +1286,7 @@ class TestGetResourceQuotaRecommendations:
     ):
         """The endpoint echoes the range it queried; that beats the client-side prediction."""
         httpx_mock.add_response(method="GET", url=_resource_quota_url(), json=resource_quota_api_response)
-        tool = await mcp_app.get_tool("get_resource_quota_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_quota_sizing")
         result = await tool.run({"window": "7d"})
         resolved = _sc(result)["resolved_window"]
         assert resolved["display_start"] == "2026-07-10"
@@ -1300,21 +1300,21 @@ class TestGetResourceQuotaRecommendations:
             url=_resource_quota_url(),
             json={"code": 200, "data": {"itemCount": 0, "totalMonthlySavings": 0.0, "recommendations": []}},
         )
-        tool = await mcp_app.get_tool("get_resource_quota_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_quota_sizing")
         result = await tool.run({})
         assert _sc(result)["status"] == "empty"
 
     @pytest.mark.asyncio
     async def test_http_500_returns_error(self, httpx_mock: HTTPXMock, mcp_app):
         _stub_http_500(httpx_mock, _resource_quota_url())
-        tool = await mcp_app.get_tool("get_resource_quota_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_quota_sizing")
         result = await tool.run({})
         assert _sc(result)["status"] == "error"
 
     @pytest.mark.asyncio
     async def test_total_monthly_savings_can_be_zero(self, httpx_mock: HTTPXMock, mcp_app, resource_quota_api_response):
         httpx_mock.add_response(method="GET", url=_resource_quota_url(), json=resource_quota_api_response)
-        tool = await mcp_app.get_tool("get_resource_quota_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_quota_sizing")
         result = await tool.run({})
         # totalMonthlySavings is 0 in the fixture — that's expected for this correctness tool
         assert _sc(result)["total_monthly_savings"] == pytest.approx(0.0)
@@ -1399,7 +1399,7 @@ class TestGetResourceQuotaRecommendations:
             },
         }
         httpx_mock.add_response(method="GET", url=_resource_quota_url(), json=payload)
-        tool = await mcp_app.get_tool("get_resource_quota_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_quota_sizing")
         result = await tool.run({})
         sc = _sc(result)
         assert sc["status"] == "ok"
@@ -1598,7 +1598,7 @@ class TestDiffAllocationRowsNormalization:
         assert row["normalized_pct_change"] is None
 
 
-# ── get_kubecost_cost_comparison (Task 3, end-to-end) ────────────────────────
+# ── kubecost_get_cost_comparison (Task 3, end-to-end) ────────────────────────
 
 
 def _comparison_allocation_response(ns_name: str, total_cost: float) -> dict:
@@ -1633,7 +1633,7 @@ class TestGetKubecostCostComparison:
         expression = 'cluster:"c1"+(namespace:"prod"|namespace:"staging")'
         httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
         httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
-        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        tool = await mcp_app.get_tool("kubecost_get_cost_comparison")
         result = await tool.run(
             {
                 "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
@@ -1651,7 +1651,7 @@ class TestGetKubecostCostComparison:
     @pytest.mark.asyncio
     async def test_upstream_error_echoes_filter(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(method="GET", url=_allocation_url(), status_code=400, text="invalid filter")
-        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        tool = await mcp_app.get_tool("kubecost_get_cost_comparison")
         result = await tool.run(
             {
                 "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
@@ -1676,7 +1676,7 @@ class TestGetKubecostCostComparison:
         httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
         httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
 
-        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        tool = await mcp_app.get_tool("kubecost_get_cost_comparison")
         result = await tool.run({})
 
         assert _sc(result)["current_window"] == current
@@ -1694,7 +1694,7 @@ class TestGetKubecostCostComparison:
             url=_allocation_url(),
             json=_comparison_allocation_response("ns-a", 50.0),
         )
-        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        tool = await mcp_app.get_tool("kubecost_get_cost_comparison")
         result = await tool.run(
             {
                 "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
@@ -1711,7 +1711,7 @@ class TestGetKubecostCostComparison:
     async def test_reversed_windows_are_silently_normalized(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
         httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
-        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        tool = await mcp_app.get_tool("kubecost_get_cost_comparison")
         result = await tool.run(
             {
                 "current_window": "2020-01-15T00:00:00Z,2020-01-08T00:00:00Z",
@@ -1731,7 +1731,7 @@ class TestGetKubecostCostComparison:
     async def test_empty_both_windows(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
         httpx_mock.add_response(method="GET", url=_allocation_url(), json={"data": []})
-        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        tool = await mcp_app.get_tool("kubecost_get_cost_comparison")
         result = await tool.run(
             {
                 "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
@@ -1743,7 +1743,7 @@ class TestGetKubecostCostComparison:
     @pytest.mark.asyncio
     async def test_http_error_on_either_call(self, httpx_mock: HTTPXMock, mcp_app):
         _stub_http_500(httpx_mock, _allocation_url())
-        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        tool = await mcp_app.get_tool("kubecost_get_cost_comparison")
         result = await tool.run(
             {
                 "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
@@ -1754,7 +1754,7 @@ class TestGetKubecostCostComparison:
 
     @pytest.mark.asyncio
     async def test_validation_error_returns_tool_error_not_raw_exception(self, mcp_app):
-        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        tool = await mcp_app.get_tool("kubecost_get_cost_comparison")
         with pytest.raises(FastMcpToolError, match="invalid_input"):
             await tool.run(
                 {
@@ -1776,7 +1776,7 @@ class TestGetKubecostCostComparison:
             url=_allocation_url(),
             json=_comparison_allocation_response("ns-a", 80.0),
         )
-        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        tool = await mcp_app.get_tool("kubecost_get_cost_comparison")
         result = await tool.run(
             {
                 "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",  # 7 days
@@ -1801,7 +1801,7 @@ class TestCostComparisonNotes:
     async def _run(httpx_mock: HTTPXMock, mcp_app, current: dict, baseline: dict) -> dict:
         httpx_mock.add_response(method="GET", url=_allocation_url(), json=current)
         httpx_mock.add_response(method="GET", url=_allocation_url(), json=baseline)
-        tool = await mcp_app.get_tool("get_kubecost_cost_comparison")
+        tool = await mcp_app.get_tool("kubecost_get_cost_comparison")
         result = await tool.run(
             {
                 "current_window": "2020-01-08T00:00:00Z,2020-01-15T00:00:00Z",
@@ -1902,7 +1902,7 @@ class TestDefaultWowWindows:
 
 
 class TestScheduledWorkloadWarning:
-    """get_abandoned_workloads infers idleness from network traffic alone, so scheduled work
+    """kubecost_get_abandoned_workloads infers idleness from network traffic alone, so scheduled work
     is flagged by construction. The response must say so rather than implying the pods are dead.
     """
 
@@ -1924,7 +1924,7 @@ class TestScheduledWorkloadWarning:
     async def test_cronjob_rows_trigger_a_scheduled_work_note(self, httpx_mock: HTTPXMock, mcp_app):
         payload = [self._pod("nightly", "cronjob"), self._pod("web", "deployment")]
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=payload)
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         sc = _sc(await tool.run({}))
         assert sc["status"] == "ok"
         assert "scheduled work" in sc["message"].lower()
@@ -1933,14 +1933,14 @@ class TestScheduledWorkloadWarning:
     @pytest.mark.asyncio
     async def test_no_note_when_nothing_is_scheduled(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=[self._pod("web", "deployment")])
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         sc = _sc(await tool.run({}))
         assert "Job/CronJob-owned" not in sc["message"]
 
     @pytest.mark.asyncio
     async def test_recommended_action_does_not_assert_the_pod_is_unused(self, httpx_mock: HTTPXMock, mcp_app):
         httpx_mock.add_response(method="GET", url=_abandoned_url(), json=[self._pod("web", "deployment")])
-        tool = await mcp_app.get_tool("get_abandoned_workloads")
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
         action = _sc(await tool.run({}))["recommended_action"].lower()
         assert "does not prove" in action
         assert "owner_kind" in action
@@ -1961,7 +1961,7 @@ class TestSavingsOverviewOverlap:
             },
         }
         httpx_mock.add_response(method="GET", url=_savings_overview_url(), json=payload)
-        tool = await mcp_app.get_tool("get_savings_overview")
+        tool = await mcp_app.get_tool("kubecost_get_savings_overview")
         sc = _sc(await tool.run({}))
         assert sc["status"] == "ok"
         assert sc["total_savings_per_month"] == pytest.approx(180.0)
@@ -2008,16 +2008,16 @@ class TestMcpSurface:
 
     @pytest.mark.asyncio
     async def test_rightsizing_review_prompt_registered(self, mcp_app):
-        assert "rightsizing_review" in {p.name for p in await mcp_app.list_prompts()}
+        assert "kubecost_review_rightsizing" in {p.name for p in await mcp_app.list_prompts()}
 
     @pytest.mark.asyncio
     async def test_rightsizing_review_covers_the_four_closing_questions(self, mcp_app):
-        rendered = await mcp_app.get_prompt("rightsizing_review")
+        rendered = await mcp_app.get_prompt("kubecost_review_rightsizing")
         body = "".join(m.content.text for m in (await rendered.render({})).messages).lower()
         for question in ("evidence", "policy", "authority", "rollback"):
             assert question in body, question
         # It must route to the realization step, not stop at request opportunity.
-        assert "get_cluster_rightsizing_recommendations" in body
+        assert "kubecost_get_cluster_rightsizing" in body
         assert "undersized_rows" in body
         assert "do not describe any row as safe" in body
 
@@ -2035,9 +2035,166 @@ class TestUndersizedRanking:
             _savings_rec("big-mem", cpu=30.0, memory=-20.0),
         )
         httpx_mock.add_response(method="GET", url=_savings_url(), json=payload)
-        tool = await mcp_app.get_tool("get_container_savings_recommendations")
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
         sc = _sc(await tool.run({"window": "15d"}))
-        assert [r["containerName"] for r in sc["undersized_rows"]] == ["big-mem", "tiny"]
+        assert [r["container_name"] for r in sc["undersized_rows"]] == ["big-mem", "tiny"]
         assert sc["undersized_count"] == 2
         # Neither belongs in the reduction candidates.
         assert sc["rows"] == []
+
+
+class TestWireContractFieldNames:
+    """Pin the emitted row key names so a framework default-flip fails loudly.
+
+    Four row models carry camelCase ``Field(alias=...)`` values that match the raw
+    Kubecost API keys the rows are validated *from*. FastMCP 3 serialized responses
+    with ``by_alias=True``, so those aliases were also the names clients saw; FastMCP 4
+    defaults to ``by_alias=False``, making them input aliases only. Contract 11.0
+    accepts snake_case as the wire format. If these assertions fail, the framework's
+    serialization default moved again -- do not "fix" them by renaming fields.
+    """
+
+    @pytest.mark.asyncio
+    async def test_allocation_row_keys_are_snake_case(self, httpx_mock: HTTPXMock, mcp_app, allocation_response_one_ns):
+        httpx_mock.add_response(method="GET", url=_allocation_url(), json=allocation_response_one_ns)
+        tool = await mcp_app.get_tool("kubecost_get_workload_costs")
+        row = _sc(await tool.run({"window": "7d", "aggregate": "cluster,namespace"}))["rows"][0]
+
+        assert {
+            "cpu_cost",
+            "cpu_cost_idle",
+            "ram_cost",
+            "ram_cost_idle",
+            "network_cost",
+            "pv_cost",
+            "gpu_cost",
+            "gpu_cost_idle",
+            "load_balancer_cost",
+            "shared_cost",
+            "total_cost",
+            "cpu_idle_pct",
+            "ram_idle_pct",
+            "gpu_idle_pct",
+            "total_idle_pct",
+        } <= row.keys()
+        assert not [k for k in row if k.lower() != k], f"camelCase leaked into an allocation row: {sorted(row)}"
+
+    @pytest.mark.asyncio
+    async def test_container_savings_row_keys_are_snake_case(self, httpx_mock: HTTPXMock, mcp_app):
+        httpx_mock.add_response(
+            method="GET", url=_savings_url(), json=_savings_payload(_savings_rec("api", cpu=10.0, memory=5.0))
+        )
+        tool = await mcp_app.get_tool("kubecost_get_container_sizing")
+        row = _sc(await tool.run({"window": "15d"}))["rows"][0]
+
+        assert {
+            "cluster_id",
+            "controller_kind",
+            "controller_name",
+            "container_name",
+            "monthly_savings_total",
+            "monthly_savings_cpu",
+            "monthly_savings_memory",
+            "recommended_cpu_in_milli_cores",
+            "recommended_memory_in_mib",
+            "current_cpu_in_milli_cores",
+            "current_memory_in_mib",
+            "current_efficiency_cpu",
+            "current_efficiency_memory",
+            "current_efficiency",
+            "avg_usage_cpu_in_milli_cores",
+            "avg_usage_memory_in_mib",
+            "max_usage_cpu_in_milli_cores",
+            "max_usage_memory_in_mib",
+        } <= row.keys()
+        assert not [k for k in row if k.lower() != k], f"camelCase leaked into a savings row: {sorted(row)}"
+
+    @pytest.mark.asyncio
+    async def test_abandoned_workload_row_keys_are_snake_case(
+        self, httpx_mock: HTTPXMock, mcp_app, abandoned_workloads_api_response
+    ):
+        httpx_mock.add_response(method="GET", url=_abandoned_url(), json=abandoned_workloads_api_response)
+        tool = await mcp_app.get_tool("kubecost_get_abandoned_workloads")
+        row = _sc(await tool.run({}))["rows"][0]
+
+        assert {
+            "cluster_id",
+            "ingress_bytes_per_second",
+            "egress_bytes_per_second",
+            "monthly_savings",
+        } <= row.keys()
+        assert not [k for k in row if k.lower() != k], f"camelCase leaked into an abandoned row: {sorted(row)}"
+
+    @pytest.mark.asyncio
+    async def test_quota_resource_change_uses_renamed_quota_fields(
+        self, httpx_mock: HTTPXMock, mcp_app, resource_quota_api_response
+    ):
+        """The Kubecost API's ``used`` / ``recommended`` surface as the clearer quota names.
+
+        This pair renames *semantically*, not just in case: the API's ``used`` is the
+        existing quota cap, never observed pod usage.
+        """
+        httpx_mock.add_response(method="GET", url=_resource_quota_url(), json=resource_quota_api_response)
+        tool = await mcp_app.get_tool("kubecost_get_quota_sizing")
+        change = _sc(await tool.run({}))["recommendations"][0]["resources"][0]
+
+        assert {"current_quota", "recommended_quota"} <= change.keys()
+        assert "used" not in change
+        assert "recommended" not in change
+
+
+# ── kubecost_ prefix invariant ────────────────────────────────────────────────
+
+
+class TestKubecostPrefixInvariant:
+    """Every advertised tool and prompt name must start with kubecost_.
+
+    This test is the future-proof gate that keeps a new tool or prompt from
+    reintroducing a bare name and breaking the self-namespacing contract.
+    """
+
+    @pytest.mark.asyncio
+    async def test_all_tool_names_have_kubecost_prefix(self, mcp_app):
+        tools = await mcp_app.list_tools()
+        bare = [t.name for t in tools if not t.name.startswith("kubecost_")]
+        assert bare == [], f"Tool(s) missing kubecost_ prefix: {bare}"
+
+    # Prompts follow kubecost_<verb>_<noun>; the verb says what kind of prompt it is.
+    _PROMPT_NAME = re.compile(r"^kubecost_(explore|guide|help|review|skill)_[a-z0-9_]+$")
+
+    # The full 12-prompt contract. Renaming a prompt is a breaking change, so it has
+    # to be made here on purpose rather than slip in through a function rename.
+    _EXPECTED_PROMPTS = frozenset(
+        {
+            "kubecost_explore_costs",
+            "kubecost_explore_cost_comparison",
+            "kubecost_explore_abandoned_workloads",
+            "kubecost_explore_top_spenders",
+            "kubecost_explore_cost_trend",
+            "kubecost_explore_container_sizing",
+            "kubecost_guide_container_sizing",
+            "kubecost_help_container_sizing_window",
+            "kubecost_help_container_sizing_filter",
+            "kubecost_review_rightsizing",
+            "kubecost_skill_cost_allocation",
+            "kubecost_skill_optimization",
+        }
+    )
+
+    @staticmethod
+    async def _all_prompt_names() -> set[str]:
+        """Prompt names with skills registered, i.e. the advertised surface."""
+        app = FastMCP("prompt-name-check")
+        register_kubecost_tools(app)
+        register_all_skills(app)
+        return {p.name for p in await app.list_prompts()}
+
+    @pytest.mark.asyncio
+    async def test_all_prompt_names_follow_the_verb_convention(self):
+        names = await self._all_prompt_names()
+        off_convention = sorted(n for n in names if not self._PROMPT_NAME.match(n))
+        assert off_convention == [], f"Prompt(s) not named kubecost_<verb>_<noun>: {off_convention}"
+
+    @pytest.mark.asyncio
+    async def test_prompt_names_match_the_contract(self):
+        assert await self._all_prompt_names() == self._EXPECTED_PROMPTS

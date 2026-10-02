@@ -124,12 +124,12 @@ Authentication, OIDC, API keys, and pod hardening: [`README.md`](../auth/README.
 
 ## Sizing Guidance Sources
 
-The container request-sizing prose lives in [`sizing_guidance.py`](../../src/mcp_kubecost/domain/kubecost/sizing_guidance.py) — the tool descriptions, the `container_rightsizing_guide` prompt, the `kubecost://guides/container-sizing` reference, and the `kubecost://guides/sizing-mechanics` deep dive. It is derived from:
+The container request-sizing prose lives in [`sizing_guidance.py`](../../src/mcp_kubecost/domain/kubecost/sizing_guidance.py) — the tool descriptions, the `kubecost_guide_container_sizing` prompt, the `kubecost://guides/container-sizing` reference, and the `kubecost://guides/sizing-mechanics` deep dive. It is derived from:
 
 - Kubernetes documentation on [quality of service classes](https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/), [node-pressure eviction](https://kubernetes.io/docs/concepts/scheduling-eviction/node-pressure-eviction/), and [CPU management policies](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/) — the authority for the eviction-order, out-of-memory, and exclusive-CPU claims.
 - Linux cgroup v2 [CPU](https://docs.kernel.org/admin-guide/cgroup-v2.html#cpu) and [memory](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory) controller documentation — for the request-versus-limit distinction and CFS quota throttling.
 - [Robusta KRR](https://github.com/robusta-dev/krr) and the [Vertical Pod Autoscaler](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler) recommendation policies, as reference points for our quantile and headroom choices.
 - Kubecost's [savings API](https://docs.kubecost.com/apis/apis-overview) documentation, for what `requestSizingV2` actually computes and returns.
-- *The Technical Guide to Kubernetes Rightsizing* (LearnKube, 2026), which shaped the framing: recommendation-as-candidate rather than verdict, the request-opportunity versus realizable-savings distinction, CPU throttling hiding behind low averages, and the evidence/policy/authority/rollback review gate now in the `rightsizing_review` prompt.
+- *The Technical Guide to Kubernetes Rightsizing* (LearnKube, 2026), which shaped the framing: recommendation-as-candidate rather than verdict, the request-opportunity versus realizable-savings distinction, CPU throttling hiding behind low averages, and the evidence/policy/authority/rollback review gate now in the `kubecost_review_rightsizing` prompt.
 
 No text from any of these is reproduced verbatim in `src/`. When changing a mechanism claim, check it against the Kubernetes or kernel documentation above rather than against our own prose — those are the authorities, and our summary is the thing that can drift.

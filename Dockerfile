@@ -43,6 +43,17 @@ RUN python3.12 -m uv sync --locked --no-editable --extra otel && \
 # Start from ubi-micro (no package manager) and add only Python 3.12, CA
 # certs, and tzdata via dnf --installroot. This keeps the runtime UBI-based
 # while excluding rpm/microdnf/libarchive from the final image.
+#
+# tsflags=noscripts keeps rpm scriptlets out of the installroot, so
+# ca-certificates never runs `update-ca-trust extract` and its extracted
+# bundles -- %ghost files, generated rather than shipped -- are absent. That
+# leaves /etc/pki/tls/cert.pem dangling and OpenSSL with an empty default
+# trust store, which broke OIDC discovery once FastMCP 4 switched to httpx2:
+# httpx2 verifies against the system store via truststore, where httpx 0.28
+# used certifi's bundled PEM. Copy this stage's own extracted tree in -- the
+# same content the scriptlet would have produced. Deliberately not
+# SSL_CERT_FILE, which would override a CA mounted into
+# /etc/pki/ca-trust/source/anchors.
 # ==============================================================================
 FROM registry.access.redhat.com/ubi9/ubi-micro:latest AS micro
 
@@ -55,6 +66,7 @@ RUN dnf install --installroot=/mnt/rootfs --releasever=9 \
     dnf reinstall --installroot=/mnt/rootfs --releasever=9 --setopt=tsflags=noscripts --nodocs -y tzdata && \
     dnf update --installroot=/mnt/rootfs -y && \
     dnf --installroot=/mnt/rootfs clean all && \
+    cp -a /etc/pki/ca-trust/extracted/. /mnt/rootfs/etc/pki/ca-trust/extracted/ && \
     rm -rf /mnt/rootfs/var/cache/* /mnt/rootfs/var/lib/dnf /mnt/rootfs/var/log/* /mnt/rootfs/tmp/* && \
     printf 'nonroot:x:65532:65532:nonroot:/app:/sbin/nologin\n' >> /mnt/rootfs/etc/passwd && \
     printf 'nonroot:x:65532:\n' >> /mnt/rootfs/etc/group && \
