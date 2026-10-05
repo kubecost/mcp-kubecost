@@ -10,25 +10,25 @@ Use this skill when investigating Kubernetes cluster costs, container cost alloc
 by namespace/service/label, or any workload-level spend breakdown.
 
 ## Available Tools
-- `get_kubecost_workload_costs` — Kubernetes cost allocation by
+- `kubecost_get_workload_costs` — Kubernetes cost allocation by
      any dimension (cluster, namespace, pod, node, label, etc.)
 
 ## Common Workflows
 
 ### Cluster inventory / cost overview
-1. `get_kubecost_workload_costs` with aggregate="cluster", window="lastmonth"
+1. `kubecost_get_workload_costs` with aggregate="cluster", window="lastmonth"
 2. Review total spend per cluster and top cost drivers
 
 ### Namespace cost breakdown
-1. `get_kubecost_workload_costs` with aggregate="cluster,namespace", window="7d"
+1. `kubecost_get_workload_costs` with aggregate="cluster,namespace", window="7d"
 2. Identify highest-spend namespaces per cluster
 
 ### Team/application cost allocation
-1. `get_kubecost_workload_costs` with aggregate="namespace" or aggregate="pod"
+1. `kubecost_get_workload_costs` with aggregate="namespace" or aggregate="pod"
 2. Use namespace as proxy for team/application grouping
 
 ### Daily cost trend analysis
-1. `get_kubecost_workload_costs` with accumulate=false, window="30d"
+1. `kubecost_get_workload_costs` with accumulate=false, window="30d"
 2. Spot cost spikes or gradual increases over time
 
 ## Parameter Guidance
@@ -49,8 +49,8 @@ by namespace/service/label, or any workload-level spend breakdown.
 
 ### filter_str parameter
 - Optional Kubecost server-side scope, e.g. `cluster:"cluster-one"+namespace:"prod"`
-- Reuse the same expression with `get_kubecost_cost_comparison` and
-  `get_container_savings_recommendations` to analyze the same workload population.
+- Reuse the same expression with `kubecost_get_cost_comparison` and
+  `kubecost_get_container_sizing` to analyze the same workload population.
 - Check `applied_filter` in each response; null means no server-side filter.
 - `min_total_cost` and `min_monthly_savings` are result thresholds, not workload scope.
 
@@ -64,7 +64,7 @@ def register_container_cost_allocation_skill(mcp: FastMCP) -> None:
     """Register the container cost allocation skill as an MCP prompt."""
 
     @mcp.prompt()
-    def kubecost_cost_allocation() -> str:
+    def kubecost_skill_cost_allocation() -> str:
         """Guidance for investigating Kubernetes cluster costs and container allocation.
 
         Use this when analyzing costs by cluster, namespace, label, or workload.

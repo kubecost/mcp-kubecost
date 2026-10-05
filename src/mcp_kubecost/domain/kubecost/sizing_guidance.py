@@ -226,7 +226,7 @@ Mechanism for both: `kubecost://guides/sizing-mechanics`.
 
 ## Profiles
 
-Use the `profile` parameter on `get_container_savings_recommendations`. The same three
+Use the `profile` parameter on `kubecost_get_container_sizing`. The same three
 names are accepted by the node-group and resource-quota tools, so there is one sizing
 vocabulary across the server. They are not the same mechanism, though: this tool expands
 a profile into sizing knobs you can override individually, while the other tools pass the
@@ -277,7 +277,7 @@ Two consequences:
 Reducing requests frees reserved capacity. The invoice changes one step later, when
 that freed capacity lets pods pack onto fewer nodes and a node is actually removed.
 Read these figures as the size of the opportunity, then call
-`get_cluster_rightsizing_recommendations` to see whether it can be realized.
+`kubecost_get_cluster_rightsizing` to see whether it can be realized.
 
 ## Practical Workflow
 
@@ -291,7 +291,7 @@ Read these figures as the size of the opportunity, then call
 6. Revisit every 30 to 60 days or after traffic changes. Record the window and sizing
    parameters alongside any approval, so a later reviewer knows which evidence it rested on
 
-Call `get_container_savings_recommendations` with your chosen profile to get data-backed
+Call `kubecost_get_container_sizing` with your chosen profile to get data-backed
 recommendations.
 """
 
@@ -338,11 +338,11 @@ above P80.
 
 ## Result Column Glossary
 
-- **currentEfficiency_*** — request vs actual usage (low = over-provisioned)
-- **AvgUsage_cpuInMilliCores / AvgUsage_memoryInMiB** — mean usage over the window
-- **MaxUsage_cpuInMilliCores / MaxUsage_memoryInMiB** — peak usage (large gap from Avg = burst/spike behavior)
-- **monthlySavings_memory < 0** — undersized memory; do NOT reduce memory request
-- **Recommended_cpuInMilliCores / Recommended_memoryInMiB** — suggested request
+- **current_efficiency_*** — request vs actual usage (low = over-provisioned)
+- **avg_usage_cpu_in_milli_cores / avg_usage_memory_in_mib** — mean usage over the window
+- **max_usage_cpu_in_milli_cores / max_usage_memory_in_mib** — peak usage (large gap from avg = burst/spike behavior)
+- **monthly_savings_memory < 0** — undersized memory; do NOT reduce memory request
+- **recommended_cpu_in_milli_cores / recommended_memory_in_mib** — suggested request
   based on quantiles and target utilization
 - **pct_change_cpu / pct_change_memory** — signed change from the current request.
   Negative means the request would shrink. Null when there is no current request to
@@ -507,7 +507,7 @@ FIELD_DESCRIPTIONS = {
         "Profiles do not apply a savings filter."
     ),
     "min_monthly_savings": (
-        "Minimum monthlySavings_total (USD) to keep in 'rows'. Default null returns every "
+        "Minimum monthly_savings_total (USD) to keep in 'rows'. Default null returns every "
         "reduction candidate. Pass 5.0 to cut noise and focus on material opportunities. "
         "This filter never touches 'undersized_rows' — under-provisioned workloads stay visible "
         "regardless of the threshold."
@@ -590,8 +590,8 @@ def build_result_interpretation(
         "---",
         "**How to read these results:**",
         "- CPU is compressible, memory is not. Be more conservative with memory recommendations.",
-        "- Low `currentEfficiency` = request far above observed use — the strongest reduction candidates.",
-        "- A large gap between `AvgUsage` and `MaxUsage` means bursty demand; size for the burst.",
+        "- Low `current_efficiency` = request far above observed use — the strongest reduction candidates.",
+        "- A large gap between `avg_usage` and `max_usage` means bursty demand; size for the burst.",
         "- `pct_change_cpu` / `pct_change_memory` are signed — negative means the request would shrink.",
     ]
 
@@ -651,14 +651,14 @@ def build_result_interpretation(
             "",
             "**Before applying:**",
             "- These are requests, not limits. The figures are request opportunity — the invoice moves "
-            "once freed capacity lets nodes consolidate (`get_cluster_rightsizing_recommendations`).",
+            "once freed capacity lets nodes consolidate (`kubecost_get_cluster_rightsizing`).",
             "- Not accounted for: CPU throttling, out-of-memory history, quality-of-service class, "
             "workload revision. Replicas and revisions are pooled into one distribution.",
             "- Reducing CPU: confirm the workload is not already being throttled. Low CPU usage can be "
             "the symptom rather than spare headroom.",
             "- Reducing memory: confirm the pod is not Guaranteed (request equals limit) — changing the "
             "request alone alters its quality-of-service class.",
-            "- Methodology: `container_rightsizing_guide` prompt. Mechanism: `kubecost://guides/sizing-mechanics`.",
+            "- Methodology: `kubecost_guide_container_sizing` prompt. Mechanism: `kubecost://guides/sizing-mechanics`.",
         ]
     )
     return "\n".join(lines)

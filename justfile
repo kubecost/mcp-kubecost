@@ -40,7 +40,7 @@ docker-build-run:
     echo ""
     echo -e "\033[33m  Image built. Wait a few seconds for the server to start.\033[0m"
     echo -e "\033[33m  Then open a new terminal and run your tests. Example command:\033[0m"
-    echo -e "\033[33m  fastmcp call ./config/mcp-http.json get_container_savings_recommendations --input-json '{\"window\": \"15d\"}'\033[0m"
+    echo -e "\033[33m  fastmcp call ./config/mcp-http.json kubecost_get_container_sizing --input-json '{\"window\": \"15d\"}'\033[0m"
     docker run --rm \
       --name mcp-kubecost \
       -p 3030:3030 \
@@ -98,7 +98,7 @@ call-all CLUSTER="":
         --cluster "{{CLUSTER}}" \
         2>/dev/null
 
-# Run get_kubecost_cost_comparison for yesterday-vs-day-before and last-7-days-vs-month-ago
+# Run kubecost_get_cost_comparison for yesterday-vs-day-before and last-7-days-vs-month-ago
 cost-comparison AGGREGATE="namespace":
     scripts/cost_comparison-day.sh {{MCP_CONFIG}} {{AGGREGATE}}
 
@@ -229,13 +229,13 @@ test-ci-locally *args:
 test-demo:
     npx @modelcontextprotocol/inspector \
     --cli https://mcp.demo.kubecost.cloud/mcp \
-    --method tools/call --tool-name get_savings_overview
+    --method tools/call --tool-name kubecost_get_savings_overview
 
 ## IBM internal SSO testing:
 test-sso:
     npx @modelcontextprotocol/inspector \
     --cli https://ibm-sso.demo.kubecost.cloud/mcp \
-    --method tools/call --tool-name get_savings_overview
+    --method tools/call --tool-name kubecost_get_savings_overview
 
 # run pyrefly check
 pyrefly-check:

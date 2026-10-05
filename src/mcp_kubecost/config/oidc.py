@@ -16,6 +16,7 @@ import hmac
 import json
 import logging
 import shutil
+import ssl
 import uuid
 from contextvars import ContextVar
 from pathlib import Path
@@ -310,6 +311,51 @@ class AdaptiveOidcProxy(OIDCProxy):
         return _verify_id_token.get()
 
 
+_TLS_HINT = (
+    "The TLS handshake with OIDC_ISSUER_URL failed certificate verification, so nothing was "
+    "fetched. The issuer's chain is not anchored in this container's trust store: either the "
+    "store is empty, or the issuer (or an intercepting egress proxy) is signed by a private CA. "
+    "Mount that CA into /etc/pki/ca-trust/source/anchors, or point SSL_CERT_FILE at a PEM bundle "
+    "that includes it."
+)
+
+_CONNECT_HINT = (
+    "The connection to OIDC_ISSUER_URL never completed, so nothing was fetched. Check that the "
+    "host resolves and that this pod's egress — NetworkPolicy, proxy, firewall — permits it."
+)
+
+_METADATA_HINT = (
+    "Most often this means OIDC_ISSUER_URL returned an HTML login page instead of "
+    "JSON discovery metadata. Confirm that MCP_EXTERNAL_URL names the public origin "
+    "and that the reverse proxy routes /mcp, /oauth/mcp, and their well-known metadata "
+    "paths to this Service without rewriting them."
+)
+
+
+def _startup_failure_hint(exc: BaseException) -> str:
+    """Return the remediation hint matching how discovery actually failed.
+
+    The default hint describes a reachable endpoint serving the wrong body. A
+    transport failure never got that far, so naming reverse-proxy rewriting
+    there sends the reader somewhere the bytes never reached.
+    """
+    chain: list[BaseException] = []
+    seen: set[int] = set()
+    cursor: BaseException | None = exc
+    while cursor is not None and id(cursor) not in seen:
+        seen.add(id(cursor))
+        chain.append(cursor)
+        cursor = cursor.__cause__ or cursor.__context__
+
+    if any(isinstance(link, ssl.SSLError) for link in chain):
+        return _TLS_HINT
+    # httpx/httpx2 transport errors do not subclass OSError, so match the
+    # underlying socket failure or the exception name FastMCP surfaces.
+    if any(isinstance(link, OSError) or type(link).__name__ in {"ConnectError", "ConnectTimeout"} for link in chain):
+        return _CONNECT_HINT
+    return _METADATA_HINT
+
+
 def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
     """Return a configured ``OIDCProxy`` if OIDC is enabled, else ``None``.
 
@@ -393,10 +439,5 @@ def create_oidc_provider(settings: Settings | None = None) -> OIDCProxy | None:
     except Exception as exc:
         logger.debug("OIDC provider initialization failed", exc_info=True)
         raise ConfigError(
-            "OIDC provider initialization failed "
-            f"({type(exc).__name__}): {exc}. "
-            "Most often this means OIDC_ISSUER_URL returned an HTML login page instead of "
-            "JSON discovery metadata. Confirm that MCP_EXTERNAL_URL names the public origin "
-            "and that the reverse proxy routes /mcp, /oauth/mcp, and their well-known metadata "
-            "paths to this Service without rewriting them."
+            f"OIDC provider initialization failed ({type(exc).__name__}): {exc}. {_startup_failure_hint(exc)}"
         ) from exc

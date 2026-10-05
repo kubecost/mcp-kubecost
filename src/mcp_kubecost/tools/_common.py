@@ -22,7 +22,7 @@ import logging
 import re
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any, NoReturn
+from typing import Annotated, Any, NoReturn
 
 import httpx
 from fastmcp.exceptions import ToolError as McpToolError
@@ -38,9 +38,11 @@ logger = logging.getLogger(__name__)
 # Re-export so callers that need to catch McpToolError can import it from here
 # rather than depending on fastmcp.exceptions directly.
 __all__ = [
+    "DEFAULT_VIEW_ID",
     "DEFAULT_WINDOW",
     "MIN_QUANTILE_WINDOW",
     "BaseToolResponse",
+    "OptionalViewId",
     "McpToolError",
     "QueryStatus",
     "ResolvedWindow",
@@ -73,6 +75,33 @@ def float_field(row: dict[str, Any], key: str) -> float:
 
 # Default query window used by all tools unless the caller overrides it.
 DEFAULT_WINDOW: str = get_settings().default_window
+
+# Default view scope for every tool that queries the API. Resolved eagerly, for the
+# same reason DEFAULT_WINDOW is: both are used as *default argument values* in tool
+# signatures, which Python evaluates once at function-definition time.
+#
+# ``None`` means no ``viewId`` query parameter is sent — the behavior Kubecost OSS
+# expects. A deployment that fronts a view-scoped API sets ``DEFAULT_VIEW_ID`` so the
+# schema the model sees carries that default.
+DEFAULT_VIEW_ID: str | None = get_settings().default_view_id
+
+# The trailing hint is conditional because it is only true of an unconfigured
+# deployment. Kubecost OSS wants no ``viewId`` at all, but a view-scoped API in
+# front of this server may *require* one — Cloudability's proxy answers 403 "View-based
+# filtering is not yet implemented for this endpoint" when the parameter is missing.
+# Telling the model to leave it unset there would walk it straight into that error.
+_VIEW_ID_DESCRIPTION = 'View ID restricting which resources the query can see. Use "0" for unrestricted access.'
+if DEFAULT_VIEW_ID is None:
+    _VIEW_ID_DESCRIPTION += " Leave unset on a Kubecost installation that does not use views."
+
+OptionalViewId = Annotated[
+    str | None,
+    Field(
+        max_length=50,
+        pattern=r"^[0-9]+$",
+        description=_VIEW_ID_DESCRIPTION,
+    ),
+]
 
 # Quantile algorithms (quantileOfAverages, quantileOfMaxes) require enough
 # data points for a meaningful distribution. Enforce at least this many days.
