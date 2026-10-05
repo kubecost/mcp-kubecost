@@ -71,40 +71,40 @@ Point your assistant at the server's `/mcp` endpoint. [docs/clients/README.md](d
 
 **11 tools** — all read-only, all structured for LLM consumption:
 
-| Tool                                      | Description                                                                                  |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `kubecost_list_windows`                   | List the valid time windows for Kubecost cost queries, each resolved to real dates.          |
-| `get_kubecost_workload_costs`             | Return Kubernetes cost allocation from Kubecost grouped by chosen dimensions.                |
-| `get_kubecost_cost_comparison`            | Compare Kubernetes cost allocation between two time windows to find cost changes and spikes. |
-| `get_container_savings_recommendations`   | Return Kubernetes container request-sizing candidates and request opportunity.               |
-| `get_abandoned_workloads`                 | Return pods with abnormally low network traffic — possible abandoned workloads.              |
-| `get_savings_overview`                    | Return a ranked summary of all Kubecost savings categories.                                  |
-| `get_pv_sizing_recommendations`           | Return PersistentVolumeClaim right-sizing recommendations ranked by monthly savings.         |
-| `get_local_disk_savings`                  | Return underutilized node-local disk savings recommendations.                                |
-| `get_cluster_rightsizing_recommendations` | Return node group scale-in/scale-out/instance-type recommendations for a cluster.            |
-| `get_unclaimed_volumes`                   | Return PersistentVolumes that are provisioned but not bound to any PVC.                      |
-| `get_resource_quota_recommendations`      | Return namespace-level ResourceQuota sizing recommendations.                                 |
+| Tool | Description |
+|------|-------------|
+| `kubecost_list_windows` | List the valid time windows for Kubecost cost queries, each resolved to real dates. |
+| `kubecost_get_workload_costs` | Return Kubernetes cost allocation from Kubecost grouped by chosen dimensions. |
+| `kubecost_get_cost_comparison` | Compare Kubernetes cost allocation between two time windows to find cost changes and spikes. |
+| `kubecost_get_container_sizing` | Return Kubernetes container request-sizing candidates and request opportunity. |
+| `kubecost_get_abandoned_workloads` | Return pods with abnormally low network traffic — possible abandoned workloads. |
+| `kubecost_get_savings_overview` | Return a ranked summary of all Kubecost savings categories. |
+| `kubecost_get_pv_sizing` | Return PersistentVolumeClaim right-sizing recommendations ranked by monthly savings. |
+| `kubecost_get_local_disk_savings` | Return underutilized node-local disk savings recommendations. |
+| `kubecost_get_cluster_rightsizing` | Return node group scale-in/scale-out/instance-type recommendations for a cluster. |
+| `kubecost_get_unclaimed_volumes` | Return PersistentVolumes that are provisioned but not bound to any PVC. |
+| `kubecost_get_quota_sizing` | Return namespace-level ResourceQuota sizing recommendations. |
 
 **12 prompts** — step-by-step workflows your assistant can follow:
 
-| Prompt                          | Description                                                                                          |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `container_rightsizing_guide`   | Explain how to properly size Kubernetes container CPU and memory requests.                           |
-| `explore_container_savings`     | Start a guided container rightsizing exploration. Presents choices step-by-step.                     |
-| `rightsizing_review`            | Run a full container rightsizing review — candidates, reliability risks, what would                  |
-| `container_savings_window_help` | Explain the time window options for the container savings tool.                                      |
-| `container_savings_filter_help` | Explain the min_monthly_savings filter for container savings.                                        |
-| `explore_costs`                 | Start a guided Kubernetes cost exploration. Presents choices step-by-step.                           |
-| `explore_cost_comparison`       | Start a guided cost anomaly / spike investigation using period-over-period comparison.               |
-| `top_spenders`                  | Show top cost drivers across clusters and namespaces for a given window.                             |
-| `cost_trend`                    | Show daily cost trend for a given aggregation dimension.                                             |
-| `explore_abandoned_workloads`   | Start a guided abandoned-workload investigation. Walks the user through threshold and scope choices. |
-| `optimization`                  | Guidance for rightsizing resources and diagnosing Kubernetes cost anomalies.                         |
-| `kubecost_cost_allocation`      | Guidance for investigating Kubernetes cluster costs and container allocation.                        |
+| Prompt | Description |
+|--------|-------------|
+| `kubecost_guide_container_sizing` | Explain how to properly size Kubernetes container CPU and memory requests. |
+| `kubecost_explore_container_sizing` | Start a guided container rightsizing exploration. Presents choices step-by-step. |
+| `kubecost_review_rightsizing` | Run a full container rightsizing review — candidates, reliability risks, what would |
+| `kubecost_help_container_sizing_window` | Explain the time window options for the container sizing tool. |
+| `kubecost_help_container_sizing_filter` | Explain the min_monthly_savings filter for container sizing. |
+| `kubecost_explore_costs` | Start a guided Kubernetes cost exploration. Presents choices step-by-step. |
+| `kubecost_explore_cost_comparison` | Start a guided cost anomaly / spike investigation using period-over-period comparison. |
+| `kubecost_explore_top_spenders` | Show top cost drivers across clusters and namespaces for a given window. |
+| `kubecost_explore_cost_trend` | Show daily cost trend for a given aggregation dimension. |
+| `kubecost_explore_abandoned_workloads` | Start a guided abandoned-workload investigation. Walks the user through threshold and scope choices. |
+| `kubecost_skill_optimization` | Guidance for rightsizing resources and diagnosing Kubernetes cost anomalies. |
+| `kubecost_skill_cost_allocation` | Guidance for investigating Kubernetes cluster costs and container allocation. |
 
 ### Container sizing profiles
 
-`get_container_savings_recommendations` accepts a `profile` that bundles the sizing knobs, so you can ask for "production sizing" instead of picking quantiles by hand:
+`kubecost_get_container_sizing` accepts a `profile` that bundles the sizing knobs, so you can ask for "production sizing" instead of picking quantiles by hand:
 
 Pick a profile on **consequence of failure**, not on which environment the workload runs in — a staging cluster that gates releases deserves more headroom than a forgotten production batch job.
 
@@ -118,7 +118,7 @@ Target utilization is the utilization the new request should run at — Kubecost
 
 Note that `development` raises the **CPU** target only. No profile buys savings on memory: CPU is compressible, so an under-provisioned CPU request means the workload runs slower under contention and recovers on its own. Memory is not, and a memory request below normal usage moves the pod up the eviction order when its node runs short. If you want that trade anyway, set `target_ram_utilization` explicitly.
 
-Profiles never filter results. Pass `min_monthly_savings=5.0` to hide small opportunities; it only trims the reduction candidates in `rows` and never touches `undersized_rows`, which carries workloads reserving _less_ than they use. Any explicit parameter overrides the profile. Ask for the `container_rightsizing_guide` prompt for the methodology, or `kubecost://guides/sizing-mechanics` for why the advice is what it is.
+Profiles never filter results. Pass `min_monthly_savings=5.0` to hide small opportunities; it only trims the reduction candidates in `rows` and never touches `undersized_rows`, which carries workloads reserving _less_ than they use. Any explicit parameter overrides the profile. Ask for the `kubecost_guide_container_sizing` prompt for the methodology, or `kubecost://guides/sizing-mechanics` for why the advice is what it is.
 
 ## Telemetry (experimental)
 

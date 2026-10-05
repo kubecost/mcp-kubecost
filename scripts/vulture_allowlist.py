@@ -12,6 +12,11 @@ tracked_ips  # unused property (src/mcp_kubecost/server.py:152)
 _uses_alternate_verification  # unused method (src/mcp_kubecost/config/oidc.py:106)
 on_call_tool  # unused method (src/mcp_kubecost/middleware.py:21)
 
+# Public API for embedding applications: installs their own HTTP transport.
+# Called from tests/ and from downstream servers, neither of which vulture scans.
+set_http_backend  # unused function (src/mcp_kubecost/client.py:343)
+reset_http_backend  # unused function (src/mcp_kubecost/client.py:364)
+
 # Enum members are constructed dynamically from their serialized values.
 NONE  # unused variable (src/mcp_kubecost/config/settings.py:20)
 OPEN  # unused variable (src/mcp_kubecost/config/settings.py:21)

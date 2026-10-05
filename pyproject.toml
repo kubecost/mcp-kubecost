@@ -1,16 +1,17 @@
 [project]
 name = "mcp-kubecost"
-version = "0.17.1"
+version = "0.18.0"
 description = "FinOps-first MCP server for Kubecost analytics."
 readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.12"
 dependencies = [
-    "cryptography>=50.0.1",
-    "fastmcp>=3.4.7,<4.0",
+    "cryptography>=50.0.2",
+    "fastmcp>=4.0.9,<5.0",
     "httpx>=0.28.1",
-    "py-key-value-aio[filetree]>=0.4.5",
-    "python-dotenv>=1.2.3",
+    "py-key-value-aio[filetree]>=0.4.6",
+    "python-dotenv>=1.2.4",
+    "truststore>=0.10.4",
 ]
 
 [project.optional-dependencies]
@@ -25,7 +26,7 @@ otel = [
   "opentelemetry-instrumentation-starlette>=0.65b0",
 ]
 dev = [
-  "pre-commit>=4.6.2",
+  "pre-commit",
   "pyrefly",
   "pytest",
   "pytest-asyncio",

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs get_kubecost_cost_comparison twice:
+# Runs kubecost_get_cost_comparison twice:
 #   1. Yesterday vs the day before yesterday (1-day windows)
 #   2. The last 7 days (ending at UTC midnight this morning) vs the same
 #      7-day range exactly one calendar month earlier
@@ -16,7 +16,7 @@ set -euo pipefail
 #
 # Notes:
 #   - Windows are RFC3339 ranges computed in UTC so they satisfy the
-#     get_kubecost_cost_comparison validation rules (no bare "Nd"/today/week/month,
+#     kubecost_get_cost_comparison validation rules (no bare "Nd"/today/week/month,
 #     equal-length windows, nothing reaching into today).
 #   - Calendar-month arithmetic shifts the day-of-month back by one month; near
 #     month-end boundaries most date implementations clamp/roll the day, which is
@@ -50,5 +50,5 @@ echo "== 1. Yesterday vs day before yesterday =="
 echo "current:  ${YESTERDAY_START},${YESTERDAY_END}"
 echo "baseline: ${DAY_BEFORE_START},${DAY_BEFORE_END}"
 fastmcp call "$MCP_CONFIG" \
-  get_kubecost_cost_comparison \
+  kubecost_get_cost_comparison \
   --input-json "{\"current_window\": \"${YESTERDAY_START},${YESTERDAY_END}\", \"baseline_window\": \"${DAY_BEFORE_START},${DAY_BEFORE_END}\", \"aggregate\": \"${AGGREGATE}\"}"
