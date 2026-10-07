@@ -1,0 +1,18 @@
+.github/workflows/ci.yml
+  h_cca6aa2712613d 40
+.github/workflows/release.yml
+  h_cca6aa2712613d 176,697
+.github/workflows/sbom.yml
+  h_cca6aa2712613d 63,80,92,97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "bababcc64a8743b93e768e6bf316509802a32d91",
+  "prompts": {},
+  "humans": {
+    "h_cca6aa2712613d": {
+      "author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
