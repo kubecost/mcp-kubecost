@@ -173,7 +173,7 @@ jobs:
           fi
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: ${{ steps.id.outputs.artifact_name }}
           path: dist/*
@@ -694,9 +694,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
-          role-to-assume: arn:aws:iam::297945954695:role/kubecost-integrations-ecr
-          role-duration-seconds: 1000
-          role-skip-session-tagging: false
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           role-session-name: mcp-kubecost-release
           aws-region: us-east-1
 
