@@ -1,0 +1,20 @@
+.github/workflows/ci.yml
+  h_cca6aa2712613d 7-8,10-11
+.github/workflows/integrations-ci-cd-kicker.yaml
+  h_cca6aa2712613d 7-17,35-36,38-40
+.github/workflows/release.yml
+  h_cca6aa2712613d 33-38,40-66,68,231-234,237,245,780-809
+.github/workflows/sbom.yml
+  h_cca6aa2712613d 13-21,32-33,35,50-55,57-63,138-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "f9715b4fefec252da677b8037f02708fa41d81a2",
+  "prompts": {},
+  "humans": {
+    "h_cca6aa2712613d": {
+      "author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
