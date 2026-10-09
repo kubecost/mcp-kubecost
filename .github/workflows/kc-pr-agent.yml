@@ -1,0 +1,64 @@
+# Slash commands (/review, /describe, /improve, /ask ...) run from PR comments. Uncomment the
+# pull_request trigger to also run describe/review/improve automatically on new PRs.
+
+name: PR-Agent
+
+on:
+  # pull_request:
+  #   types: [opened, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+  id-token: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  pr_agent_job:
+    if: >-
+      github.event_name != 'issue_comment' ||
+      (github.event.issue.pull_request && github.event.sender.type != 'Bot' &&
+      contains(github.event.comment.body, '/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: Run PR Agent commands
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          aws-region: ${{ vars.AWS_REGION || vars.KC_PR_AGENT_AWS_REGION || 'us-west-2' }}
+          role-to-assume: ${{ vars.AWS_ROLE_TO_ASSUME || vars.KC_PR_AGENT_AWS_ROLE_TO_ASSUME }}
+
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          client-id: ${{ vars.KC_ACTIONS_BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KC_ACTIONS_BOT_APP_PRIVATE_KEY }}
+          # Omitting owner/repositories scopes the token to this repository.
+          permission-contents: read
+          permission-pull-requests: write
+
+      - name: PR Agent action step
+        id: pragent
+        uses: kubecost/kc-pr-agent@v0.47
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          AWS_USE_IMDS: "true"
+          AWS_REGION: ${{ vars.AWS_REGION || vars.KC_PR_AGENT_AWS_REGION || 'us-west-2' }}
+          AWS_REGION_NAME: ${{ vars.AWS_REGION || vars.KC_PR_AGENT_AWS_REGION || 'us-west-2' }}
+          CONFIG__MODEL: bedrock/converse/${{ vars.AWS_OPUS_ARN || vars.KC_PR_AGENT_AWS_OPUS_ARN }}
+          CONFIG__FALLBACK_MODELS: '["bedrock/converse/${{ vars.AWS_OPUS_ARN || vars.KC_PR_AGENT_AWS_OPUS_ARN }}"]'
+          CONFIG__ENABLE_CLAUDE_ADAPTIVE_THINKING: "true"
+          CONFIG__CLAUDE_ADAPTIVE_THINKING_MODELS_OVERRIDE: '["bedrock/converse/${{ vars.AWS_OPUS_ARN || vars.KC_PR_AGENT_AWS_OPUS_ARN }}"]'
+          CONFIG__CUSTOM_MODEL_MAX_TOKENS: "1000000"
+          GITHUB_ACTION_CONFIG.AUTO_DESCRIBE: true
+          GITHUB_ACTION_CONFIG.AUTO_REVIEW: true
+          GITHUB_ACTION_CONFIG.AUTO_IMPROVE: true
