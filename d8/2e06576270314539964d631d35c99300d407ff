@@ -1,0 +1,14 @@
+.github/workflows/kc-pr-agent.yml
+  h_cca6aa2712613d 1-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d82e06576270314539964d631d35c99300d407ff",
+  "prompts": {},
+  "humans": {
+    "h_cca6aa2712613d": {
+      "author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
