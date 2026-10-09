@@ -30,8 +30,42 @@ on:
 permissions:
   contents: write   # required for creating the GitHub Release and pushing to gh-pages
 
+# One release at a time: two dispatches would race on the bump commit, the tag
+# and `latest`. Never cancel a half-finished release; a second dispatch waits.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  # Real releases bump, tag and publish `latest`, so they must come from main.
+  # Dry-run has no side effects and may run from any branch. Fail loudly here,
+  # before tests, rather than silently skipping the release jobs.
+  check-release-ref:
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require main for a real release
+        env:
+          REF: ${{ github.ref }}
+          DRY_RUN: ${{ inputs.dry-run }}
+        run: |
+          set -euo pipefail
+          if [ "$DRY_RUN" != "true" ] && [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::Real releases must be dispatched from main (got ${REF}). Re-run from main, or set dry-run to true."
+            exit 1
+          fi
+          echo "Ref ${REF} is allowed (dry-run=${DRY_RUN})."
+
+  # Run the full CI suite against the dispatched commit before anything is
+  # bumped, tagged or published.
+  test:
+    needs: check-release-ref
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     outputs:
       chart_version: ${{ steps.id.outputs.py_version }}
@@ -173,7 +207,7 @@ jobs:
           fi
 
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: ${{ steps.id.outputs.artifact_name }}
           path: dist/*
@@ -194,8 +228,13 @@ jobs:
             echo "::error::No files in dist/ to attach to the release."
             exit 1
           fi
+          # Tag the commit that was built (the bump commit pushed above), not
+          # whatever the default branch HEAD is when the release is created.
+          # publish-image checks out this tag, so the image matches the wheel.
+          TARGET_SHA=$(git rev-parse HEAD)
           if [ -n "$EXTRA_NOTES" ]; then
             gh release create "$TAG" \
+              --target "$TARGET_SHA" \
               --title "$TAG" \
               --notes "$EXTRA_NOTES" \
               --generate-notes \
@@ -203,6 +242,7 @@ jobs:
               "${files[@]}"
           else
             gh release create "$TAG" \
+              --target "$TARGET_SHA" \
               --title "$TAG" \
               --generate-notes \
               $PRERELEASE_FLAG \
@@ -694,9 +734,7 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v6.3.0
         with:
-          role-to-assume: arn:aws:iam::297945954695:role/kubecost-integrations-ecr
-          role-duration-seconds: 1000
-          role-skip-session-tagging: false
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           role-session-name: mcp-kubecost-release
           aws-region: us-east-1
 
@@ -739,3 +777,33 @@ jobs:
             echo ""
             echo "Digest: \`${ECR_DIGEST}\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # The v* tag is created by `gh release create` with GITHUB_TOKEN, and events
+  # caused by GITHUB_TOKEN do not start new workflow runs. The `push: tags`
+  # triggers in sbom.yml and integrations-ci-cd-kicker.yaml therefore never fire
+  # for a pipeline release, so call both explicitly. Neither is in the needs of
+  # update-helm-index or publish-public-ecr: a failure here turns the run red
+  # without changing what gets published.
+  #
+  # The SBOM is a source (filesystem) scan, not an image scan, so it only needs
+  # the GitHub Release that build creates.
+  sbom:
+    needs: build
+    if: ${{ !inputs.dry-run }}
+    uses: ./.github/workflows/sbom.yml
+    permissions:
+      contents: write   # publish-sbom uploads to the release
+      actions: read     # sbom.yml declares it at workflow level
+    with:
+      release_version: ${{ needs.build.outputs.release_tag }}
+
+  # Tell integration-ci-cd once the versioned image is in ICR.
+  notify-integration-ci-cd:
+    needs: [build, publish-image]
+    if: ${{ !inputs.dry-run }}
+    uses: ./.github/workflows/integrations-ci-cd-kicker.yaml
+    permissions: {}     # uses a GitHub App token, not GITHUB_TOKEN
+    with:
+      tag: ${{ needs.build.outputs.release_tag }}
+    secrets:
+      KC_ACTIONS_BOT_APP_PRIVATE_KEY: ${{ secrets.KC_ACTIONS_BOT_APP_PRIVATE_KEY }}

@@ -10,6 +10,15 @@ on:
         description: 'Release version (e.g., v1.0.0 or 1.0.0)'
         required: false
         type: string
+  # release.yml calls this after creating the release: its tag is made with
+  # GITHUB_TOKEN, which does not fire the `push: tags` trigger above.
+  # github.event_name is the caller's (workflow_dispatch) when called.
+  workflow_call:
+    inputs:
+      release_version:
+        description: 'Release version (e.g., v1.0.0 or 1.0.0)'
+        required: false
+        type: string
   pull_request:
     types: [opened, synchronize]
     branches:
@@ -20,8 +29,10 @@ on:
       - 'Dockerfile'
       - 'config/fastmcp-http.json'
 
+# Include the requested version so a manual dispatch on main cannot cancel the
+# SBOM run that release.yml calls (both have github.ref == refs/heads/main).
 concurrency:
-  group: sbom-${{ github.ref }}
+  group: sbom-${{ github.ref }}-${{ inputs.release_version }}
   cancel-in-progress: true
 
 permissions:
@@ -36,13 +47,20 @@ jobs:
     steps:
       - name: Determine version
         id: version
+        # Values go through env, not inline expressions: release_version is free text.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.release_version }}
         run: |
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == refs/tags/* ]]; then
-            VERSION="${{ github.ref_name }}"
-            VERSION="${VERSION#v}"
-          elif [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ inputs.release_version }}" ]]; then
-            VERSION="${{ inputs.release_version }}"
-            VERSION="${VERSION#v}"
+          set -euo pipefail
+          # Branch on the input, not the event: under workflow_call event_name is
+          # the caller's. The input is only ever set by dispatch or workflow_call.
+          if [[ -n "$INPUT_VERSION" ]]; then
+            VERSION="${INPUT_VERSION#v}"
+          elif [[ "$EVENT_NAME" == "push" && "$REF" == refs/tags/* ]]; then
+            VERSION="${REF_NAME#v}"
           else
             VERSION="dev"
           fi
@@ -60,7 +78,7 @@ jobs:
           format: 'spdx-json'
           output: 'mcp-kubecost-source-sbom.spdx.json'
       - name: Upload SPDX artifact
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: sbom-spdx
           path: mcp-kubecost-source-sbom.spdx.json
@@ -77,7 +95,7 @@ jobs:
           format: 'cyclonedx'
           output: 'mcp-kubecost-source-sbom.cyclonedx.json'
       - name: Upload CycloneDX artifact
-        uses: actions/upload-artifact@v7.0.1
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: sbom-cyclonedx
           path: mcp-kubecost-source-sbom.cyclonedx.json
@@ -89,12 +107,12 @@ jobs:
       VERSION: ${{ needs.determine-version.outputs.version }}
     steps:
       - name: Download SPDX artifact
-        uses: actions/download-artifact@v8.0.1
+        uses: actions/download-artifact@v8.0.2
         with:
           name: sbom-spdx
 
       - name: Download CycloneDX artifact
-        uses: actions/download-artifact@v8.0.1
+        uses: actions/download-artifact@v8.0.2
         with:
           name: sbom-cyclonedx
 
@@ -117,6 +135,10 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          # This job has no checkout, so gh cannot infer the repo from a git remote.
+          GH_REPO: ${{ github.repository }}
+          # Under workflow_call event_name is the caller's (workflow_dispatch), so
+          # this resolves to v<release_version without v>, e.g. v0.18.0.
           TAG_NAME: ${{ github.event_name == 'push' && github.ref_name || format('v{0}', env.VERSION) }}
         run: |
           files=(mcp-kubecost-source-sbom.spdx.json mcp-kubecost-source-sbom.cyclonedx.json)

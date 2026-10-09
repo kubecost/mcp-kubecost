@@ -4,6 +4,17 @@ on:
   push:
     tags:
       - "v*"
+  # release.yml calls this after publishing: its tag is created with
+  # GITHUB_TOKEN, which does not fire the `push: tags` trigger above.
+  workflow_call:
+    inputs:
+      tag:
+        description: "Release tag to announce, as github.ref_name would be on a tag push (e.g. v0.18.0)."
+        required: true
+        type: string
+    secrets:
+      KC_ACTIONS_BOT_APP_PRIVATE_KEY:
+        required: true
 
 jobs:
   trigger:
@@ -21,6 +32,10 @@ jobs:
       - name: Trigger repository dispatch
         env:
           GH_TOKEN: ${{ steps.generate-app-token.outputs.token }}
+          # inputs.tag when called from release.yml; the pushed tag otherwise.
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
-          echo '{"event_type":"mcp-kubecost-release","client_payload":{"tag":"${{ github.ref_name }}"}}' \
+          set -euo pipefail
+          jq -n --arg tag "$TAG" \
+            '{event_type: "mcp-kubecost-release", client_payload: {tag: $tag}}' \
             | gh api repos/kubecost/integration-ci-cd/dispatches --input -
