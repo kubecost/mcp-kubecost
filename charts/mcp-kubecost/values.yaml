@@ -3,7 +3,7 @@
 # are accepted and unused. Keys and defaults here mirror the parent chart:
 # https://github.com/kubecost/kubecost/blob/develop/kubecost/values.yaml
 global:
-  # global.imageRegistry overrides image.registry for every image in this chart.
+  # global.imageRegistry is the registry for images whose image.registry is empty.
   # Kubecost distributes via IBM Cloud Container Registry, so the default matches
   # the parent chart's global.imageRegistry rather than being empty.
   imageRegistry: icr.io
@@ -88,9 +88,13 @@ nameOverride: ""
 # fullnameOverride replaces the full generated resource name.
 fullnameOverride: ""
 
+# fullImageName is used verbatim as the container image when set, ignoring image.registry,
+# image.repository, image.tag, and global.imageRegistry. E.g. registry.example.com/mcp:v1@sha256:...
+fullImageName: ""
+
 image:
-  # image.registry is the container registry host. Overridden by global.imageRegistry.
-  registry: icr.io
+  # image.registry is the container registry host. Falls back to global.imageRegistry when empty.
+  registry: ""
   # image.repository is the image path within the registry (no host).
   repository: kubecost/mcp-kubecost
   # image.tag is the container image tag. Defaults to the chart appVersion

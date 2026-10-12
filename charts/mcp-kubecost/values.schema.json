@@ -65,6 +65,7 @@
     },
     "nameOverride": { "type": "string" },
     "fullnameOverride": { "type": "string" },
+    "fullImageName": { "type": "string" },
     "image": {
       "type": "object",
       "additionalProperties": false,
