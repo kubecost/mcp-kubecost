@@ -25,21 +25,22 @@ component's storageClass defers to global.defaultStorageClass when unset.
 {{- end }}
 
 {{/*
-Fully qualified container image. `global.imageRegistry` overrides `image.registry`
-when this chart is a Kubecost subchart (IBM sets this to icr.io for ICR-distributed images).
+Fully qualified container image. `image.registry` wins; `global.imageRegistry` is the
+fallback, matching the Kubecost parent chart's per-component registries.
+`fullImageName` overrides all of these.
 */}}
 {{- define "mcp-kubecost.image" -}}
+{{- if .Values.fullImageName -}}
+{{- .Values.fullImageName -}}
+{{- else -}}
 {{- $tag := default .Chart.AppVersion .Values.image.tag -}}
 {{- $repository := .Values.image.repository -}}
-{{- $registry := .Values.image.registry | default "" -}}
-{{- $globalRegistry := (.Values.global).imageRegistry | default "" -}}
-{{- if $globalRegistry -}}
-{{- $registry = $globalRegistry -}}
-{{- end -}}
+{{- $registry := .Values.image.registry | default (.Values.global).imageRegistry -}}
 {{- if $registry -}}
 {{- printf "%s/%s:%s" ($registry | trimSuffix "/") $repository $tag -}}
 {{- else -}}
 {{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
 {{- end -}}
 {{- end }}
 

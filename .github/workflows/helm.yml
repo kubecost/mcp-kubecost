@@ -112,6 +112,19 @@ jobs:
           grep -q 'name: app-pull' .helm-render/mcp-kubecost-global.yaml
           ! grep -q 'icr.io' .helm-render/mcp-kubecost-global.yaml
 
+      - name: Render image.registry and fullImageName precedence
+        run: |
+          # image.registry wins over global.imageRegistry, like the parent chart's components
+          helm template mcp-kubecost "$CHART_DIR" \
+            --set global.imageRegistry=public.ecr.aws \
+            --set image.registry=registry.example.com \
+            | grep -qE 'image: "registry.example.com/kubecost/mcp-kubecost:v[0-9]'
+          # fullImageName is used verbatim
+          helm template mcp-kubecost "$CHART_DIR" \
+            --set image.registry=registry.example.com \
+            --set fullImageName=mirror.example.com/mcp:v1@sha256:abc \
+            | grep -q 'image: "mirror.example.com/mcp:v1@sha256:abc"'
+
       - name: Render ingress and Secret-backed configuration
         run: |
           helm template mcp-kubecost "$CHART_DIR" \
