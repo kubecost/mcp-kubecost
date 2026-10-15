@@ -1,0 +1,41 @@
+docs/development/release.md
+  s_ee81145d7610e4::t_eded2f7ddb3ea2 1-54
+.github/workflows/require-version-label.yml
+  s_ee81145d7610e4::t_5a9c56f8cd1175 1-19,23-35
+  s_ee81145d7610e4::t_6fcab63e629b14 20-22
+.github/workflows/release.yml
+  s_ee81145d7610e4::t_32d8a6e0e8d12b 434-441,448
+  s_ee81145d7610e4::t_b941d2b1d92eae 310
+  s_ee81145d7610e4::t_baa0f7a4271548 29-33
+  s_ee81145d7610e4::t_5c161f9b38c874 96
+  s_ee81145d7610e4::t_70607e3402890d 285,535-542
+  s_ee81145d7610e4::t_22ac65f6d9c8b3 126-127,133-144
+  s_ee81145d7610e4::t_49f79e79572cbd 45-49,53-55,57-58,62,65-69,71-85
+  s_ee81145d7610e4::t_8bf6b516560ca7 351
+  s_ee81145d7610e4::t_02d0ba33df18ff 264-265,274-284
+  s_ee81145d7610e4::t_bb8c85699815bc 7
+  s_ee81145d7610e4::t_c8b901404a15eb 296,304
+.github/workflows/backport.yml
+  s_ee81145d7610e4::t_df5dd615588aab 123-125
+  s_ee81145d7610e4::t_63f1924d16fbf7 1-122,126-129
+AGENTS.md
+  s_ee81145d7610e4::t_48910da00b2b4f 381
+docs/development/README.md
+  s_ee81145d7610e4::t_9d3fd6ccfdbb02 91-92
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "565e6bc419a464ba50df12c6d11549babe4e06fa",
+  "prompts": {},
+  "sessions": {
+    "s_ee81145d7610e4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8cc2cd3c-524b-49a6-9d84-fdd0b3becb98",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
