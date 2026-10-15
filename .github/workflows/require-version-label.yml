@@ -1,0 +1,35 @@
+name: require version label
+
+# Every PR into main must say which release line(s) it ships in, using one or
+# more `vX.Y` labels (see docs/development/release.md), or opt out with
+# `ci-only` for changes that ship no artifact (workflows, docs, tests).
+#
+# Make `require-version-label` a required status check on main. There is
+# deliberately no `paths` filter: a required check that does not run on some
+# PRs blocks them forever.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  require-version-label:
+    # Dependabot cannot know the current line (a label in dependabot.yml would
+    # go stale at every minor bump). A skipped job satisfies a required check.
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check labels
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        run: |
+          set -euo pipefail
+          if echo "$LABELS" | jq -e 'any(.[]; test("^v[0-9]+\\.[0-9]+$") or . == "ci-only")' > /dev/null; then
+            echo "Version label present."
+            exit 0
+          fi
+          echo "::error::Add a vX.Y label (e.g. v0.18, plus v0.17 to also backport to release/0.17) or the ci-only label."
+          exit 1
