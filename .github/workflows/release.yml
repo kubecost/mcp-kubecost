@@ -27,10 +27,10 @@ on:
         type: boolean
         default: false
       parent-branch:
-        description: "Branch of kubecost/kubecost to open the subchart bump PR against. Empty: develop for a main release, no PR for a release/X.Y backport."
+        description: "Branch of kubecost/kubecost to open the subchart bump PR against. A release/X.Y backport opens no PR unless this is changed from develop."
         required: false
         type: string
-        default: ""
+        default: "develop"
 
 permissions:
   contents: write   # required for creating the GitHub Release and pushing to gh-pages
@@ -433,12 +433,13 @@ jobs:
   update-parent-chart:
     needs: [check-release-ref, build, publish-image, update-helm-index]
     # A release/X.Y backport only opens a parent PR when `parent-branch` names
-    # where it should go; the default (develop) already pins a newer line.
+    # something other than develop, which already pins a newer line.
     if: >-
       github.event_name == 'workflow_dispatch' &&
       !inputs.prerelease &&
       !inputs.dry-run &&
-      (needs.check-release-ref.outputs.is_backport != 'true' || inputs.parent-branch != '')
+      (needs.check-release-ref.outputs.is_backport != 'true' ||
+       (inputs.parent-branch != '' && inputs.parent-branch != 'develop'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
