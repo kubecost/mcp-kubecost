@@ -1,0 +1,14 @@
+.github/workflows/release.yml
+  h_cca6aa2712613d 30,33,436,441-442
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "334c3a223525774a275780445fe350e7e13e2756",
+  "prompts": {},
+  "humans": {
+    "h_cca6aa2712613d": {
+      "author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
