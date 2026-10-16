@@ -1,0 +1,25 @@
+.github/workflows/backport.yml
+  s_25079238582a34::t_d6b981913bd3d1 107,130-138
+.github/workflows/release.yml
+  s_25079238582a34::t_38def55da9ffa4 873-875
+.github/workflows/require-version-label.yml
+  s_25079238582a34::t_d106feab0842e3 18-22,27
+docs/development/release.md
+  s_25079238582a34::t_6011e22e5a6776 42-43,49-50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "6b66900d46944e5309579ae62d1203f70cc915ca",
+  "prompts": {},
+  "sessions": {
+    "s_25079238582a34": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "21adde25-145d-4969-a312-91de0079c413",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
