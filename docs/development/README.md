@@ -88,6 +88,8 @@ Run `ruff format`, `ruff check --fix`, and `pyrefly check` after every Python ed
 
 CI runs on Python 3.12 ([`ci.yml`](../../.github/workflows/ci.yml)), matching `requires-python`. The `test` job runs pyrefly, vulture, consent-screen branding, `pytest -m ""` with coverage, and repo safety checks. The `integration` job hits the public demo via `tests/mcp-demo.json`. See [`pre-commit-checks.md`](pre-commit-checks.md) for local vs CI hook tiers. Formatting is a separate workflow ([`auto-fix-formatting.yml`](../../.github/workflows/auto-fix-formatting.yml)), not part of `ci.yml`.
 
+Releases, version labels and patch backports to older lines: see [`release.md`](release.md).
+
 ## Docker / Kubernetes
 
 ```bash

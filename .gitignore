@@ -242,3 +242,5 @@ todo-list.md
 .DS_STORE
 .kubeconfig
 *plan.md
+.agents/tasks/
+.agents/reviews/
