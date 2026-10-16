@@ -102,9 +102,9 @@ jobs:
                   'Create the branch from the last release tag of that line (see docs/development/release.md), ' +
                   'then re-add the label.',
               });
-              core.setFailed(problems.join(' '));
             }
             core.setOutput('branches', branches.join(' '));
+            core.setOutput('problems', problems.join(' '));
 
       - name: Check out main
         if: steps.targets.outputs.branches != ''
@@ -127,3 +127,12 @@ jobs:
           add_labels: backport
           copy_labels_pattern: '^(bug|enhancement|documentation|dependencies)$'
           pull_title: '[Backport ${target_branch}] ${pull_title}'
+
+      # Fail only after the branches that do exist have been backported.
+      - name: Fail if any target branch was missing
+        if: ${{ !cancelled() && steps.targets.outputs.problems != '' }}
+        env:
+          PROBLEMS: ${{ steps.targets.outputs.problems }}
+        run: |
+          echo "::error::${PROBLEMS}"
+          exit 1

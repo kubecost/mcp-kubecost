@@ -870,8 +870,9 @@ jobs:
 
   # Tell integration-ci-cd once the versioned image is in ICR.
   notify-integration-ci-cd:
-    needs: [build, publish-image]
-    if: ${{ !inputs.dry-run }}
+    needs: [build, check-release-ref, publish-image]
+    # A backport tag must not look like the newest release downstream.
+    if: ${{ !inputs.dry-run && needs.check-release-ref.outputs.is_backport != 'true' }}
     uses: ./.github/workflows/integrations-ci-cd-kicker.yaml
     permissions: {}     # uses a GitHub App token, not GITHUB_TOKEN
     with:

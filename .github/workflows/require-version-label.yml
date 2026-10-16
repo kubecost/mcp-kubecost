@@ -15,11 +15,16 @@ on:
 permissions:
   contents: read
 
+# A stale failing run must not finish after a passing one.
+concurrency:
+  group: require-version-label-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   require-version-label:
     # Dependabot cannot know the current line (a label in dependabot.yml would
     # go stale at every minor bump). A skipped job satisfies a required check.
-    if: github.actor != 'dependabot[bot]'
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Check labels

@@ -39,11 +39,14 @@ Only cut `release/X.Y` when the line will actually receive patches. Once it exis
 ```bash
 git fetch --tags origin
 git switch -c release/X.Y vX.Y.Z               # the last release of that line
-git checkout main -- .github/workflows/release.yml .github/workflows/ci.yml
+git checkout main -- .github/workflows/release.yml .github/workflows/ci.yml \
+  .github/workflows/sbom.yml .github/workflows/integrations-ci-cd-kicker.yaml
 git commit -m "ci: carry release workflow onto release/X.Y"
 git push -u origin release/X.Y
 gh label create vX.Y --description "Also ship on the X.Y line (backport to release/X.Y)" --color 0e8a16
 ```
+
+`release.yml` calls `sbom.yml` and `integrations-ci-cd-kicker.yaml` as reusable workflows, so all four files must exist on the branch; the v0.17.x tags predate their `workflow_call` triggers.
 
 Also confirm the ruleset allows the release bot / `DEPLOY_KEY` to push to `release/*` (the version bump commit is pushed to the dispatched branch).
 
