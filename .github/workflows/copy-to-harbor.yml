@@ -50,7 +50,7 @@ jobs:
           password: ${{ secrets.HARBOR_TOKEN }}
 
       - name: Install crane
-        uses: Apptio-PNE/crane-installer@v4
+        uses: imjasonh/setup-crane@v0.4
 
       - name: Extract image tag
         id: set-image
