@@ -38,7 +38,7 @@ on:
 
 jobs:
   copy-to-harbor:
-    runs-on: gha-org-apptio-pne-eng
+    runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.set-image.outputs.image_tag }}
     steps:
