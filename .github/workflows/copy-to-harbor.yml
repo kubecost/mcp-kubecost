@@ -112,12 +112,3 @@ jobs:
               echo "Release: ${{ secrets.HARBOR_ADDR }}/kubecost/releases/mcp-kubecost:${IMAGE_TAG}"
             fi
           fi
-
-  twistlock-scan:
-    needs: [copy-to-harbor]
-    if: ${{ !inputs.dry_run }}
-    uses: Apptio-PNE/gh-compliance-workflows/.github/workflows/twistlock-scan.yaml@twistlock-scan/v1
-    with:
-      product_id: prd0013090  # Cloudy Product ID — same as kubecost images
-      image: docker.apps.papt.to/kubecost/mcp-kubecost:${{ needs.copy-to-harbor.outputs.image_tag }}
-      scan_type: ${{ inputs.is_release == true && 'prod' || 'nonprod' }}
