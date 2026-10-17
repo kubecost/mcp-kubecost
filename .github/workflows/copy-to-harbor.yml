@@ -10,6 +10,9 @@ name: Copy to Harbor
 #   is_release:   true   (adds kubecost/releases/mcp-kubecost:v0.5.0)
 #   set_latest:   true   (only for non-backport releases)
 
+# NOTE: THIS ACTION IS ADDED ON A SATURDAY TO LAST MINUTE FIX AN ISSUE WHERE THE UPGRADE TO 3.3.0 IS
+# BROKEN. WE SHOULD LIKELY UPDATE THE EXISTING FLOW THAT PUSHES IMAGES TO HARBOR BUT THIS IS A HOTFIX
+
 on:
   workflow_dispatch:
     inputs:
