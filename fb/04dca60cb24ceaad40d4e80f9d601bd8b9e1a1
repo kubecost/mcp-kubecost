@@ -1,0 +1,14 @@
+.github/workflows/pr-agent.yml
+  h_cca6aa2712613d 1-3,7-8,15-22,32-38,43-46,48,51-53,66-68,75-83,86,88,90,95,97-223,225,231-258,261,285-286,292-311,314-317,326,336-337,344-345,347,350,362
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fb04dca60cb24ceaad40d4e80f9d601bd8b9e1a1",
+  "prompts": {},
+  "humans": {
+    "h_cca6aa2712613d": {
+      "author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
