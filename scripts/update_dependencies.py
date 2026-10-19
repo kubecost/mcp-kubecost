@@ -149,38 +149,27 @@ def pep508_name(spec: str) -> str:
 
 
 def parse_pyproject_direct() -> set[str]:
-    return {
-        pep508_name(req.name)
-        for _, _, _, req in dependency_specs(PYPROJECT.read_text())
-    }
+    return {pep508_name(req.name) for _, _, _, req in dependency_specs(PYPROJECT.read_text())}
 
 
 def relax_spec(spec: str, req: Requirement, *, allow_major: bool = False) -> str:
     updated = spec
     for constraint in req.specifier:
         if constraint.operator == "==" and "*" not in constraint.version:
-            updated = updated.replace(
-                f"=={constraint.version}", f">={constraint.version}", 1
-            )
+            updated = updated.replace(f"=={constraint.version}", f">={constraint.version}", 1)
             if req.marker:
                 # Distinct pins under Python markers intentionally track different major lines.
                 upper = Version(constraint.version).major + 1
-                updated = updated.replace(
-                    f">={constraint.version}", f">={constraint.version},<{upper}", 1
-                )
+                updated = updated.replace(f">={constraint.version}", f">={constraint.version},<{upper}", 1)
         elif allow_major and constraint.operator == "<" and not req.marker:
-            updated = re.sub(
-                r",?\s*<" + re.escape(constraint.version) + r"(?=,|;|$)", "", updated
-            )
+            updated = re.sub(r",?\s*<" + re.escape(constraint.version) + r"(?=,|;|$)", "", updated)
     return updated
 
 
 def relax_constraints(text: str, *, allow_major: bool = False) -> str:
     """Let uv resolve exact pins; retain marker-specific major lines and bounds."""
     for start, end, spec, req in reversed(list(dependency_specs(text))):
-        text = (
-            text[:start] + relax_spec(spec, req, allow_major=allow_major) + text[end:]
-        )
+        text = text[:start] + relax_spec(spec, req, allow_major=allow_major) + text[end:]
     return text
 
 
@@ -194,11 +183,7 @@ def update_pyproject_constraints(
     text = original
     for start, end, spec, req in reversed(list(dependency_specs(original))):
         relaxed = Requirement(relax_spec(spec, req, allow_major=allow_major))
-        candidates = [
-            v
-            for v in locked_versions.get(pep508_name(req.name), [])
-            if Version(v) in relaxed.specifier
-        ]
+        candidates = [v for v in locked_versions.get(pep508_name(req.name), []) if Version(v) in relaxed.specifier]
         if not candidates:
             continue
         version = max(candidates, key=Version)
@@ -211,14 +196,8 @@ def update_pyproject_constraints(
                         f"{constraint.operator}{version}",
                         1,
                     )
-            elif (
-                allow_major
-                and constraint.operator == "<"
-                and Version(version) not in req.specifier
-            ):
-                updated = updated.replace(
-                    f"<{constraint.version}", f"<{Version(version).major + 1}", 1
-                )
+            elif allow_major and constraint.operator == "<" and Version(version) not in req.specifier:
+                updated = updated.replace(f"<{constraint.version}", f"<{Version(version).major + 1}", 1)
         if updated != spec:
             text = text[:start] + updated + text[end:]
             changes.append((pep508_name(req.name), spec, updated))
@@ -310,10 +289,7 @@ def emit_section(
     counts: dict[str, int] = {}
     for kind, *_rest in rows:
         counts[kind] = counts.get(kind, 0) + 1
-    bits = [
-        f"[{KIND_STYLE.get(kind, 'white')}]{count} {kind}[/]"
-        for kind, count in counts.items()
-    ]
+    bits = [f"[{KIND_STYLE.get(kind, 'white')}]{count} {kind}[/]" for kind, count in counts.items()]
     if extra:
         bits.append(f"[dim]{extra}[/]")
     console.print(f"[bold cyan]{title:<7}[/] " + "  ".join(bits))
@@ -359,18 +335,14 @@ def update_python(
             UV_LOCK.write_bytes(original_lock)
 
     try:
-        PYPROJECT.write_text(
-            relax_constraints(original, allow_major=allow_major), encoding="utf-8"
-        )
+        PYPROJECT.write_text(relax_constraints(original, allow_major=allow_major), encoding="utf-8")
         run(["uv", "lock", "--upgrade"])
         with UV_LOCK.open("rb") as handle:
             packages = tomllib.load(handle).get("package", [])
         versions: dict[str, list[str]] = {}
         for package in packages:
             versions.setdefault(package["name"], []).append(package["version"])
-        changes = update_pyproject_constraints(
-            versions, original=original, allow_major=allow_major
-        )
+        changes = update_pyproject_constraints(versions, original=original, allow_major=allow_major)
         if not dry_run:
             run(["uv", "lock"])
             run(["uv", "sync"])
@@ -394,9 +366,7 @@ FROM_RE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 STAGE_RE = re.compile(r"\bAS[ \t]+(\S+)", re.IGNORECASE)
-VERSION_IN_COMMENT_RE = re.compile(
-    r"(?<![\w.])(?:v\d+(?:\.\d+){0,2}|\d+\.\d+(?:\.\d+)?)\b", re.IGNORECASE
-)
+VERSION_IN_COMMENT_RE = re.compile(r"(?<![\w.])(?:v\d+(?:\.\d+){0,2}|\d+\.\d+(?:\.\d+)?)\b", re.IGNORECASE)
 
 SKIP_DIRS = {".git", ".venv", "venv", "node_modules", ".tox", "__pycache__"}
 COMMENT_STARTS = ("#", "//", ";", "--", "/*", "*", "<!--", "%", "'", "REM ")
@@ -425,9 +395,7 @@ def find_files(match) -> list[Path]:
 
 def is_dockerfile(name: str) -> bool:
     lower = name.lower()
-    return lower.startswith(("dockerfile", "containerfile")) or lower.endswith(
-        ".dockerfile"
-    )
+    return lower.startswith(("dockerfile", "containerfile")) or lower.endswith(".dockerfile")
 
 
 def find_dockerfiles() -> list[Path]:
@@ -436,9 +404,7 @@ def find_dockerfiles() -> list[Path]:
 
 def find_action_files() -> list[Path]:
     return [
-        p
-        for p in find_files(lambda n: n.endswith((".yml", ".yaml")))
-        if p.relative_to(ROOT).parts[:1] == (".github",)
+        p for p in find_files(lambda n: n.endswith((".yml", ".yaml"))) if p.relative_to(ROOT).parts[:1] == (".github",)
     ]
 
 
@@ -466,9 +432,7 @@ def action_comment(existing: str, tag: str) -> str:
     return f" # {tag}"
 
 
-def update_actions(
-    *, dry_run: bool = False, allow_major: bool = False
-) -> list[tuple[str, str, str, str, str]]:
+def update_actions(*, dry_run: bool = False, allow_major: bool = False) -> list[tuple[str, str, str, str, str]]:
     """Return table rows (kind, action, old, new, note) for each pin that moved."""
     rows: list[tuple[str, str, str, str, str]] = []
     latest: dict[str, tuple[str, str] | None] = {}
@@ -482,13 +446,9 @@ def update_actions(
 
     def latest_release(repo: str) -> tuple[str, str] | None:
         if repo not in latest:
-            result = run(
-                ["gh", "api", f"repos/{repo}/releases/latest"], allow_not_found=True
-            )
+            result = run(["gh", "api", f"repos/{repo}/releases/latest"], allow_not_found=True)
             if result.returncode != 0:
-                console.print(
-                    f"[yellow]actions: no latest release for {repo}, skipped[/]"
-                )
+                console.print(f"[yellow]actions: no latest release for {repo}, skipped[/]")
                 latest[repo] = None
             else:
                 tag = json.loads(result.stdout)["tag_name"]
@@ -540,9 +500,7 @@ def update_actions(
                     in_place = True
                     tag = ""
                 elif newest.major > current.major and not allow_major:
-                    rows.append(
-                        ("major", action, old, tag, f"{rel} held, use --allow-major")
-                    )
+                    rows.append(("major", action, old, tag, f"{rel} held, use --allow-major"))
                     in_place = held = True
                     tag = ""
             if in_place:
@@ -577,9 +535,7 @@ def image_digest(image: str) -> str:
                 "t": time.time_ns(),
             }
         )
-        with urllib.request.urlopen(
-            f"https://public.ecr.aws/token/?{query}", timeout=30
-        ) as response:
+        with urllib.request.urlopen(f"https://public.ecr.aws/token/?{query}", timeout=30) as response:
             token = json.load(response)["token"]
         request = urllib.request.Request(
             f"https://public.ecr.aws/v2/{repository}/manifests/{tag}",
@@ -657,9 +613,7 @@ def update_docker(*, dry_run: bool = False) -> list[tuple[str, str, str, str, st
     return rows
 
 
-HOOK_UPDATE_RE = re.compile(
-    r"Updating\s+(?P<repo>\S+).*?\bupdating\s+(?P<old>\S+)\s+->\s+(?P<new>\S+)"
-)
+HOOK_UPDATE_RE = re.compile(r"Updating\s+(?P<repo>\S+).*?\bupdating\s+(?P<old>\S+)\s+->\s+(?P<new>\S+)")
 
 
 def repo_label(repo: str) -> str:
@@ -713,16 +667,10 @@ def print_python(
         if package in listed:
             continue
         rows.append(("spec", package, old, new, "pyproject"))
-    hidden = sum(
-        1 for name, _old, _new in changes["patch"] if name not in python_direct
-    )
+    hidden = sum(1 for name, _old, _new in changes["patch"] if name not in python_direct)
     extra = ""
     if hidden:
-        extra = (
-            f"{hidden} transitive patch"
-            if hidden == 1
-            else f"{hidden} transitive patches"
-        )
+        extra = f"{hidden} transitive patch" if hidden == 1 else f"{hidden} transitive patches"
     emit_section("python", rows, extra=extra)
 
 
@@ -736,9 +684,7 @@ def print_docker(rows: list[tuple[str, str, str, str, str]]) -> None:
 
 def print_NO_SHA_PIN() -> None:
     for path, name, ref in NO_SHA_PIN_SKIPS:
-        console.print(
-            f"[bold yellow]NO_SHA_PIN[/]  {name}@{short_rev(ref)} left as-is [dim]({path})[/]"
-        )
+        console.print(f"[bold yellow]NO_SHA_PIN[/]  {name}@{short_rev(ref)} left as-is [dim]({path})[/]")
 
 
 def print_hooks(changes: list[tuple[str, str, str]]) -> None:
@@ -763,9 +709,7 @@ def skip_reason(ecosystem: str) -> str | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -806,9 +750,7 @@ def main() -> None:
         with console.status("[cyan]python[/]", spinner="dots"):
             python_before = parse_uv_lock()
             python_direct = parse_pyproject_direct()
-            python_after, changes = update_python(
-                allow_major=args.allow_major, dry_run=args.dry_run
-            )
+            python_after, changes = update_python(allow_major=args.allow_major, dry_run=args.dry_run)
         print_python(
             python_direct=python_direct,
             python_before=python_before,
@@ -817,9 +759,7 @@ def main() -> None:
         )
     if "actions" in ecosystems:
         with console.status("[cyan]actions[/]", spinner="dots"):
-            action_changes = update_actions(
-                dry_run=args.dry_run, allow_major=args.allow_major
-            )
+            action_changes = update_actions(dry_run=args.dry_run, allow_major=args.allow_major)
         print_actions(action_changes)
     if "docker" in ecosystems:
         with console.status("[cyan]docker[/]", spinner="dots"):
