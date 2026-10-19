@@ -1,0 +1,138 @@
+name: backport
+
+# A `vX.Y` label on a PR merged into main means "also ship this on the X.Y
+# line": the change is cherry-picked onto release/X.Y and opened as a PR there.
+# Works for a label added before or after the merge. See docs/development/release.md.
+on:
+  pull_request_target:
+    types: [closed, labeled]
+    branches: [main]
+
+# pull_request_target runs with write access, so this job must never check out
+# or execute code from the PR head. It only checks out main.
+permissions:
+  contents: read
+
+concurrency:
+  group: backport-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  backport:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # PRs opened with GITHUB_TOKEN do not trigger workflows, so the backport
+      # PR would never get CI. An app token does.
+      - name: Generate a token
+        id: generate-token
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          client-id: ${{ vars.KC_ACTIONS_BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KC_ACTIONS_BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Resolve target branches
+        id: targets
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const lineLabel = /^v(\d+)\.(\d+)$/;
+
+            // On `labeled` only the label just added counts, so adding v0.16
+            // later does not re-backport to a line that already has its PR.
+            let labels;
+            if (context.payload.action === 'labeled') {
+              labels = [context.payload.label.name];
+            } else {
+              labels = pr.labels.map((l) => l.name);
+            }
+            const lines = labels
+              .map((name) => lineLabel.exec(name))
+              .filter(Boolean)
+              .map((m) => ({ major: Number(m[1]), minor: Number(m[2]), name: `v${m[1]}.${m[2]}` }));
+            if (lines.length === 0) {
+              core.info('No vX.Y label; nothing to backport.');
+              core.setOutput('branches', '');
+              return;
+            }
+
+            // The line main is currently on. Labels at or above it ship from
+            // main itself and need no release branch.
+            const { data: file } = await github.rest.repos.getContent({
+              owner, repo, path: 'pyproject.toml', ref: 'main',
+            });
+            const text = Buffer.from(file.content, 'base64').toString('utf8');
+            const ver = /^version\s*=\s*"(\d+)\.(\d+)\./m.exec(text);
+            if (!ver) {
+              core.setFailed('Could not read the version from pyproject.toml on main.');
+              return;
+            }
+            const main = { major: Number(ver[1]), minor: Number(ver[2]) };
+            const olderThanMain = (l) =>
+              l.major < main.major || (l.major === main.major && l.minor < main.minor);
+
+            const branches = [];
+            const problems = [];
+            for (const l of lines) {
+              if (!olderThanMain(l)) {
+                core.info(`${l.name} is main's line or newer; no backport needed.`);
+                continue;
+              }
+              const branch = `release/${l.major}.${l.minor}`;
+              try {
+                await github.rest.repos.getBranch({ owner, repo, branch });
+                branches.push(branch);
+              } catch (e) {
+                if (e.status !== 404) throw e;
+                problems.push(`Label \`${l.name}\` has no matching branch \`${branch}\`.`);
+              }
+            }
+
+            if (problems.length > 0) {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: pr.number,
+                body: `Backport not created:\n\n- ${problems.join('\n- ')}\n\n` +
+                  'Create the branch from the last release tag of that line (see docs/development/release.md), ' +
+                  'then re-add the label.',
+              });
+            }
+            core.setOutput('branches', branches.join(' '));
+            core.setOutput('problems', problems.join(' '));
+
+      - name: Check out main
+        if: steps.targets.outputs.branches != ''
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          token: ${{ steps.generate-token.outputs.token }}
+
+      - name: Backport
+        if: steps.targets.outputs.branches != ''
+        uses: korthout/backport-action@v4.7.0
+        with:
+          github_token: ${{ steps.generate-token.outputs.token }}
+          target_branches: ${{ steps.targets.outputs.branches }}
+          # We use vX.Y labels, which the action's label_pattern cannot map to
+          # release/X.Y; targets come from the step above. The pattern needs a
+          # capture group, so use one that no label will ever match.
+          label_pattern: '^unused-backport-label-([^ ]+)$'
+          # Do not copy vX.Y labels, or the backport PR would look like it needs backporting.
+          add_labels: backport
+          copy_labels_pattern: '^(bug|enhancement|documentation|dependencies)$'
+          pull_title: '[Backport ${target_branch}] ${pull_title}'
+
+      # Fail only after the branches that do exist have been backported.
+      - name: Fail if any target branch was missing
+        if: ${{ !cancelled() && steps.targets.outputs.problems != '' }}
+        env:
+          PROBLEMS: ${{ steps.targets.outputs.problems }}
+        run: |
+          echo "::error::${PROBLEMS}"
+          exit 1

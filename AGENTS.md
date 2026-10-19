@@ -378,6 +378,7 @@ A newly added power is not visible to an in-flight agent session — the client 
 - [CHANGELOG.md](CHANGELOG.md) — user-facing changes (Keep a Changelog)
 - [docs/auth/README.md](docs/auth/README.md) — MCP OIDC, Kubecost API keys, and pod hardening
 - [docs/development/pre-commit-checks.md](docs/development/pre-commit-checks.md) — hook tiers and CI auto-fix workflow
+- [docs/development/release.md](docs/development/release.md) — releasing, `vX.Y` labels, and backporting to `release/X.Y`
 
 ## Changelog
 

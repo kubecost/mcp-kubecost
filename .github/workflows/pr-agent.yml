@@ -1,0 +1,259 @@
+# PR-Agent workflow
+# Copy to .github/workflows/pr-agent.yml in the consuming repository.
+#
+# Required repository or organization variables (see README.md):
+#   KC_PR_AGENT_AWS_ROLE_TO_ASSUME        IAM role trusted for GitHub OIDC, allowed bedrock:InvokeModel,
+#                                         bedrock:GetInferenceProfile and bedrock:ListInferenceProfiles
+#   KC_PR_AGENT_AWS_REGION                Bedrock region (optional, defaults to us-west-2)
+#   KC_PR_AGENT_AWS_MODEL_ARN             Bedrock inference profile ARN for the primary model (review, improve)
+#   KC_PR_AGENT_AWS_REASONING_MODEL_ARN   Optional. Model that scores /improve suggestions (default: primary)
+#   KC_PR_AGENT_AWS_WEAK_MODEL_ARN        Optional. Cheaper model for describe, ask and changelog (default: primary)
+#   KC_PR_AGENT_AWS_FALLBACK_MODEL_ARN    Optional. Used when a call to any of the above fails (default: primary)
+#
+# PR-Agent asks Bedrock which model each profile serves, so a non-Claude profile needs no extra setting.
+#
+# Set each variable at the organization level to apply it to every repository; a repository variable of
+# the same name overrides it. The old unprefixed names (AWS_ROLE_TO_ASSUME, AWS_REGION, AWS_MODEL_ARN, ...)
+# are still read as a fallback below.
+#
+# Slash commands (/review, /describe, /improve, /ask ...) run from PR comments by the repository
+# owner, organization members and collaborators (see the pr_agent_job condition).
+#
+# describe/review/improve also run automatically, but only for ready (non-draft) PRs: once every
+# workflow listed under `workflow_run` has finished on the head commit, or when a draft is marked
+# ready for review and none of them is still running. A new push cancels a review that is still
+# running. Replace the workflow names with your repository's test workflows, both under
+# `workflow_run.workflows` and in the gate's MONITORED_WORKFLOWS; those workflows must run on
+# pull_request. workflow_run runs use this file from the default branch, so edits to the automatic
+# path take effect only after they are merged; pull_request runs use the PR's copy.
+
+name: PR-Agent
+
+on:
+  # Run automatically once the listed workflows finish on a push to a ready (non-draft) PR.
+  # Keep the names in sync with the `name:` of those workflows and with MONITORED_WORKFLOWS in the gate.
+  # The listed workflows must run on pull_request; completions from other events (push, schedule) are skipped.
+  workflow_run:
+    workflows: ["ci", "Helm chart validation", "Docker build", "Check spelling"]
+    types: [completed]
+  pull_request:
+    # ready_for_review starts the agent if no listed workflow is still running on the head commit;
+    # otherwise the last one to finish starts it. synchronize starts only the reporting job and joins the automatic
+    # concurrency group, so a new push cancels a review of the previous commit right away.
+    types: [ready_for_review, synchronize]
+  issue_comment:
+    types: [created]
+
+# Automatic runs share one group per PR and cancel the run in progress. Comment commands and workflow_run
+# events from other triggers get a group of their own, so they never cancel anything.
+concurrency:
+  group: >-
+    ${{ github.workflow }}-${{
+    (github.event_name == 'pull_request' || github.event.workflow_run.event == 'pull_request') &&
+    format('automatic-{0}', github.event.pull_request.number || github.event.workflow_run.pull_requests[0].number ||
+    github.run_id) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event.workflow_run.event == 'pull_request' }}
+
+permissions: {}
+
+jobs:
+  # Decides whether an automatic run goes ahead. It skips draft PRs, fork PRs, stale commits, and
+  # workflow_run events that did not come from pull_request. It does not wait: while a listed workflow is
+  # still running on the head commit it skips, and the completion of the last one starts the agent.
+  # Comment events skip the gate; the reporting job explains skipped paths without running the agent.
+  gate:
+    if: github.event_name == 'workflow_run' || github.event.action == 'ready_for_review'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    name: Decide whether to run
+    permissions:
+      actions: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+      reason: ${{ steps.gate.outputs.reason }}
+    steps:
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number || github.event.pull_request.number }}
+          # Keep this list aligned with workflow_run.workflows above.
+          MONITORED_WORKFLOWS: '["ci", "Helm chart validation", "Docker build", "Check spelling"]'
+        run: |
+          set -euo pipefail
+          decision() {
+            local reason
+            reason=$(printf '%s' "$2" | tr '\r\n' '  ')
+            echo "run=$1" >> "$GITHUB_OUTPUT"
+            echo "reason=$reason" >> "$GITHUB_OUTPUT"
+            {
+              echo "## PR-Agent gate"
+              echo ""
+              echo "Decision: $1"
+              echo ""
+              echo "<pre>"
+              printf '%s\n' "$reason" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+              echo "</pre>"
+              echo ""
+              printf 'Event: %s; PR: %s; head: %s; triggering conclusion: %s\n' \
+                "$EVENT" "$PR_NUMBER" "$HEAD_SHA" "$CONCLUSION" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+          skip() { echo "Skipping: $1"; decision false "$1"; exit 0; }
+          trap 'decision false "Gate failed while checking PR or workflow state; see the gate logs."' ERR
+          if [ "$EVENT" = "workflow_run" ]; then
+            [ "$RUN_EVENT" = "pull_request" ] || skip "the completed run was triggered by '$RUN_EVENT', not pull_request"
+            [ -n "$PR_NUMBER" ] || skip "no pull request is attached to the run (fork PRs are not supported)"
+            case "$CONCLUSION" in success|failure|timed_out) ;; *) skip "workflow conclusion is '$CONCLUSION'" ;; esac
+          else
+            [ "$HEAD_REPO" = "$REPO" ] || skip "PR #$PR_NUMBER comes from a fork (fork PRs are not supported)"
+          fi
+          pr_state=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json isDraft,headRefOid \
+            --jq '"\(.isDraft) \(.headRefOid)"')
+          read -r draft head <<< "$pr_state"
+          [ "$draft" = "false" ] || skip "PR #$PR_NUMBER is a draft"
+          [ "$head" = "$HEAD_SHA" ] || skip "commit $HEAD_SHA is no longer the head of PR #$PR_NUMBER"
+          pending=$(gh api "repos/$REPO/actions/runs?head_sha=$HEAD_SHA&event=pull_request&per_page=100" \
+            --jq "[.workflow_runs[] | select(.status != \"completed\") | select(.name as \$name | $MONITORED_WORKFLOWS | index(\$name))] | map(.name + \" (\" + .status + \")\") | join(\", \")")
+          [ -z "$pending" ] || skip "Monitored workflow runs are still in progress: $pending"
+          decision true "The PR is ready on the current head and no monitored workflow is pending."
+
+  pr_agent_job:
+    needs: gate
+    # !cancelled() replaces the implicit success(), which is false when the gate was skipped (comment
+    # events). synchronize runs match neither branch, so they cancel without running the agent.
+    # Only the repository owner, organization members and collaborators can run commands, so outside
+    # commenters cannot spend Bedrock budget. GitHub reports an organization member whose membership is
+    # private as CONTRIBUTOR or NONE; make the membership public, add the user as a collaborator, or
+    # extend this list.
+    if: >-
+      !cancelled() &&
+      (needs.gate.outputs.run == 'true' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+      github.event.sender.type != 'Bot' && contains(github.event.comment.body, '/') &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)))
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: Run PR Agent commands
+    outputs:
+      agent-version: ${{ steps.pragent.outputs.agent-version }}
+    # The workflow token reads the PR and posts comments; id-token is for the AWS OIDC step.
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-region: ${{ vars.KC_PR_AGENT_AWS_REGION || vars.AWS_REGION || 'us-west-2' }}
+          role-to-assume: ${{ vars.KC_PR_AGENT_AWS_ROLE_TO_ASSUME || vars.AWS_ROLE_TO_ASSUME }}
+
+      - name: PR Agent action step
+        id: pragent
+        uses: kubecost/kc-pr-agent@v0.47
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AWS_USE_IMDS: "true"
+          AWS_REGION: ${{ vars.KC_PR_AGENT_AWS_REGION || vars.AWS_REGION || 'us-west-2' }}
+          AWS_REGION_NAME: ${{ vars.KC_PR_AGENT_AWS_REGION || vars.AWS_REGION || 'us-west-2' }}
+          # Bedrock inference profile ARNs: the KC_PR_AGENT_ variable, else the legacy unprefixed one.
+          # Before each command PR-Agent asks Bedrock which model each profile serves, so the assumed role needs
+          # bedrock:GetInferenceProfile and bedrock:ListInferenceProfiles. An empty reasoning or weak model uses
+          # CONFIG__MODEL, and the fallback defaults to the primary.
+          CONFIG__MODEL: ${{ vars.KC_PR_AGENT_AWS_MODEL_ARN || vars.AWS_MODEL_ARN }}
+          CONFIG__MODEL_REASONING: ${{ vars.KC_PR_AGENT_AWS_REASONING_MODEL_ARN || vars.AWS_REASONING_MODEL_ARN }}
+          CONFIG__MODEL_WEAK: ${{ vars.KC_PR_AGENT_AWS_WEAK_MODEL_ARN || vars.AWS_WEAK_MODEL_ARN }}
+          CONFIG__FALLBACK_MODELS: >-
+            ${{ vars.KC_PR_AGENT_AWS_FALLBACK_MODEL_ARN || vars.AWS_FALLBACK_MODEL_ARN
+            || vars.KC_PR_AGENT_AWS_MODEL_ARN || vars.AWS_MODEL_ARN }}
+          CONFIG__ENABLE_CLAUDE_ADAPTIVE_THINKING: "true"
+          CONFIG__REASONING_EFFORT: "high"
+          CONFIG__CUSTOM_MODEL_MAX_TOKENS: "1000000"
+          # Post /describe output as a comment instead of overwriting the PR description.
+          PR_DESCRIPTION__PUBLISH_DESCRIPTION_AS_COMMENT: "true"
+          GITHUB_ACTION_CONFIG.AUTO_DESCRIBE: true
+          # Automatic runs of each tool after the listed tests finish. Unset means run; "false" turns one off.
+          # AUTO_REVIEW runs /review: a code review posted as inline and summary comments.
+          GITHUB_ACTION_CONFIG.AUTO_REVIEW: true
+          # AUTO_IMPROVE runs /improve: inline code suggestions posted on the PR.
+          GITHUB_ACTION_CONFIG.AUTO_IMPROVE: true
+
+  report:
+    name: Explain PR-Agent outcome
+    needs: [gate, pr_agent_job]
+    if: always() && (needs.gate.result != 'success' || needs.pr_agent_job.result != 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    steps:
+      - name: Report failures and skipped jobs
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          GATE_RESULT: ${{ needs.gate.result }}
+          GATE_REASON: ${{ needs.gate.outputs.reason }}
+          AGENT_RESULT: ${{ needs.pr_agent_job.result }}
+          AGENT_VERSION: ${{ needs.pr_agent_job.outputs.agent-version }}
+          ACTION_REF: kubecost/kc-pr-agent@v0.47
+        with:
+          script: |
+            const escape = value => String(value).replace(/[&<>"]/g, c =>
+              ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+            const event = context.payload;
+            const gate = process.env.GATE_RESULT;
+            const agent = process.env.AGENT_RESULT;
+            let reason = process.env.GATE_REASON;
+            if (!reason && gate === 'skipped') {
+              if (context.eventName === 'issue_comment') {
+                if (!event.issue?.pull_request) reason = 'The comment is on an issue, not a pull request.';
+                else if (event.sender?.type === 'Bot') reason = 'Bot comments are ignored to prevent feedback loops.';
+                else if (!(event.comment?.body || '').includes('/')) reason = 'The comment contains no slash command.';
+                else if (!['OWNER', 'MEMBER', 'COLLABORATOR'].includes(event.comment?.author_association))
+                  reason = 'The comment author is not an owner, member, or collaborator.';
+                else reason = 'The gate is bypassed for trusted PR comment commands.';
+              } else if (event.action === 'synchronize') {
+                reason = 'A new push cancels the previous automatic review; test completion will trigger a new review.';
+              } else reason = 'This event does not execute the automatic review gate.';
+            }
+            if (!reason) reason = 'Gate ' + gate + '; inspect the gate logs for details.';
+            const runUrl = process.env.GITHUB_SERVER_URL + '/' + context.repo.owner + '/' + context.repo.repo +
+              '/actions/runs/' + context.runId;
+            const lines = ['## PR-Agent workflow outcome', '', 'Gate: ' + escape(gate) + '; agent: ' + escape(agent), '',
+              '<pre>' + escape(reason) + '</pre>', '', 'Event: ' + escape(context.eventName) + ' / ' + escape(event.action || ''),
+              'Configured Action: ' + escape(process.env.ACTION_REF),
+              'Runtime version: ' + escape(process.env.AGENT_VERSION || 'unavailable (the agent did not report a version)'),
+              '', '[Action run and logs](' + runUrl + ')'];
+            const prNumber = event.pull_request?.number || event.workflow_run?.pull_requests?.[0]?.number ||
+              (event.issue?.pull_request ? event.issue.number : null);
+            const head = event.workflow_run?.head_sha || event.pull_request?.head?.sha;
+            if (prNumber) lines.push('', 'Pull request: #' + escape(prNumber));
+            if (head) lines.push('Head commit: ' + escape(head));
+            if (event.workflow_run?.conclusion)
+              lines.push('Triggering workflow conclusion: ' + escape(event.workflow_run.conclusion));
+            if (['failure', 'cancelled'].includes(gate) || ['failure', 'cancelled'].includes(agent)) {
+              try {
+                const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                  ...context.repo, run_id: context.runId, filter: 'latest', per_page: 100,
+                });
+                for (const job of jobs) {
+                  if (job.name === 'Explain PR-Agent outcome') continue;
+                  for (const step of job.steps || []) {
+                    if (['failure', 'cancelled'].includes(step.conclusion))
+                      lines.push('', '<pre>Failed or cancelled step: ' + escape(job.name) + ' / ' + escape(step.name) +
+                        ' (' + escape(step.conclusion) + ')</pre>');
+                  }
+                }
+              } catch {
+                lines.push('', 'Step details could not be retrieved; consult the Action logs.');
+                core.warning('Unable to retrieve workflow step outcomes.');
+              }
+            }
+            await core.summary.addRaw(lines.join('\n') + '\n').write();

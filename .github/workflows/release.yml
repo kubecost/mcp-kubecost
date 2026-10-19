@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       bump-level:
-        description: "Is this a major/minor/patch? Breaking changes should be a minor bump. Fixes are patches. Ignored when dry-run is true."
+        description: "Is this a major/minor/patch? Breaking changes should be a minor bump. Fixes are patches. Must be patch on a release/X.Y branch. Ignored when dry-run is true."
         required: true
         type: choice
         options:
@@ -26,6 +26,11 @@ on:
         required: false
         type: boolean
         default: false
+      parent-branch:
+        description: "Branch of kubecost/kubecost to open the subchart bump PR against. A release/X.Y backport opens no PR unless this is changed from develop."
+        required: false
+        type: string
+        default: "develop"
 
 permissions:
   contents: write   # required for creating the GitHub Release and pushing to gh-pages
@@ -37,24 +42,47 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Real releases bump, tag and publish `latest`, so they must come from main.
-  # Dry-run has no side effects and may run from any branch. Fail loudly here,
-  # before tests, rather than silently skipping the release jobs.
+  # Real releases bump and tag, so they must come from main (a new minor/major,
+  # published as `latest`) or from a release/X.Y branch (a patch backport that
+  # never moves `latest`). Dry-run has no side effects and may run from any
+  # branch. Fail loudly here, before tests, rather than silently skipping the
+  # release jobs.
   check-release-ref:
     runs-on: ubuntu-latest
     permissions: {}
+    outputs:
+      is_backport: ${{ steps.ref.outputs.is_backport }}
+      line: ${{ steps.ref.outputs.line }}
     steps:
-      - name: Require main for a real release
+      - name: Require main or release/X.Y for a real release
+        id: ref
         env:
           REF: ${{ github.ref }}
           DRY_RUN: ${{ inputs.dry-run }}
+          BUMP_LEVEL: ${{ inputs.bump-level }}
         run: |
           set -euo pipefail
-          if [ "$DRY_RUN" != "true" ] && [ "$REF" != "refs/heads/main" ]; then
-            echo "::error::Real releases must be dispatched from main (got ${REF}). Re-run from main, or set dry-run to true."
-            exit 1
+          IS_BACKPORT=false
+          LINE=""
+          if [[ "$REF" =~ ^refs/heads/release/([0-9]+\.[0-9]+)$ ]]; then
+            IS_BACKPORT=true
+            LINE="${BASH_REMATCH[1]}"
           fi
-          echo "Ref ${REF} is allowed (dry-run=${DRY_RUN})."
+
+          if [ "$DRY_RUN" != "true" ]; then
+            if [ "$REF" != "refs/heads/main" ] && [ "$IS_BACKPORT" != "true" ]; then
+              echo "::error::Real releases must be dispatched from main or a release/X.Y branch (got ${REF}). Re-run from one of those, or set dry-run to true."
+              exit 1
+            fi
+            if [ "$IS_BACKPORT" = "true" ] && [ "$BUMP_LEVEL" != "patch" ]; then
+              echo "::error::Releases from ${REF} must be a patch bump (got ${BUMP_LEVEL}). New minor/major versions come from main."
+              exit 1
+            fi
+          fi
+
+          echo "is_backport=${IS_BACKPORT}" >> "$GITHUB_OUTPUT"
+          echo "line=${LINE}" >> "$GITHUB_OUTPUT"
+          echo "Ref ${REF} is allowed (dry-run=${DRY_RUN}, backport=${IS_BACKPORT}, line=${LINE:-n/a})."
 
   # Run the full CI suite against the dispatched commit before anything is
   # bumped, tagged or published.
@@ -65,7 +93,7 @@ jobs:
       contents: read
 
   build:
-    needs: test
+    needs: [check-release-ref, test]
     runs-on: ubuntu-latest
     outputs:
       chart_version: ${{ steps.id.outputs.py_version }}
@@ -95,12 +123,25 @@ jobs:
 
       - name: Bump version
         if: github.event_name == 'workflow_dispatch' && !inputs.dry-run
+        env:
+          LINE: ${{ needs.check-release-ref.outputs.line }}
         run: |
           set -euo pipefail
 
           # Derive the baseline from the latest git tag so that a failed/re-run
           # release doesn't double-bump the in-tree version. Strip the leading "v".
-          LATEST_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          # On a release/X.Y branch the baseline is the latest tag of that line
+          # only, so a 0.17 patch is never computed from a newer 0.18 tag.
+          if [ -n "$LINE" ]; then
+            TAG_PATTERN="^v${LINE//./\\.}\\.[0-9]+$"
+            LATEST_TAG=$(git tag --sort=-v:refname | grep -E "$TAG_PATTERN" | head -1 || true)
+            if [ -z "$LATEST_TAG" ]; then
+              echo "::error::No v${LINE}.* tag found; a release/${LINE} branch must start from an existing release of that line."
+              exit 1
+            fi
+          else
+            LATEST_TAG=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
+          fi
           if [ -n "$LATEST_TAG" ]; then
             LATEST_VERSION="${LATEST_TAG#v}"
             echo "Resetting pyproject.toml to latest tag ${LATEST_TAG} before bumping."
@@ -220,6 +261,8 @@ jobs:
           TAG: ${{ steps.id.outputs.release_tag }}
           EXTRA_NOTES: ${{ inputs.notes }}
           PRERELEASE_FLAG: ${{ inputs.prerelease && '--prerelease' || '' }}
+          IS_BACKPORT: ${{ needs.check-release-ref.outputs.is_backport }}
+          LINE: ${{ needs.check-release-ref.outputs.line }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -227,6 +270,18 @@ jobs:
           if [ ${#files[@]} -eq 0 ]; then
             echo "::error::No files in dist/ to attach to the release."
             exit 1
+          fi
+
+          # A backport must not take GitHub's "Latest release" badge from the
+          # newer line, and its notes should cover only the previous release of
+          # its own line rather than everything since the newest tag.
+          BACKPORT_FLAGS=()
+          if [ "$IS_BACKPORT" = "true" ]; then
+            PREV_TAG=$(git tag --sort=-v:refname | grep -E "^v${LINE//./\\.}\\.[0-9]+$" | grep -vx "$TAG" | head -1 || true)
+            BACKPORT_FLAGS+=(--latest=false)
+            if [ -n "$PREV_TAG" ]; then
+              BACKPORT_FLAGS+=(--notes-start-tag "$PREV_TAG")
+            fi
           fi
           # Tag the commit that was built (the bump commit pushed above), not
           # whatever the default branch HEAD is when the release is created.
@@ -238,6 +293,7 @@ jobs:
               --title "$TAG" \
               --notes "$EXTRA_NOTES" \
               --generate-notes \
+              "${BACKPORT_FLAGS[@]}" \
               $PRERELEASE_FLAG \
               "${files[@]}"
           else
@@ -245,12 +301,13 @@ jobs:
               --target "$TARGET_SHA" \
               --title "$TAG" \
               --generate-notes \
+              "${BACKPORT_FLAGS[@]}" \
               $PRERELEASE_FLAG \
               "${files[@]}"
           fi
 
   publish-image:
-    needs: build
+    needs: [check-release-ref, build]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
@@ -291,7 +348,7 @@ jobs:
         with:
           images: icr.io/kubecost/mcp-kubecost
           tags: |
-            type=raw,value=latest,enable=${{ !inputs.dry-run }}
+            type=raw,value=latest,enable=${{ !inputs.dry-run && needs.check-release-ref.outputs.is_backport != 'true' }}
             type=raw,value=${{ needs.build.outputs.release_tag }},enable=${{ !inputs.dry-run }}
             type=raw,value=dry-run-${{ github.sha }},enable=${{ inputs.dry-run }}
 
@@ -374,15 +431,22 @@ jobs:
   # the version just published. Runs only for real (non-prerelease) dispatches,
   # after the chart is downloadable from the Helm index.
   update-parent-chart:
-    needs: [build, publish-image, update-helm-index]
-    if: github.event_name == 'workflow_dispatch' && !inputs.prerelease && !inputs.dry-run
+    needs: [check-release-ref, build, publish-image, update-helm-index]
+    # A release/X.Y backport only opens a parent PR when `parent-branch` names
+    # something other than develop, which already pins a newer line.
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      !inputs.prerelease &&
+      !inputs.dry-run &&
+      (needs.check-release-ref.outputs.is_backport != 'true' ||
+       (inputs.parent-branch != '' && inputs.parent-branch != 'develop'))
     runs-on: ubuntu-latest
     permissions:
       contents: read
     env:
       CHART_VERSION: ${{ needs.build.outputs.chart_version }}
       PARENT_REPO: kubecost/kubecost
-      PARENT_BRANCH: develop
+      PARENT_BRANCH: ${{ inputs.parent-branch || 'develop' }}
       PARENT_CHART_DIR: kubecost
       HELM_REPO_NAME: mcp-kubecost
       HELM_REPO_URL: https://kubecost.github.io/mcp-kubecost
@@ -465,6 +529,14 @@ jobs:
 
           if [ "$CURRENT" = "$CHART_VERSION" ]; then
             echo "Parent chart already pins ${CHART_VERSION}; nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Never move the parent chart backwards (e.g. a 0.17.x patch when the
+          # target branch already pins 0.18.x).
+          if [ "$(printf '%s\n%s\n' "$CURRENT" "$CHART_VERSION" | sort -V | tail -1)" = "$CURRENT" ]; then
+            echo "::notice::${PARENT_REPO}@${PARENT_BRANCH} pins ${CURRENT}, newer than ${CHART_VERSION}; not downgrading."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -799,8 +871,9 @@ jobs:
 
   # Tell integration-ci-cd once the versioned image is in ICR.
   notify-integration-ci-cd:
-    needs: [build, publish-image]
-    if: ${{ !inputs.dry-run }}
+    needs: [build, check-release-ref, publish-image]
+    # A backport tag must not look like the newest release downstream.
+    if: ${{ !inputs.dry-run && needs.check-release-ref.outputs.is_backport != 'true' }}
     uses: ./.github/workflows/integrations-ci-cd-kicker.yaml
     permissions: {}     # uses a GitHub App token, not GITHUB_TOKEN
     with:
