@@ -1,0 +1,14 @@
+Dockerfile
+  h_cca6aa2712613d 9-10,59-60,62-63,90-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "e22d67d601ce22ce3671c3df5383c5b44d23c3f0",
+  "prompts": {},
+  "humans": {
+    "h_cca6aa2712613d": {
+      "author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
