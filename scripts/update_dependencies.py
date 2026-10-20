@@ -33,22 +33,28 @@ OPTIONS
                    action is reported as "held" and the current version is only
                    pinned in place; Python upper bounds (<N) are kept.
 
-NO_SHA_PIN
-    Everything is pinned unless the line opts out. Put NO_SHA_PIN in a comment on the
+NO_AUTO_UPDATE
+    Everything is pinned unless the line opts out. Put NO_AUTO_UPDATE in a comment on the
     same line, or in a comment on the line directly above. Any comment style
     works (#, //, ;, --, /* */, <!-- -->):
 
-        - uses: actions/checkout@v7  # NO_SHA_PIN
-        # NO_SHA_PIN keep floating so auto-updates do not break our scripts
+        - uses: actions/checkout@v7  # NO_AUTO_UPDATE
+        # NO_AUTO_UPDATE keep floating so auto-updates do not break our scripts
         - uses: actions/checkout@v7
-        FROM python:3.13-slim  # NO_SHA_PIN
+        FROM python:3.13-slim  # NO_AUTO_UPDATE
 
     Opted-out lines are left untouched and listed in the output.
 
 NOTES
     Reusable workflows (owner/repo/.github/workflows/x.yml@ref) are pinned to the
     commit of their current ref, never moved to the repo's latest release.
-    Branch refs (@main) are deliberate and left alone.
+    Branch refs (@main, @master) move to the latest release. A branch with no
+    release, or whose latest release is not a version, is left as-is.
+
+    Actions, images, and direct Python packages that are archived (or yanked /
+    inactive on PyPI) or last updated more than 180 days ago are listed in red.
+    ACTION_REPLACEMENTS rewrites known-dead actions onto a maintained repo and
+    pins that repo's latest release.
 """
 
 from __future__ import annotations
@@ -65,6 +71,7 @@ import tomllib
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 
 from packaging.requirements import InvalidRequirement, Requirement
@@ -149,27 +156,38 @@ def pep508_name(spec: str) -> str:
 
 
 def parse_pyproject_direct() -> set[str]:
-    return {pep508_name(req.name) for _, _, _, req in dependency_specs(PYPROJECT.read_text())}
+    return {
+        pep508_name(req.name)
+        for _, _, _, req in dependency_specs(PYPROJECT.read_text())
+    }
 
 
 def relax_spec(spec: str, req: Requirement, *, allow_major: bool = False) -> str:
     updated = spec
     for constraint in req.specifier:
         if constraint.operator == "==" and "*" not in constraint.version:
-            updated = updated.replace(f"=={constraint.version}", f">={constraint.version}", 1)
+            updated = updated.replace(
+                f"=={constraint.version}", f">={constraint.version}", 1
+            )
             if req.marker:
                 # Distinct pins under Python markers intentionally track different major lines.
                 upper = Version(constraint.version).major + 1
-                updated = updated.replace(f">={constraint.version}", f">={constraint.version},<{upper}", 1)
+                updated = updated.replace(
+                    f">={constraint.version}", f">={constraint.version},<{upper}", 1
+                )
         elif allow_major and constraint.operator == "<" and not req.marker:
-            updated = re.sub(r",?\s*<" + re.escape(constraint.version) + r"(?=,|;|$)", "", updated)
+            updated = re.sub(
+                r",?\s*<" + re.escape(constraint.version) + r"(?=,|;|$)", "", updated
+            )
     return updated
 
 
 def relax_constraints(text: str, *, allow_major: bool = False) -> str:
     """Let uv resolve exact pins; retain marker-specific major lines and bounds."""
     for start, end, spec, req in reversed(list(dependency_specs(text))):
-        text = text[:start] + relax_spec(spec, req, allow_major=allow_major) + text[end:]
+        text = (
+            text[:start] + relax_spec(spec, req, allow_major=allow_major) + text[end:]
+        )
     return text
 
 
@@ -183,7 +201,11 @@ def update_pyproject_constraints(
     text = original
     for start, end, spec, req in reversed(list(dependency_specs(original))):
         relaxed = Requirement(relax_spec(spec, req, allow_major=allow_major))
-        candidates = [v for v in locked_versions.get(pep508_name(req.name), []) if Version(v) in relaxed.specifier]
+        candidates = [
+            v
+            for v in locked_versions.get(pep508_name(req.name), [])
+            if Version(v) in relaxed.specifier
+        ]
         if not candidates:
             continue
         version = max(candidates, key=Version)
@@ -196,8 +218,14 @@ def update_pyproject_constraints(
                         f"{constraint.operator}{version}",
                         1,
                     )
-            elif allow_major and constraint.operator == "<" and Version(version) not in req.specifier:
-                updated = updated.replace(f"<{constraint.version}", f"<{Version(version).major + 1}", 1)
+            elif (
+                allow_major
+                and constraint.operator == "<"
+                and Version(version) not in req.specifier
+            ):
+                updated = updated.replace(
+                    f"<{constraint.version}", f"<{Version(version).major + 1}", 1
+                )
         if updated != spec:
             text = text[:start] + updated + text[end:]
             changes.append((pep508_name(req.name), spec, updated))
@@ -267,7 +295,17 @@ KIND_STYLE = {
     "spec": "magenta",
     "pin": "yellow",
     "digest": "blue",
+    "stale": "bold red",
+    "archived": "bold red",
 }
+
+# Days since the last publish/push before a dependency is reported as stale.
+STALE_DAYS = 180
+# Lowercase owner/repo -> maintained owner/repo, pinned to that repo's latest release.
+ACTION_REPLACEMENTS = {
+    "sonarsource/sonarcloud-github-action": "SonarSource/sonarqube-scan-action",
+}
+_GITHUB_META: dict[str, dict[str, object] | None] = {}
 
 
 def short_rev(value: str) -> str:
@@ -289,7 +327,10 @@ def emit_section(
     counts: dict[str, int] = {}
     for kind, *_rest in rows:
         counts[kind] = counts.get(kind, 0) + 1
-    bits = [f"[{KIND_STYLE.get(kind, 'white')}]{count} {kind}[/]" for kind, count in counts.items()]
+    bits = [
+        f"[{KIND_STYLE.get(kind, 'white')}]{count} {kind}[/]"
+        for kind, count in counts.items()
+    ]
     if extra:
         bits.append(f"[dim]{extra}[/]")
     console.print(f"[bold cyan]{title:<7}[/] " + "  ".join(bits))
@@ -335,14 +376,18 @@ def update_python(
             UV_LOCK.write_bytes(original_lock)
 
     try:
-        PYPROJECT.write_text(relax_constraints(original, allow_major=allow_major), encoding="utf-8")
+        PYPROJECT.write_text(
+            relax_constraints(original, allow_major=allow_major), encoding="utf-8"
+        )
         run(["uv", "lock", "--upgrade"])
         with UV_LOCK.open("rb") as handle:
             packages = tomllib.load(handle).get("package", [])
         versions: dict[str, list[str]] = {}
         for package in packages:
             versions.setdefault(package["name"], []).append(package["version"])
-        changes = update_pyproject_constraints(versions, original=original, allow_major=allow_major)
+        changes = update_pyproject_constraints(
+            versions, original=original, allow_major=allow_major
+        )
         if not dry_run:
             run(["uv", "lock"])
             run(["uv", "sync"])
@@ -366,12 +411,17 @@ FROM_RE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 STAGE_RE = re.compile(r"\bAS[ \t]+(\S+)", re.IGNORECASE)
-VERSION_IN_COMMENT_RE = re.compile(r"(?<![\w.])(?:v\d+(?:\.\d+){0,2}|\d+\.\d+(?:\.\d+)?)\b", re.IGNORECASE)
+VERSION_IN_COMMENT_RE = re.compile(
+    r"(?<![\w.])(?:v\d+(?:\.\d+){0,2}|\d+\.\d+(?:\.\d+)?)\b", re.IGNORECASE
+)
 
 SKIP_DIRS = {".git", ".venv", "venv", "node_modules", ".tox", "__pycache__"}
 COMMENT_STARTS = ("#", "//", ";", "--", "/*", "*", "<!--", "%", "'", "REM ")
-# (file, name, ref) for every line left alone because of NO_SHA_PIN.
-NO_SHA_PIN_SKIPS: list[tuple[str, str, str]] = []
+# (file, name, ref) for every line left alone because of NO_AUTO_UPDATE.
+NO_AUTO_UPDATE_SKIPS: list[tuple[str, str, str]] = []
+# Per-run caches so skip_reason and the updaters share one file walk each.
+_ACTION_FILES: list[Path] | None = None
+_DOCKERFILES: list[Path] | None = None
 
 
 def find_files(match) -> list[Path]:
@@ -395,29 +445,174 @@ def find_files(match) -> list[Path]:
 
 def is_dockerfile(name: str) -> bool:
     lower = name.lower()
-    return lower.startswith(("dockerfile", "containerfile")) or lower.endswith(".dockerfile")
+    return lower.startswith(("dockerfile", "containerfile")) or lower.endswith(
+        ".dockerfile"
+    )
 
 
 def find_dockerfiles() -> list[Path]:
-    return find_files(is_dockerfile)
+    global _DOCKERFILES
+    if _DOCKERFILES is None:
+        _DOCKERFILES = find_files(is_dockerfile)
+    return _DOCKERFILES
 
 
 def find_action_files() -> list[Path]:
-    return [
-        p for p in find_files(lambda n: n.endswith((".yml", ".yaml"))) if p.relative_to(ROOT).parts[:1] == (".github",)
-    ]
+    global _ACTION_FILES
+    if _ACTION_FILES is None:
+        _ACTION_FILES = [
+            p
+            for p in find_files(lambda n: n.endswith((".yml", ".yaml")))
+            if p.relative_to(ROOT).parts[:1] == (".github",)
+        ]
+    return _ACTION_FILES
 
 
-def has_NO_SHA_PIN(text: str, pos: int) -> bool:
-    """NO_SHA_PIN on the line holding `pos`, or in a comment on the line above."""
+def has_NO_AUTO_UPDATE(text: str, pos: int) -> bool:
+    """NO_AUTO_UPDATE on the line holding `pos`, or in a comment on the line above."""
     start = text.rfind("\n", 0, pos) + 1
     end = text.find("\n", pos)
-    if "NO_SHA_PIN" in text[start : end if end != -1 else len(text)]:
+    if "NO_AUTO_UPDATE" in text[start : end if end != -1 else len(text)]:
         return True
     if start == 0:
         return False
     above = text[: start - 1].rsplit("\n", 1)[-1].strip()
-    return "NO_SHA_PIN" in above and above.startswith(COMMENT_STARTS)
+    return "NO_AUTO_UPDATE" in above and above.startswith(COMMENT_STARTS)
+
+
+def age_days(stamp: str) -> int | None:
+    text = stamp.replace("Z", "+00:00")
+    try:
+        when = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - when).days
+
+
+def freshness(
+    when: str | None, *, archived: bool, status: str = ""
+) -> tuple[str, str, str] | None:
+    """Red-row fields for an archived project or one quiet for STALE_DAYS."""
+    days = age_days(when) if when else None
+    age = f"{days}d" if days is not None else "unknown"
+    if archived:
+        return ("archived", status or "archived", age)
+    if days is not None and days > STALE_DAYS:
+        return ("stale", "last update", age)
+    return None
+
+
+def fetch_json(url: str) -> dict | None:
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            payload = json.load(response)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def github_meta(repo: str) -> dict[str, object] | None:
+    key = repo.lower()
+    if key not in _GITHUB_META:
+        if shutil.which("gh") is None:
+            _GITHUB_META[key] = None
+        else:
+            result = subprocess.run(
+                [
+                    "gh",
+                    "api",
+                    f"repos/{repo}",
+                    "--jq",
+                    "{archived: .archived, pushed_at: .pushed_at}",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                _GITHUB_META[key] = None
+            else:
+                try:
+                    _GITHUB_META[key] = json.loads(result.stdout)
+                except json.JSONDecodeError:
+                    _GITHUB_META[key] = None
+    return _GITHUB_META[key]
+
+
+def github_freshness(repo: str) -> tuple[str, str, str] | None:
+    meta = github_meta(repo)
+    if not meta:
+        return None
+    pushed = meta.get("pushed_at")
+    return freshness(
+        pushed if isinstance(pushed, str) else None,
+        archived=bool(meta.get("archived")),
+    )
+
+
+def pypi_freshness(name: str) -> tuple[str, str, str] | None:
+    data = fetch_json(f"https://pypi.org/pypi/{urllib.parse.quote(name)}/json")
+    if not data:
+        return None
+    info = data.get("info") if isinstance(data.get("info"), dict) else {}
+    version = info.get("version") if isinstance(info.get("version"), str) else ""
+    releases = data.get("releases") if isinstance(data.get("releases"), dict) else {}
+    files = releases.get(version) if isinstance(releases.get(version), list) else []
+    when: str | None = None
+    yanked = bool(info.get("yanked"))
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        yanked = yanked or bool(item.get("yanked"))
+        stamp = item.get("upload_time_iso_8601") or item.get("upload_time")
+        if isinstance(stamp, str) and (when is None or stamp > when):
+            when = stamp
+    classifiers = (
+        info.get("classifiers") if isinstance(info.get("classifiers"), list) else []
+    )
+    inactive = any(
+        isinstance(item, str) and item.startswith("Development Status :: 7")
+        for item in classifiers
+    )
+    status = "yanked" if yanked else "inactive" if inactive else ""
+    return freshness(when, archived=bool(status), status=status)
+
+
+def image_repo(image: str) -> tuple[str, str]:
+    """Return (registry, repository) for a tagged image reference."""
+    ref = image.split("@", 1)[0]
+    name, _, _tag = ref.rpartition(":")
+    if not name or "/" in _tag:
+        name = ref
+    parts = name.split("/")
+    if "." in parts[0] or ":" in parts[0] or parts[0] == "localhost":
+        return parts[0].lower(), "/".join(parts[1:])
+    return "docker.io", name
+
+
+def image_freshness(image: str) -> tuple[str, str, str] | None:
+    registry, repository = image_repo(image)
+    if registry in {"docker.io", "index.docker.io"}:
+        path = repository if "/" in repository else f"library/{repository}"
+        data = fetch_json(f"https://hub.docker.com/v2/repositories/{path}/")
+        if not data:
+            return None
+        desc = data.get("status_description")
+        status = desc if isinstance(desc, str) else ""
+        updated = data.get("last_updated")
+        return freshness(
+            updated if isinstance(updated, str) else None,
+            archived=bool(status) and status.casefold() != "active",
+            status=status or "archived",
+        )
+    if registry == "ghcr.io":
+        owner_repo = "/".join(repository.split("/")[:2])
+        if owner_repo.count("/") != 1:
+            return None
+        return github_freshness(owner_repo)
+    return None
 
 
 def action_comment(existing: str, tag: str) -> str:
@@ -432,28 +627,56 @@ def action_comment(existing: str, tag: str) -> str:
     return f" # {tag}"
 
 
-def update_actions(*, dry_run: bool = False, allow_major: bool = False) -> list[tuple[str, str, str, str, str]]:
+def update_actions(
+    *, dry_run: bool = False, allow_major: bool = False
+) -> list[tuple[str, str, str, str, str]]:
     """Return table rows (kind, action, old, new, note) for each pin that moved."""
     rows: list[tuple[str, str, str, str, str]] = []
-    latest: dict[str, tuple[str, str] | None] = {}
-    commits: dict[tuple[str, str], str] = {}
+    noted: set[tuple[str, str, str, str]] = set()
+    # Tag only until a write needs the SHA — held majors / already-current pins
+    # should not pay for a commits API call.
+    latest_tags: dict[str, str | None] = {}
+    commits: dict[tuple[str, str], str | None] = {}
 
-    def commit_sha(repo: str, ref: str) -> str:
+    def commit_sha(repo: str, ref: str, *, missing_ok: bool = False) -> str | None:
         if (repo, ref) not in commits:
-            data = json.loads(run(["gh", "api", f"repos/{repo}/commits/{ref}"]).stdout)
-            commits[(repo, ref)] = data["sha"]
+            result = run(
+                ["gh", "api", f"repos/{repo}/commits/{ref}"],
+                allow_not_found=missing_ok,
+            )
+            if result.returncode != 0:
+                console.print(
+                    f"[yellow]actions: no commit for {repo}@{ref}, skipped[/]"
+                )
+                commits[(repo, ref)] = None
+            else:
+                commits[(repo, ref)] = json.loads(result.stdout)["sha"]
         return commits[(repo, ref)]
 
-    def latest_release(repo: str) -> tuple[str, str] | None:
-        if repo not in latest:
-            result = run(["gh", "api", f"repos/{repo}/releases/latest"], allow_not_found=True)
+    def latest_tag(repo: str) -> str | None:
+        if repo not in latest_tags:
+            result = run(
+                ["gh", "api", f"repos/{repo}/releases/latest"], allow_not_found=True
+            )
             if result.returncode != 0:
-                console.print(f"[yellow]actions: no latest release for {repo}, skipped[/]")
-                latest[repo] = None
+                console.print(
+                    f"[yellow]actions: no latest release for {repo}, skipped[/]"
+                )
+                latest_tags[repo] = None
             else:
-                tag = json.loads(result.stdout)["tag_name"]
-                latest[repo] = (tag, commit_sha(repo, tag))
-        return latest[repo]
+                latest_tags[repo] = json.loads(result.stdout)["tag_name"]
+        return latest_tags[repo]
+
+    def note_maintenance(name: str, repo: str, rel: str, suffix: str = "") -> None:
+        status = github_freshness(repo)
+        if status is None:
+            return
+        kind, old, new = status
+        key = (kind, repo.lower(), rel, suffix)
+        if key in noted:
+            return
+        noted.add(key)
+        rows.append((kind, name, old, new, f"{rel} {suffix}".strip()))
 
     for path in find_action_files():
         rel = str(path.relative_to(ROOT))
@@ -463,34 +686,79 @@ def update_actions(*, dry_run: bool = False, allow_major: bool = False) -> list[
             action = match["action"]
             ref = match["ref"]
             repo = "/".join(action.split("/")[:2])
+            watch_name, watch_repo, suffix = action, repo, ""
+
+            def finish(line: str) -> str:
+                note_maintenance(watch_name, watch_repo, rel, suffix)
+                return line
+
             if repo.lower() in {"kubecost/kc-pr-agent", "codium-ai/pr-agent"}:
                 return match[0]
-            if has_NO_SHA_PIN(text, match.start("action")):
-                NO_SHA_PIN_SKIPS.append((rel, action, ref))
-                return match[0]
+            if has_NO_AUTO_UPDATE(text, match.start("action")):
+                NO_AUTO_UPDATE_SKIPS.append((rel, action, ref))
+                return finish(match[0])
+            replacement = ACTION_REPLACEMENTS.get(repo.lower())
+            if replacement:
+                new_action = replacement + action[len(repo) :]
+                tag = latest_tag(replacement) or ""
+                try:
+                    Version(tag)
+                except InvalidVersion:
+                    tag = ""
+                sha = commit_sha(replacement, tag) if tag else None
+                if sha:
+                    note_maintenance(action, repo, rel, "replaced")
+                    watch_name, watch_repo = new_action, replacement
+                    updated = (
+                        f"{match['prefix']}{new_action}@{sha}"
+                        f"{action_comment(match['comment'], tag)}"
+                    )
+                    rows.append(
+                        ("pin", new_action, ref, tag, f"{rel} replaces {action}")
+                    )
+                    return finish(updated)
             pinned = re.fullmatch(r"[0-9a-f]{40}", ref) is not None
             if pinned:
                 label = VERSION_IN_COMMENT_RE.search(match["comment"])
                 if not label:
-                    return match[0]
+                    return finish(match[0])
                 old = label.group(0)
             else:
                 old = ref
             try:
                 current = Version(old)
             except InvalidVersion:
-                # Branch refs are deliberate selections, not release pins.
-                return match[0]
+                # Branch refs have no current version, so take the latest release.
+                # Reusable workflows stay on the commit of the ref they name.
+                if pinned or ".github/workflows/" in action:
+                    return finish(match[0])
+                tag = latest_tag(repo) or ""
+                if not tag:
+                    return finish(match[0])
+                try:
+                    Version(tag)
+                except InvalidVersion:
+                    return finish(match[0])
+                sha = commit_sha(repo, tag)
+                if not sha:
+                    return finish(match[0])
+                updated = (
+                    f"{match['prefix']}{action}@{sha}"
+                    f"{action_comment(match['comment'], tag)}"
+                )
+                if updated == match[0]:
+                    return finish(match[0])
+                rows.append(("pin", action, old, tag, rel))
+                return finish(updated)
 
             # Reusable workflows are pinned to their own ref, not the repo's latest release.
             in_place = ".github/workflows/" in action
             held = False
             tag = sha = ""
             if not in_place:
-                release = latest_release(repo)
-                if release is None:
-                    return match[0]
-                tag, sha = release
+                tag = latest_tag(repo) or ""
+                if not tag:
+                    return finish(match[0])
                 try:
                     newest = Version(tag)
                 except InvalidVersion:
@@ -500,22 +768,31 @@ def update_actions(*, dry_run: bool = False, allow_major: bool = False) -> list[
                     in_place = True
                     tag = ""
                 elif newest.major > current.major and not allow_major:
-                    rows.append(("major", action, old, tag, f"{rel} held, use --allow-major"))
+                    rows.append(
+                        ("major", action, old, tag, f"{rel} held, use --allow-major")
+                    )
                     in_place = held = True
                     tag = ""
             if in_place:
                 if pinned:
-                    return match[0]
-                tag, sha = ref, commit_sha(repo, ref)
+                    return finish(match[0])
+                sha = commit_sha(repo, ref)
+                if not sha:
+                    return finish(match[0])
+                tag = ref
+            else:
+                sha = commit_sha(repo, tag)
+                if not sha:
+                    return finish(match[0])
             updated = f"{match['prefix']}{action}@{sha}{action_comment(match['comment'], tag)}"
             if updated == match[0]:
-                return match[0]
+                return finish(match[0])
             if not held:
                 same_release = not pinned and current == Version(tag)
                 new = sha[:12] if same_release or in_place else tag
                 kind = bump_type(old, tag) or "pin"
                 rows.append((kind, action, old, new, rel))
-            return updated
+            return finish(updated)
 
         updated = ACTION_RE.sub(replace, original)
         if updated != original and not dry_run:
@@ -523,24 +800,28 @@ def update_actions(*, dry_run: bool = False, allow_major: bool = False) -> list[
     return rows
 
 
-def image_digest(image: str) -> str:
+def image_digest(image: str, *, ecr_tokens: dict[str, str]) -> str:
+    """Resolve a registry digest. ECR auth tokens are cached per repository for the run."""
     if image.startswith("public.ecr.aws/"):
-        # Public ECR supports anonymous pulls. Fetch a fresh token instead of consulting
-        # Docker's potentially expired operator credentials or a cached token response.
+        # Public ECR supports anonymous pulls. Prefer a token fetched this run over
+        # Docker's potentially expired operator credentials.
         repository, tag = image.removeprefix("public.ecr.aws/").rsplit(":", 1)
-        query = urllib.parse.urlencode(
-            {
-                "service": "public.ecr.aws",
-                "scope": f"repository:{repository}:pull",
-                "t": time.time_ns(),
-            }
-        )
-        with urllib.request.urlopen(f"https://public.ecr.aws/token/?{query}", timeout=30) as response:
-            token = json.load(response)["token"]
+        if repository not in ecr_tokens:
+            query = urllib.parse.urlencode(
+                {
+                    "service": "public.ecr.aws",
+                    "scope": f"repository:{repository}:pull",
+                    "t": time.time_ns(),
+                }
+            )
+            with urllib.request.urlopen(
+                f"https://public.ecr.aws/token/?{query}", timeout=30
+            ) as response:
+                ecr_tokens[repository] = json.load(response)["token"]
         request = urllib.request.Request(
             f"https://public.ecr.aws/v2/{repository}/manifests/{tag}",
             headers={
-                "Authorization": f"Bearer {token}",
+                "Authorization": f"Bearer {ecr_tokens[repository]}",
                 "Accept": "application/vnd.oci.image.index.v1+json, "
                 "application/vnd.docker.distribution.manifest.list.v2+json, "
                 "application/vnd.oci.image.manifest.v1+json, "
@@ -569,6 +850,8 @@ def update_docker(*, dry_run: bool = False) -> list[tuple[str, str, str, str, st
     """Pin or refresh image digests. Return rows (kind, image, old, new, dockerfile)."""
     rows: list[tuple[str, str, str, str, str]] = []
     digests: dict[str, str] = {}
+    ecr_tokens: dict[str, str] = {}
+    noted: set[tuple[str, str]] = set()
     for path in find_dockerfiles():
         rel = str(path.relative_to(ROOT))
         original = path.read_text()
@@ -585,12 +868,17 @@ def update_docker(*, dry_run: bool = False) -> list[tuple[str, str, str, str, st
             stages.update(s.lower() for s in STAGE_RE.findall(match["rest"]))
             if is_stage or ref.lower() == "scratch" or "$" in ref:
                 return match[0]
-            if has_NO_SHA_PIN(text, match.start()):
-                NO_SHA_PIN_SKIPS.append((rel, ref, match["digest"] or "unpinned"))
-                return match[0]
             image = ref if ":" in ref.rsplit("/", 1)[-1] else f"{ref}:latest"
+            if (image, rel) not in noted:
+                noted.add((image, rel))
+                status = image_freshness(image)
+                if status:
+                    rows.append((status[0], image, status[1], status[2], rel))
+            if has_NO_AUTO_UPDATE(text, match.start()):
+                NO_AUTO_UPDATE_SKIPS.append((rel, ref, match["digest"] or "unpinned"))
+                return match[0]
             if image not in digests:
-                digest = image_digest(image)
+                digest = image_digest(image, ecr_tokens=ecr_tokens)
                 if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
                     raise ValueError(f"Invalid registry digest for {image}: {digest}")
                 digests[image] = digest
@@ -613,7 +901,9 @@ def update_docker(*, dry_run: bool = False) -> list[tuple[str, str, str, str, st
     return rows
 
 
-HOOK_UPDATE_RE = re.compile(r"Updating\s+(?P<repo>\S+).*?\bupdating\s+(?P<old>\S+)\s+->\s+(?P<new>\S+)")
+HOOK_UPDATE_RE = re.compile(
+    r"Updating\s+(?P<repo>\S+).*?\bupdating\s+(?P<old>\S+)\s+->\s+(?P<new>\S+)"
+)
 
 
 def repo_label(repo: str) -> str:
@@ -645,12 +935,22 @@ def update_hooks(*, dry_run: bool = False) -> list[tuple[str, str, str]]:
     return changes
 
 
+def python_maintenance(names: set[str]) -> list[tuple[str, str, str, str, str]]:
+    rows: list[tuple[str, str, str, str, str]] = []
+    for name in sorted(names):
+        status = pypi_freshness(name)
+        if status:
+            rows.append((status[0], name, status[1], status[2], "pypi"))
+    return rows
+
+
 def print_python(
     *,
     python_direct: set[str],
     python_before: dict[str, str],
     python_after: dict[str, str],
     pyproject_constraint_changes: list[tuple[str, str, str]],
+    maintenance: list[tuple[str, str, str, str, str]],
 ) -> None:
     changes = collect_changes(python_before, python_after)
     rows: list[tuple[str, str, str, str, str]] = []
@@ -667,10 +967,17 @@ def print_python(
         if package in listed:
             continue
         rows.append(("spec", package, old, new, "pyproject"))
-    hidden = sum(1 for name, _old, _new in changes["patch"] if name not in python_direct)
+    rows.extend(maintenance)
+    hidden = sum(
+        1 for name, _old, _new in changes["patch"] if name not in python_direct
+    )
     extra = ""
     if hidden:
-        extra = f"{hidden} transitive patch" if hidden == 1 else f"{hidden} transitive patches"
+        extra = (
+            f"{hidden} transitive patch"
+            if hidden == 1
+            else f"{hidden} transitive patches"
+        )
     emit_section("python", rows, extra=extra)
 
 
@@ -682,9 +989,11 @@ def print_docker(rows: list[tuple[str, str, str, str, str]]) -> None:
     emit_section("docker", rows)
 
 
-def print_NO_SHA_PIN() -> None:
-    for path, name, ref in NO_SHA_PIN_SKIPS:
-        console.print(f"[bold yellow]NO_SHA_PIN[/]  {name}@{short_rev(ref)} left as-is [dim]({path})[/]")
+def print_NO_AUTO_UPDATE() -> None:
+    for path, name, ref in NO_AUTO_UPDATE_SKIPS:
+        console.print(
+            f"[bold yellow]NO_AUTO_UPDATE[/]  {name}@{short_rev(ref)} left as-is [dim]({path})[/]"
+        )
 
 
 def print_hooks(changes: list[tuple[str, str, str]]) -> None:
@@ -709,7 +1018,9 @@ def skip_reason(ecosystem: str) -> str | None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -750,16 +1061,22 @@ def main() -> None:
         with console.status("[cyan]python[/]", spinner="dots"):
             python_before = parse_uv_lock()
             python_direct = parse_pyproject_direct()
-            python_after, changes = update_python(allow_major=args.allow_major, dry_run=args.dry_run)
+            python_after, changes = update_python(
+                allow_major=args.allow_major, dry_run=args.dry_run
+            )
+            maintenance = python_maintenance(python_direct)
         print_python(
             python_direct=python_direct,
             python_before=python_before,
             python_after=python_after,
             pyproject_constraint_changes=changes,
+            maintenance=maintenance,
         )
     if "actions" in ecosystems:
         with console.status("[cyan]actions[/]", spinner="dots"):
-            action_changes = update_actions(dry_run=args.dry_run, allow_major=args.allow_major)
+            action_changes = update_actions(
+                dry_run=args.dry_run, allow_major=args.allow_major
+            )
         print_actions(action_changes)
     if "docker" in ecosystems:
         with console.status("[cyan]docker[/]", spinner="dots"):
@@ -769,7 +1086,7 @@ def main() -> None:
         with console.status("[cyan]hooks[/]", spinner="dots"):
             hook_changes = update_hooks(dry_run=args.dry_run)
         print_hooks(hook_changes)
-    print_NO_SHA_PIN()
+    print_NO_AUTO_UPDATE()
 
 
 if __name__ == "__main__":
