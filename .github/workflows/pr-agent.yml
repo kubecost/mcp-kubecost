@@ -64,6 +64,7 @@ jobs:
     # extend this list.
     if: >-
       ((github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request' &&
+      contains(fromJSON('["success", "failure", "timed_out"]'), github.event.workflow_run.conclusion) &&
       github.event.workflow_run.pull_requests[0].number) ||
       github.event_name == 'pull_request' ||
       (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
@@ -74,7 +75,9 @@ jobs:
     name: Run PR Agent commands
     # Serialize automatic candidates without cancelling a review that is already running. The next
     # candidate checks the head and the commit status only after it acquires this group. Manual
-    # commands stay in their own group.
+    # commands stay in their own group. GitHub keeps only one pending job per group, so a newer
+    # candidate replaces an older pending one; the `if` above keeps ineligible completions (skipped,
+    # cancelled) out of the group so they cannot displace a candidate that would run the review.
     concurrency:
       group: >-
         ${{ github.workflow }}-${{ github.event_name != 'issue_comment' &&
@@ -104,14 +107,16 @@ jobs:
           REVIEW_EVERY_PUSH: ${{ vars.KC_PR_AGENT_REVIEW_EVERY_PUSH }}
           # Waiting for every workflow: on a pull_request event, wait this long for the PR's other workflow
           # runs to appear before deciding that there are none.
-          SETTLE_SECONDS: "20"
+          SETTLE_SECONDS: "60"
         with:
           script: |
             const decide = async (run, reason) => {
               core.setOutput('run', String(run));
               core.setOutput('reason', reason);
               core.info(reason);
-              await core.summary.addHeading('PR-Agent readiness').addRaw(reason, true).write();
+              const safe = String(reason).replace(/[&<>"]/g, c =>
+                ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+              await core.summary.addHeading('PR-Agent readiness').addRaw(safe, true).write();
             };
             // Workflows to wait for before an automatic review: JSON arrays of workflow names in the step's
             // REQUIRED_WORKFLOWS and OPTIONAL_WORKFLOWS environment. These are the only lists of names to edit.
@@ -126,7 +131,11 @@ jobs:
             // Commit status written after a successful automatic review. A failed review does not
             // write it, so rerunning the job retries. Comment commands do not read or write it.
             const reviewStatus = "pr-agent/automatic";
-            const own = run => run.name === process.env.GITHUB_WORKFLOW || run.path === '.github/workflows/pr-agent.yml';
+            // This file's own path, from GITHUB_WORKFLOW_REF ("owner/repo/<path>@ref"), so a renamed copy still
+            // recognises itself. Run paths can carry an "@ref" suffix too.
+            const ownPath = (process.env.GITHUB_WORKFLOW_REF || '').split('@')[0].split('/').slice(2).join('/');
+            const own = run => run.name === process.env.GITHUB_WORKFLOW ||
+              (ownPath && (run.path || '').split('@')[0] === ownPath);
             if (context.eventName === 'issue_comment') {
               await decide(true, 'Trusted PR comment command; automatic checks are bypassed.');
               return;
@@ -172,16 +181,30 @@ jobs:
               await decide(false, 'The triggering commit is no longer the PR head.');
               return;
             }
-            // The event that opens a PR also starts its other workflows; give their runs time to appear.
-            const settle = Number(process.env.SETTLE_SECONDS || 0);
-            if (waitForAll && context.eventName === 'pull_request' && settle > 0)
-              await new Promise(resolve => setTimeout(resolve, settle * 1000));
             const wanted = new Set([...workflows.required, ...workflows.optional]);
-            const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-              ...context.repo, head_sha: sha, event: 'pull_request', per_page: 100,
-            });
-            const checks = runs.filter(run => !own(run) && (waitForAll || wanted.has(run.name)) &&
-              (run.pull_requests || []).some(item => item.number === number));
+            const listChecks = async () => {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                ...context.repo, head_sha: sha, event: 'pull_request', per_page: 100,
+              });
+              return runs.filter(run => !own(run) && (waitForAll || wanted.has(run.name)) &&
+                (run.pull_requests || []).some(item => item.number === number));
+            };
+            const sleep = seconds => new Promise(resolve => setTimeout(resolve, seconds * 1000));
+            // The event that opens a PR also starts its other workflows, but their runs can register late.
+            // Poll until one appears (up to SETTLE_SECONDS), then pause once more so its siblings register.
+            // If none ever appears, the later workflow_run completions do not exist either, so review now.
+            let checks = await listChecks();
+            const settle = Number(process.env.SETTLE_SECONDS || 0);
+            if (waitForAll && context.eventName === 'pull_request' && settle > 0) {
+              for (let waited = 0; !checks.length && waited < settle; waited += 10) {
+                await sleep(10);
+                checks = await listChecks();
+              }
+              if (checks.length) {
+                await sleep(10);
+                checks = await listChecks();
+              }
+            }
             const missing = workflows.required.filter(name => !checks.some(run => run.name === name));
             if (missing.length) {
               await decide(false, 'Waiting for ' + missing.join(', ') + ' to run on this head.');
@@ -313,7 +336,7 @@ jobs:
     name: Explain PR-Agent outcome
     needs: pr_agent_job
     if: >-
-      always() && (needs.pr_agent_job.result == 'failure' || needs.pr_agent_job.result == 'cancelled' ||
+      always() && (needs.pr_agent_job.result == 'failure' ||
       (needs.pr_agent_job.result == 'skipped' && github.event_name == 'issue_comment'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
