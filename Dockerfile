@@ -6,6 +6,7 @@
 # Python is installed at /usr/bin/python3.12 so the venv shebang matches the
 # same path provided by the pkg stage in the final image.
 # ==============================================================================
+# NO_AUTO_UPDATE
 FROM registry.access.redhat.com/ubi9-minimal:latest AS builder
 
 RUN microdnf install -y python3.12 python3.12-pip && \
@@ -55,8 +56,10 @@ RUN python3.12 -m uv sync --locked --no-editable --extra otel && \
 # SSL_CERT_FILE, which would override a CA mounted into
 # /etc/pki/ca-trust/source/anchors.
 # ==============================================================================
+# NO_AUTO_UPDATE
 FROM registry.access.redhat.com/ubi9/ubi-micro:latest AS micro
 
+# NO_AUTO_UPDATE
 FROM registry.access.redhat.com/ubi9:latest AS pkg
 COPY --from=micro / /mnt/rootfs
 RUN dnf install --installroot=/mnt/rootfs --releasever=9 \
@@ -84,6 +87,7 @@ RUN dnf install --installroot=/mnt/rootfs --releasever=9 \
 # FROM scratch
 ## commenting out the distroless step above, there is concern that the use of scratch will void our certification
 
+# NO_AUTO_UPDATE
 FROM registry.access.redhat.com/ubi9/ubi-micro:latest
 COPY --from=pkg /mnt/rootfs /
 

@@ -29,7 +29,7 @@ jobs:
       # PR would never get CI. An app token does.
       - name: Generate a token
         id: generate-token
-        uses: actions/create-github-app-token@v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.KC_ACTIONS_BOT_APP_CLIENT_ID }}
           private-key: ${{ secrets.KC_ACTIONS_BOT_APP_PRIVATE_KEY }}
@@ -38,7 +38,7 @@ jobs:
 
       - name: Resolve target branches
         id: targets
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const { owner, repo } = context.repo;
@@ -108,14 +108,14 @@ jobs:
 
       - name: Check out main
         if: steps.targets.outputs.branches != ''
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           token: ${{ steps.generate-token.outputs.token }}
 
       - name: Backport
         if: steps.targets.outputs.branches != ''
-        uses: korthout/backport-action@v4.7.0
+        uses: korthout/backport-action@8560fb503c275d433c56f05a2f64850093baa9f7 # v4.7.0
         with:
           github_token: ${{ steps.generate-token.outputs.token }}
           target_branches: ${{ steps.targets.outputs.branches }}
