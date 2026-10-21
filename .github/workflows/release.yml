@@ -110,7 +110,7 @@ jobs:
           echo "Dry-run: packaging this branch and building the multi-arch image without publishing."
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.2.0
+        uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -455,7 +455,7 @@ jobs:
       # in one hour, so no long-lived user PAT is stored in this repository.
       - name: Generate an app token with write access to the parent chart repo
         id: parent-token
-        uses: actions/create-github-app-token@v3.2.0
+        uses: actions/create-github-app-token@v3.3.0
         with:
           client-id: ${{ vars.KC_ACTIONS_BOT_APP_CLIENT_ID }}
           private-key: ${{ secrets.KC_ACTIONS_BOT_APP_PRIVATE_KEY }}
