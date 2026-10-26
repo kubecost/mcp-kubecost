@@ -45,6 +45,11 @@ RUN python3.12 -m uv sync --locked --no-editable --extra otel && \
 # ==============================================================================
 FROM registry.access.redhat.com/hi/python:3.12
 
+# The app never runs pip, and the base's pip vendors packages with HIGH/CRITICAL
+# CVEs (e.g. msgpack 1.1.2). Exec form because the image has no shell.
+USER 0
+RUN ["python3", "-m", "pip", "uninstall", "--yes", "pip"]
+
 ARG version=dev
 LABEL name="mcp-kubecost" \
     vendor="Kubecost by IBM" \
