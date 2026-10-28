@@ -27,28 +27,31 @@ global:
   # Keys mirror the Kubecost parent chart, which means that a kubecost install that
   # sets global.updateCaTrust covers this pod with no MCP-specific value.
   #
-  # An init container extracts the mounted anchors plus the image's public
-  # anchors into a shared emptyDir, which both containers mount over
-  # /etc/pki/ca-trust/extracted/pem. That is the file /etc/pki/tls/cert.pem
-  # resolves to, and OpenSSL's default store is what both of this server's HTTP
-  # clients verify against — FastMCP's httpx2 client for OIDC discovery, and the
+  # An init container extracts the mounted anchors plus ubi-minimal's public
+  # anchors into a shared emptyDir, and SSL_CERT_FILE points this server's HTTP
+  # clients at the result — FastMCP's httpx2 client for OIDC discovery, and the
   # Kubecost client. Unlike config.ssl.caBundle below, which replaces the public
   # roots for Kubecost calls only, this applies everywhere and adds rather than
   # replaces.
   #
-  # Two deliberate differences from the parent chart:
-  #   - The parent's global.updateCaTrust.securityContext is ignored. It defaults
-  #     to runAsUser 0 / runAsNonRoot false, and that default reaches this
-  #     subchart whether or not the feature is enabled. A root init container
-  #     would contradict podSecurityContext.runAsNonRoot and be rejected by the
-  #     OpenShift restricted-v2 SCC that global.platforms.openshift supports. The
-  #     `trust extract` command used here needs no root, so the init container
-  #     reuses this chart's own containerSecurityContext instead.
-  #   - The emptyDir covers only .../extracted/pem, not the whole extracted
-  #     directory, so the image's java/, openssl/ and edk2/ bundles survive.
+  # One deliberate difference from the parent chart: its
+  # global.updateCaTrust.securityContext is ignored. It defaults to runAsUser 0 /
+  # runAsNonRoot false, and that default reaches this subchart whether or not the
+  # feature is enabled. A root init container would contradict
+  # podSecurityContext.runAsNonRoot and be rejected by the OpenShift restricted-v2
+  # SCC that global.platforms.openshift supports. The `trust extract` command used
+  # here needs no root, so the init container reuses this chart's own
+  # containerSecurityContext instead.
   updateCaTrust:
     # Set to true to mount and extract custom CA certificates.
     enabled: false
+    # Image for the init container, which needs a shell and p11-kit's `trust`;
+    # the app image has neither. Same default as the finops-agent chart.
+    initImage:
+      registry: registry.access.redhat.com
+      repository: ubi9/ubi-minimal
+      tag: latest
+      pullPolicy: IfNotPresent
     # Name of a Secret holding one or more PEM certificates. Set exactly one of
     # caCertsSecret and caCertsConfig. Only read when enabled is true — the
     # non-empty default matches the parent chart.

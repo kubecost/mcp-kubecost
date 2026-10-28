@@ -112,7 +112,7 @@ def test_update_ca_trust_extracts_as_non_root(tmp_path):
     """The parent chart runs this init container as ``runAsUser: 0``. ``trust extract``
     does not need it, and root here would contradict ``podSecurityContext.runAsNonRoot``
     and the OpenShift restricted-v2 SCC that ``global.platforms.openshift`` supports."""
-    spec = _render(
+    docs = _render(
         tmp_path,
         {
             "global": {
@@ -120,11 +120,15 @@ def test_update_ca_trust_extracts_as_non_root(tmp_path):
                 "platforms": {"cicd": {"enabled": True, "skipSanityChecks": True}},
             }
         },
-    )["Deployment"]["spec"]["template"]["spec"]
+    )
+    spec = docs["Deployment"]["spec"]["template"]["spec"]
 
+    # The app image has no shell or p11-kit, so the init container runs ubi-minimal.
     init = next(container for container in spec["initContainers"] if container["name"] == "update-ca-trust")
+    assert init["image"] == "registry.access.redhat.com/ubi9/ubi-minimal:latest"
     assert "trust extract" in init["args"][0]
-    assert "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem" in init["args"][0]
+    assert "/etc/mcp-kubecost/ca-trust/tls-ca-bundle.pem" in init["args"][0]
+    assert docs["ConfigMap"]["data"]["SSL_CERT_FILE"] == "/etc/mcp-kubecost/ca-trust/tls-ca-bundle.pem"
     security = init["securityContext"]
     assert security["allowPrivilegeEscalation"] is False
     assert security["readOnlyRootFilesystem"] is True
@@ -134,16 +138,16 @@ def test_update_ca_trust_extracts_as_non_root(tmp_path):
     # Both containers read the extracted bundle; only the init container writes it.
     init_mounts = {mount["name"]: mount for mount in init["volumeMounts"]}
     assert init_mounts["ca-certs"]["mountPath"] == "/etc/pki/ca-trust/source/anchors"
-    assert init_mounts["ssl-path"]["mountPath"] == "/etc/pki/ca-trust/extracted/pem"
+    assert init_mounts["ssl-path"]["mountPath"] == "/etc/mcp-kubecost/ca-trust"
     assert not init_mounts["ssl-path"].get("readOnly", False)
     main_mounts = {mount["name"]: mount for mount in spec["containers"][0]["volumeMounts"]}
-    assert main_mounts["ssl-path"]["mountPath"] == "/etc/pki/ca-trust/extracted/pem"
+    assert main_mounts["ssl-path"]["mountPath"] == "/etc/mcp-kubecost/ca-trust"
     assert main_mounts["ssl-path"]["readOnly"] is True
 
     volumes = {volume["name"]: volume for volume in spec["volumes"]}
     assert volumes["ca-certs"]["secret"]["secretName"] == "corporate-ca"
     # An emptyDir keeps readOnlyRootFilesystem intact and cannot go stale against
-    # the image's own public anchors, which are re-extracted on every pod start.
+    # the public anchors, which are re-extracted on every pod start.
     assert volumes["ssl-path"]["emptyDir"] == {}
 
 
