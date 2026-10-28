@@ -207,7 +207,7 @@ The chart defaults to a non-root UID/GID, RuntimeDefault seccomp, a read-only ro
 
 There are two mechanisms, and they reach different traffic. This server makes two kinds of outbound TLS connection — FastMCP's own client fetches the OIDC discovery document, and the Kubecost client calls the cost APIs — so which one you need depends on what is privately signed.
 
-**`global.updateCaTrust` — a private CA that must cover everything.** An init container merges the certificates you supply with ubi-minimal's public roots and points both clients at the result through `SSL_CERT_FILE`, so the CA is trusted *in addition to* the public roots, for the identity provider and Kubecost alike. The keys mirror the Kubecost umbrella chart, so an umbrella install that already sets `global.updateCaTrust` covers this pod with no MCP-specific value.
+**`global.updateCaTrust` — a private CA that must cover everything.** An init container merges your certificates with the public roots, and `SSL_CERT_FILE` points both clients at the result, so the CA is trusted *in addition to* the public roots, for the identity provider and Kubecost alike. The keys mirror the Kubecost umbrella chart, so an umbrella install that already sets `global.updateCaTrust` covers this pod with no MCP-specific value.
 
 ```bash
 kubectl create secret generic corporate-ca --from-file=ca.crt=corporate-root.pem -n mcp-kubecost

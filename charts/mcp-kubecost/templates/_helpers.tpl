@@ -119,11 +119,8 @@ about intent.
 {{- end }}
 
 {{/*
-Directory the extracted PEM trust bundle is written to. Deliberately outside
-/etc/pki: the image's OpenSSL finds CAs through /etc/pki/tls/certs symlinks into
-/etc/pki/ca-trust/extracted/pem/directory-hash, which a mount there would hide.
-SSL_CERT_FILE points both the Kubecost `httpx` client and FastMCP's `httpx2`
-client at the bundle instead.
+Where the init container writes the merged CA bundle; SSL_CERT_FILE points at it.
+Not under /etc/pki: a mount there hides the symlinks the image's OpenSSL reads CAs from.
 */}}
 {{- define "mcp-kubecost.caTrustExtractedDir" -}}
 /etc/mcp-kubecost/ca-trust
