@@ -14,7 +14,8 @@ USAGE
     update_dependencies.py [--dry-run] [--only ECOSYSTEM] [--no-major-version-updates]
                            [--min-age HOURS]
                            [--enable-docker-latest-to-sha-updates]
-                           [--add-python-latest-version] [--tui]
+                           [--add-python-latest-version]
+                           [--no-update-python-inline-script-metadata] [--tui]
 
     Run it from the root of the repo you want to update. The current working
     directory is that root; where this script lives does not matter. Ecosystems
@@ -32,6 +33,11 @@ ECOSYSTEMS
              clears the --min-age cooldown becomes the target: the Dockerfile
              uv image tag is raised to it (digest dropped, the docker step
              re-pins it) and the floor follows the image. Never lowered.
+             Also updates PEP 723 `# /// script` dependency floors in `.py`
+             files (same relax / `uv lock --script --upgrade` / raise-floor
+             flow). Adjacent `script.py.lock` files are refreshed when they
+             already exist; temporary locks created only for resolving are
+             removed. Disable with --no-update-python-inline-script-metadata.
     actions  every `uses: owner/repo@ref` in .github/**/*.yml (workflows and
              composite actions) is pinned to a commit SHA with a `# vX.Y.Z`
              comment (full semver when a same-commit X.Y.Z tag exists; floating
@@ -60,6 +66,10 @@ OPTIONS
                    the [build-system] uv_build floor to the newest release that
                    clears --min-age. Off by
                    default.
+    --no-update-python-inline-script-metadata
+                   Skip PEP 723 `# /// script` dependency updates in `.py`
+                   files. Those updates run by default with the python
+                   ecosystem.
     --no-major-version-updates
                    Hold major upgrades. A new major release of an action is
                    reported as "held" and the current version is only pinned in
@@ -106,7 +116,7 @@ import time
 import tomllib
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -116,6 +126,8 @@ from packaging.version import InvalidVersion, Version
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
+
+type SpecsFn = Callable[[str], Iterator[tuple[int, int, str, Requirement]]]
 
 console = Console()
 # The alias lives in this repo and is run from other checkouts. Update the
@@ -128,7 +140,11 @@ ECOSYSTEMS = ("python", "actions", "docker", "hooks")
 
 
 def run(
-    command: list[str], *, cwd: Path | None = None, allow_not_found: bool = False
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    allow_not_found: bool = False,
+    allow_failure: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         command,
@@ -138,6 +154,8 @@ def run(
         check=False,
     )
     if result.returncode != 0:
+        if allow_failure:
+            return result
         if allow_not_found and "(HTTP 404)" in result.stderr:
             return result
         console.print(f"[bold red]Command failed:[/bold red] {' '.join(command)}")
@@ -153,7 +171,7 @@ DEPENDENCY_SECTIONS = {"project", "project.optional-dependencies", "dependency-g
 SPEC_RE = re.compile(r'"([^"\n]+)"')
 
 
-def dependency_specs(text: str):
+def dependency_specs(text: str) -> Iterator[tuple[int, int, str, Requirement]]:
     """Yield requirement spans without rewriting TOML formatting or comments."""
     section = ""
     in_dependencies = False
@@ -188,13 +206,85 @@ def dependency_specs(text: str):
         offset += len(line)
 
 
+def pep723_dependency_specs(text: str) -> Iterator[tuple[int, int, str, Requirement]]:
+    """Yield requirement spans from a leading PEP 723 `# /// script` block.
+
+    Only the first script block in the file preamble (shebang, blank lines, and
+    `#` comments before any code) is considered, so examples inside string
+    literals later in the file are ignored.
+    """
+    in_script = False
+    in_dependencies = False
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        marker = stripped.rstrip("\r\n")
+        is_blank = not line.strip()
+        is_comment = stripped.startswith("#")
+        if not in_script:
+            if not is_blank and not is_comment:
+                break
+            if marker == "# /// script":
+                in_script = True
+            offset += len(line)
+            continue
+        if marker == "# ///":
+            offset += len(line)
+            break
+        if not is_comment:
+            offset += len(line)
+            continue
+        hash_at = len(line) - len(stripped)
+        after_hash = stripped[1:]
+        if after_hash.startswith((" ", "\t")):
+            toml_line = after_hash[1:]
+            toml_offset = offset + hash_at + 2
+        elif after_hash in ("", "\n", "\r\n"):
+            offset += len(line)
+            continue
+        else:
+            toml_line = after_hash
+            toml_offset = offset + hash_at + 1
+        toml_stripped = toml_line.strip()
+        if toml_stripped.startswith("dependencies = ["):
+            in_dependencies = True
+        if in_dependencies:
+            content = toml_line.split("#", 1)[0]
+            for match in SPEC_RE.finditer(content):
+                try:
+                    requirement = Requirement(match.group(1))
+                except InvalidRequirement:
+                    continue
+                if requirement.url or pep508_name(requirement.name) == "pr-agent":
+                    continue
+                yield (
+                    toml_offset + match.start(1),
+                    toml_offset + match.end(1),
+                    match.group(1),
+                    requirement,
+                )
+            if toml_stripped.endswith("]"):
+                in_dependencies = False
+        offset += len(line)
+
+
 def pep508_name(spec: str) -> str:
     name = re.split(r"[<>=!~\[; ]", spec.strip(), maxsplit=1)[0]
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
 def parse_pyproject_direct() -> set[str]:
+    if not PYPROJECT.is_file():
+        return set()
     return {pep508_name(req.name) for _, _, _, req in dependency_specs(PYPROJECT.read_text())}
+
+
+def parse_inline_script_direct() -> set[str]:
+    return {
+        pep508_name(req.name)
+        for path in find_pep723_scripts()
+        for _, _, _, req in pep723_dependency_specs(path.read_text(encoding="utf-8"))
+    }
 
 
 def relax_spec(spec: str, req: Requirement, *, allow_major: bool = True) -> str:
@@ -219,13 +309,13 @@ def frozen_requirement(spec: str, version: str) -> str:
     return f"{base}=={version}{suffix}"
 
 
-def freeze_opted_out(text: str, locked: Mapping[str, str]) -> str:
+def freeze_opted_out(text: str, locked: Mapping[str, str], *, specs: SpecsFn = dependency_specs) -> str:
     """Hold NO_AUTO_UPDATE requirements at their locked version for this resolve.
 
     `uv lock --upgrade` will not move a requirement that is pinned to the version
     already in the lock. The original text is what gets written back afterwards.
     """
-    for start, end, spec, req in reversed(list(dependency_specs(text))):
+    for start, end, spec, req in reversed(list(specs(text))):
         if not has_NO_AUTO_UPDATE(text, start):
             continue
         version = locked.get(pep508_name(req.name))
@@ -235,13 +325,13 @@ def freeze_opted_out(text: str, locked: Mapping[str, str]) -> str:
     return text
 
 
-def relax_constraints(text: str, *, allow_major: bool = True) -> str:
+def relax_constraints(text: str, *, allow_major: bool = True, specs: SpecsFn = dependency_specs) -> str:
     """Let uv resolve exact pins; retain marker-specific major lines and bounds.
 
     A requirement whose line, or the comment on the line above, contains
     NO_AUTO_UPDATE keeps its current specifier.
     """
-    for start, end, spec, req in reversed(list(dependency_specs(text))):
+    for start, end, spec, req in reversed(list(specs(text))):
         if has_NO_AUTO_UPDATE(text, start):
             continue
         text = text[:start] + relax_spec(spec, req, allow_major=allow_major) + text[end:]
@@ -256,18 +346,20 @@ def add_minimum_version(spec: str, version: str) -> str:
     return f"{spec}>={version}"
 
 
-def update_pyproject_constraints(
+def update_requirement_constraints(
     locked_versions: dict[str, list[str]],
     *,
     original: str,
     allow_major: bool = True,
     add_latest: bool = False,
-) -> list[tuple[str, str, str]]:
+    specs: SpecsFn = dependency_specs,
+    skip_label: str = "pyproject.toml",
+) -> tuple[str, list[tuple[str, str, str]]]:
     changes = []
     text = original
-    for start, end, spec, req in reversed(list(dependency_specs(original))):
+    for start, end, spec, req in reversed(list(specs(original))):
         if has_NO_AUTO_UPDATE(original, start):
-            NO_AUTO_UPDATE_SKIPS.append(("pyproject.toml", spec, "unchanged"))
+            NO_AUTO_UPDATE_SKIPS.append((skip_label, spec, "unchanged"))
             continue
         relaxed = Requirement(relax_spec(spec, req, allow_major=allow_major))
         candidates = [v for v in locked_versions.get(pep508_name(req.name), []) if Version(v) in relaxed.specifier]
@@ -295,16 +387,51 @@ def update_pyproject_constraints(
         if updated != spec:
             text = text[:start] + updated + text[end:]
             changes.append((pep508_name(req.name), spec, updated))
+    return text, list(reversed(changes))
+
+
+def update_pyproject_constraints(
+    locked_versions: dict[str, list[str]],
+    *,
+    original: str,
+    allow_major: bool = True,
+    add_latest: bool = False,
+) -> list[tuple[str, str, str]]:
+    text, changes = update_requirement_constraints(
+        locked_versions,
+        original=original,
+        allow_major=allow_major,
+        add_latest=add_latest,
+        specs=dependency_specs,
+        skip_label="pyproject.toml",
+    )
     PYPROJECT.write_text(text, encoding="utf-8")
-    return list(reversed(changes))
+    return changes
+
+
+def parse_uv_lock_file(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    with path.open("rb") as handle:
+        data = tomllib.load(handle)
+    return {pkg["name"]: pkg["version"] for pkg in data.get("package", [])}
 
 
 def parse_uv_lock() -> dict[str, str]:
-    if not UV_LOCK.is_file():
-        return {}
-    with UV_LOCK.open("rb") as handle:
-        data = tomllib.load(handle)
-    return {pkg["name"]: pkg["version"] for pkg in data.get("package", [])}
+    return parse_uv_lock_file(UV_LOCK)
+
+
+def locked_version_lists(path: Path) -> dict[str, list[str]]:
+    with path.open("rb") as handle:
+        packages = tomllib.load(handle).get("package", [])
+    versions: dict[str, list[str]] = {}
+    for package in packages:
+        versions.setdefault(package["name"], []).append(package["version"])
+    return versions
+
+
+def script_lock_path(script: Path) -> Path:
+    return Path(f"{script}.lock")
 
 
 def version_parts(version: str) -> tuple[int, int, int]:
@@ -465,13 +592,8 @@ def update_python(
         relaxed = freeze_opted_out(relaxed, parse_uv_lock())
         PYPROJECT.write_text(relaxed, encoding="utf-8")
         run(["uv", "lock", "--upgrade"])
-        with UV_LOCK.open("rb") as handle:
-            packages = tomllib.load(handle).get("package", [])
-        versions: dict[str, list[str]] = {}
-        for package in packages:
-            versions.setdefault(package["name"], []).append(package["version"])
         changes = update_pyproject_constraints(
-            versions,
+            locked_version_lists(UV_LOCK),
             original=original,
             allow_major=allow_major,
             add_latest=add_latest,
@@ -486,6 +608,83 @@ def update_python(
     if dry_run:
         restore()
     return after, changes
+
+
+def update_inline_script(
+    path: Path,
+    *,
+    allow_major: bool = True,
+    dry_run: bool = False,
+    add_latest: bool = False,
+) -> list[tuple[str, str, str]]:
+    """Raise PEP 723 script dependency floors via `uv lock --script --upgrade`."""
+    rel = str(path.relative_to(ROOT))
+    lock_path = script_lock_path(path)
+    original = path.read_text(encoding="utf-8")
+    had_lock = lock_path.is_file()
+    original_lock = lock_path.read_bytes() if had_lock else None
+
+    def restore() -> None:
+        path.write_text(original, encoding="utf-8")
+        if had_lock:
+            assert original_lock is not None
+            lock_path.write_bytes(original_lock)
+        else:
+            lock_path.unlink(missing_ok=True)
+
+    try:
+        relaxed = relax_constraints(original, allow_major=allow_major, specs=pep723_dependency_specs)
+        relaxed = freeze_opted_out(relaxed, parse_uv_lock_file(lock_path), specs=pep723_dependency_specs)
+        path.write_text(relaxed, encoding="utf-8")
+        lock_result = run(
+            ["uv", "lock", "--script", str(path), "--upgrade"],
+            allow_failure=True,
+        )
+        if lock_result.returncode != 0:
+            detail = (lock_result.stderr or lock_result.stdout).strip() or "uv lock failed"
+            console.print(f"[yellow]python: skipped {rel} ({detail})[/]")
+            restore()
+            return []
+        text, changes = update_requirement_constraints(
+            locked_version_lists(lock_path),
+            original=original,
+            allow_major=allow_major,
+            add_latest=add_latest,
+            specs=pep723_dependency_specs,
+            skip_label=rel,
+        )
+        if dry_run:
+            restore()
+            return changes
+        path.write_text(text, encoding="utf-8")
+        if had_lock:
+            run(["uv", "lock", "--script", str(path)])
+        else:
+            lock_path.unlink(missing_ok=True)
+    except BaseException:
+        restore()
+        raise
+    return changes
+
+
+def update_inline_scripts(
+    *,
+    allow_major: bool = True,
+    dry_run: bool = False,
+    add_latest: bool = False,
+) -> list[tuple[str, str, str, str]]:
+    """Update every PEP 723 script; returns (name, old, new, relative path)."""
+    rows: list[tuple[str, str, str, str]] = []
+    for path in find_pep723_scripts():
+        rel = str(path.relative_to(ROOT))
+        for name, old, new in update_inline_script(
+            path,
+            allow_major=allow_major,
+            dry_run=dry_run,
+            add_latest=add_latest,
+        ):
+            rows.append((name, old, new, rel))
+    return rows
 
 
 UV_IMAGE_RE = re.compile(
@@ -670,6 +869,7 @@ DOCKER_LATEST_SKIPS: list[tuple[str, str, str]] = []
 # Per-run caches so skip_reason and the updaters share one file walk each.
 _ACTION_FILES: list[Path] | None = None
 _DOCKERFILES: list[Path] | None = None
+_PEP723_SCRIPTS: list[Path] | None = None
 
 
 def find_files(match) -> list[Path]:
@@ -712,6 +912,22 @@ def find_action_files() -> list[Path]:
             if p.relative_to(ROOT).parts[:1] == (".github",)
         ]
     return _ACTION_FILES
+
+
+def find_pep723_scripts() -> list[Path]:
+    """Python files with at least one PEP 723 `# /// script` dependency."""
+    global _PEP723_SCRIPTS
+    if _PEP723_SCRIPTS is None:
+        found: list[Path] = []
+        for path in find_files(lambda n: n.endswith(".py")):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if next(pep723_dependency_specs(text), None) is not None:
+                found.append(path)
+        _PEP723_SCRIPTS = found
+    return _PEP723_SCRIPTS
 
 
 def has_NO_AUTO_UPDATE(text: str, pos: int) -> bool:
@@ -766,7 +982,7 @@ def fetch_json(url: str) -> dict | None:
     try:
         with urllib.request.urlopen(url, timeout=30) as response:
             payload = json.load(response)
-    except OSError, json.JSONDecodeError:
+    except (OSError, json.JSONDecodeError):  # fmt: skip
         return None
     return payload if isinstance(payload, dict) else None
 
@@ -903,11 +1119,11 @@ def update_actions(
     commits: dict[tuple[str, str], str | None] = {}
     cooldown_repos: set[str] = set()
 
-    def commit_sha(repo: str, ref: str, *, missing_ok: bool = False) -> str | None:
+    def commit_sha(repo: str, ref: str) -> str | None:
         if (repo, ref) not in commits:
             result = run(
                 ["gh", "api", f"repos/{repo}/commits/{ref}"],
-                allow_not_found=missing_ok,
+                allow_failure=True,
             )
             if result.returncode != 0:
                 console.print(f"[yellow]actions: no commit for {repo}@{ref}, skipped[/]")
@@ -925,7 +1141,7 @@ def update_actions(
         """
         if is_full_semver(tag):
             return tag
-        sha = commit_sha(repo, tag, missing_ok=True)
+        sha = commit_sha(repo, tag)
         if not sha:
             return tag
         result = run(
@@ -941,7 +1157,7 @@ def update_actions(
             name = ref["ref"].removeprefix("refs/tags/")
             if not name.startswith(prefix) or not is_full_semver(name):
                 continue
-            if commit_sha(repo, name, missing_ok=True) != sha:
+            if commit_sha(repo, name) != sha:
                 continue
             version = Version(name)
             if best_version is None or version > best_version:
@@ -1394,6 +1610,7 @@ def print_python(
     python_after: dict[str, str],
     pyproject_constraint_changes: list[tuple[str, str, str]],
     maintenance: list[tuple[str, str, str, str, str]],
+    inline_script_constraint_changes: list[tuple[str, str, str, str]] | None = None,
 ) -> None:
     changes = collect_changes(python_before, python_after)
     rows: list[tuple[str, str, str, str, str]] = []
@@ -1410,6 +1627,9 @@ def print_python(
         if package in listed:
             continue
         rows.append(("spec", package, old, new, "pyproject"))
+        listed.add(package)
+    for _name, old, new, source in inline_script_constraint_changes or []:
+        rows.append(("spec", pep508_name(old), old, new, source))
     rows.extend(maintenance)
     hidden = sum(1 for name, _old, _new in changes["patch"] if name not in python_direct)
     extra = ""
@@ -1446,14 +1666,19 @@ def print_hooks(changes: list[tuple[str, str, str]]) -> None:
     emit_section("hooks", rows)
 
 
-def skip_reason(ecosystem: str) -> str | None:
+def skip_reason(ecosystem: str, *, update_inline_scripts: bool = True) -> str | None:
     """Ecosystems with nothing to update stay out of the run.
 
     This file's own dependencies are declared in its script header, so a
     repository does not need a project lockfile for the script to run.
     """
-    if ecosystem == "python" and not PYPROJECT.is_file():
-        return "no pyproject.toml"
+    if ecosystem == "python":
+        has_project = PYPROJECT.is_file()
+        has_scripts = update_inline_scripts and bool(find_pep723_scripts())
+        if not has_project and not has_scripts:
+            if update_inline_scripts:
+                return "no pyproject.toml or PEP 723 scripts"
+            return "no pyproject.toml"
     if ecosystem == "actions" and not find_action_files():
         return "no .github workflow files"
     if ecosystem == "docker" and not find_dockerfiles():
@@ -1493,7 +1718,7 @@ TUI_STYLE_RULES = [
 ]
 
 ECOSYSTEM_HINTS = {
-    "python": "pyproject.toml + uv.lock",
+    "python": "pyproject.toml + uv.lock + PEP 723 scripts",
     "actions": ".github workflows → SHA pins",
     "docker": "Dockerfile FROM → digests",
     "hooks": "pre-commit autoupdate --freeze",
@@ -1538,7 +1763,10 @@ def prompt_tui(args: argparse.Namespace) -> argparse.Namespace:
     defaults = set(default_ecosystems(args))
     eco_choices = []
     for ecosystem in ECOSYSTEMS:
-        reason = skip_reason(ecosystem)
+        reason = skip_reason(
+            ecosystem,
+            update_inline_scripts=args.update_python_inline_script_metadata,
+        )
         hint = ECOSYSTEM_HINTS[ecosystem]
         eco_choices.append(
             questionary.Choice(
@@ -1590,6 +1818,16 @@ def prompt_tui(args: argparse.Namespace) -> argparse.Namespace:
                 checked=args.add_python_latest_version,
             )
         )
+        option_choices.append(
+            questionary.Choice(
+                title=[
+                    ("class:opt", "PEP 723 scripts"),
+                    ("class:hint", "  update # /// script dependency floors"),
+                ],
+                value="inline_scripts",
+                checked=args.update_python_inline_script_metadata,
+            )
+        )
     if "docker" in selected:
         option_choices.append(
             questionary.Choice(
@@ -1623,6 +1861,7 @@ def prompt_tui(args: argparse.Namespace) -> argparse.Namespace:
     args.dry_run = "dry_run" in options_set
     args.allow_major = "no_major" not in options_set
     args.add_python_latest_version = "add_python_latest" in options_set
+    args.update_python_inline_script_metadata = "inline_scripts" in options_set
     args.enable_docker_latest_to_sha_updates = "docker_latest" in options_set
     args.min_age = min_age
     args.only = None
@@ -1634,7 +1873,10 @@ def resolve_ecosystems(args: argparse.Namespace, *, only_mode: bool) -> set[str]
     selected = list(args.ecosystems) if getattr(args, "ecosystems", None) is not None else default_ecosystems(args)
     ecosystems: set[str] = set()
     for ecosystem in selected:
-        reason = skip_reason(ecosystem)
+        reason = skip_reason(
+            ecosystem,
+            update_inline_scripts=args.update_python_inline_script_metadata,
+        )
         if reason is None:
             ecosystems.add(ecosystem)
             continue
@@ -1697,6 +1939,16 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--no-update-python-inline-script-metadata",
+        action="store_false",
+        dest="update_python_inline_script_metadata",
+        help=(
+            "Skip PEP 723 # /// script dependency updates in .py files. "
+            "Those updates run by default with the python ecosystem."
+        ),
+    )
+    parser.set_defaults(update_python_inline_script_metadata=True)
+    parser.add_argument(
         "--tui",
         action="store_true",
         help=("Interactive prompts to pick ecosystems and options. Other flags seed the defaults. Requires a TTY."),
@@ -1724,19 +1976,31 @@ def main() -> None:
         console.print("[bold magenta]dry run[/] [dim]no files will be changed[/]")
     if "python" in ecosystems:
         with console.status("[cyan]python[/]", spinner="dots"):
-            python_before = parse_uv_lock()
+            python_before = parse_uv_lock() if PYPROJECT.is_file() else {}
             python_direct = parse_pyproject_direct()
-            python_after, changes = update_python(
-                allow_major=args.allow_major,
-                dry_run=args.dry_run,
-                add_latest=args.add_python_latest_version,
-            )
-            uv_changes, uv_notes = sync_uv_build(
-                dry_run=args.dry_run,
-                add_latest=args.add_python_latest_version,
-                min_age_hours=args.min_age,
-            )
-            changes = changes + uv_changes
+            changes: list[tuple[str, str, str]] = []
+            python_after: dict[str, str] = {}
+            uv_notes: list[tuple[str, str, str, str, str]] = []
+            if PYPROJECT.is_file():
+                python_after, changes = update_python(
+                    allow_major=args.allow_major,
+                    dry_run=args.dry_run,
+                    add_latest=args.add_python_latest_version,
+                )
+                uv_changes, uv_notes = sync_uv_build(
+                    dry_run=args.dry_run,
+                    add_latest=args.add_python_latest_version,
+                    min_age_hours=args.min_age,
+                )
+                changes = changes + uv_changes
+            script_changes: list[tuple[str, str, str, str]] = []
+            if args.update_python_inline_script_metadata:
+                script_changes = update_inline_scripts(
+                    allow_major=args.allow_major,
+                    dry_run=args.dry_run,
+                    add_latest=args.add_python_latest_version,
+                )
+                python_direct = python_direct | parse_inline_script_direct()
             maintenance = uv_notes + python_maintenance(python_direct)
         print_python(
             python_direct=python_direct,
@@ -1744,6 +2008,7 @@ def main() -> None:
             python_after=python_after,
             pyproject_constraint_changes=changes,
             maintenance=maintenance,
+            inline_script_constraint_changes=script_changes,
         )
     if "actions" in ecosystems:
         with console.status("[cyan]actions[/]", spinner="dots"):
