@@ -33,6 +33,9 @@ data:
   FASTMCP_HTTP_HOST_ORIGIN_PROTECTION: {{ .Values.config.fastmcpHttpHostOriginProtection | quote }}
   FASTMCP_HTTP_ALLOWED_HOSTS: {{ include "mcp-kubecost.allowedHosts" . | quote }}
   FASTMCP_HTTP_ALLOWED_ORIGINS: {{ include "mcp-kubecost.allowedOrigins" . | quote }}
+  {{- if include "mcp-kubecost.updateCaTrustEnabled" . }}
+  SSL_CERT_FILE: {{ printf "%s/tls-ca-bundle.pem" (include "mcp-kubecost.caTrustExtractedDir" .) | quote }}
+  {{- end }}
   {{- if .Values.config.ssl.caBundle.existingSecret }}
   SSL_CA_BUNDLE: {{ .Values.config.ssl.caBundle.mountPath | quote }}
   {{- end }}
