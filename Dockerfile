@@ -6,6 +6,7 @@
 # Python is installed at /usr/bin/python3.13 so the venv shebang matches the
 # same path provided by hi/python:3.13 in the final image.
 # ==============================================================================
+# NO_AUTO_UPDATE
 FROM registry.access.redhat.com/hi/python:3.13-builder AS builder
 
 # The builder image runs as 65532; root is needed to write /app
@@ -43,6 +44,7 @@ RUN python3.13 -m uv sync --locked --no-editable --extra otel && \
 # with an extracted CA trust store; passes the Red Hat OpenShift Operator's
 # BasedOnUbi preflight check.
 # ==============================================================================
+# NO_AUTO_UPDATE
 FROM registry.access.redhat.com/hi/python:3.13
 
 # The app never runs pip, and the base's pip vendors packages with HIGH/CRITICAL
