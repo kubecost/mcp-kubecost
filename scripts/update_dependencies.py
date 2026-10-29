@@ -194,29 +194,20 @@ def pep508_name(spec: str) -> str:
 
 
 def parse_pyproject_direct() -> set[str]:
-    return {
-        pep508_name(req.name)
-        for _, _, _, req in dependency_specs(PYPROJECT.read_text())
-    }
+    return {pep508_name(req.name) for _, _, _, req in dependency_specs(PYPROJECT.read_text())}
 
 
 def relax_spec(spec: str, req: Requirement, *, allow_major: bool = True) -> str:
     updated = spec
     for constraint in req.specifier:
         if constraint.operator == "==" and "*" not in constraint.version:
-            updated = updated.replace(
-                f"=={constraint.version}", f">={constraint.version}", 1
-            )
+            updated = updated.replace(f"=={constraint.version}", f">={constraint.version}", 1)
             if req.marker:
                 # Distinct pins under Python markers intentionally track different major lines.
                 upper = Version(constraint.version).major + 1
-                updated = updated.replace(
-                    f">={constraint.version}", f">={constraint.version},<{upper}", 1
-                )
+                updated = updated.replace(f">={constraint.version}", f">={constraint.version},<{upper}", 1)
         elif allow_major and constraint.operator == "<" and not req.marker:
-            updated = re.sub(
-                r",?\s*<" + re.escape(constraint.version) + r"(?=,|;|$)", "", updated
-            )
+            updated = re.sub(r",?\s*<" + re.escape(constraint.version) + r"(?=,|;|$)", "", updated)
     return updated
 
 
@@ -253,9 +244,7 @@ def relax_constraints(text: str, *, allow_major: bool = True) -> str:
     for start, end, spec, req in reversed(list(dependency_specs(text))):
         if has_NO_AUTO_UPDATE(text, start):
             continue
-        text = (
-            text[:start] + relax_spec(spec, req, allow_major=allow_major) + text[end:]
-        )
+        text = text[:start] + relax_spec(spec, req, allow_major=allow_major) + text[end:]
     return text
 
 
@@ -281,11 +270,7 @@ def update_pyproject_constraints(
             NO_AUTO_UPDATE_SKIPS.append(("pyproject.toml", spec, "unchanged"))
             continue
         relaxed = Requirement(relax_spec(spec, req, allow_major=allow_major))
-        candidates = [
-            v
-            for v in locked_versions.get(pep508_name(req.name), [])
-            if Version(v) in relaxed.specifier
-        ]
+        candidates = [v for v in locked_versions.get(pep508_name(req.name), []) if Version(v) in relaxed.specifier]
         if not candidates:
             continue
         version = max(candidates, key=Version)
@@ -294,21 +279,14 @@ def update_pyproject_constraints(
             updated = add_minimum_version(spec, version)
         else:
             for constraint in req.specifier:
-                if (
-                    constraint.operator in ("==", ">=")
-                    and "*" not in constraint.version
-                ):
+                if constraint.operator in ("==", ">=") and "*" not in constraint.version:
                     if Version(version) > Version(constraint.version):
                         updated = updated.replace(
                             f"{constraint.operator}{constraint.version}",
                             f"{constraint.operator}{version}",
                             1,
                         )
-                elif (
-                    allow_major
-                    and constraint.operator == "<"
-                    and Version(version) not in req.specifier
-                ):
+                elif allow_major and constraint.operator == "<" and Version(version) not in req.specifier:
                     updated = updated.replace(
                         f"<{constraint.version}",
                         f"<{Version(version).major + 1}",
@@ -520,11 +498,7 @@ UV_BUILD_RE = re.compile(r'"(?P<spec>uv[-_.]build\b[^"\n]*)"', re.IGNORECASE)
 
 def dockerfile_uv_version() -> str | None:
     """uv version pinned by a `FROM ghcr.io/astral-sh/uv:X.Y.Z` line, if any."""
-    versions = {
-        match["version"]
-        for path in find_dockerfiles()
-        for match in UV_IMAGE_RE.finditer(path.read_text())
-    }
+    versions = {match["version"] for path in find_dockerfiles() for match in UV_IMAGE_RE.finditer(path.read_text())}
     if len(versions) > 1:
         console.print(
             f"[yellow]python: Dockerfiles pin different uv versions "
@@ -554,9 +528,7 @@ def latest_uv_build(
             version = Version(name)
         except InvalidVersion:
             continue
-        live = [
-            item for item in files if isinstance(item, dict) and not item.get("yanked")
-        ]
+        live = [item for item in files if isinstance(item, dict) and not item.get("yanked")]
         if version.is_prerelease or version.is_devrelease or not live:
             continue
         stamps = [
@@ -571,9 +543,7 @@ def latest_uv_build(
     newest = max(ages)
     if min_age_hours <= 0:
         return str(newest), []
-    eligible = [
-        v for v, hours in ages.items() if hours is not None and hours >= min_age_hours
-    ]
+    eligible = [v for v, hours in ages.items() if hours is not None and hours >= min_age_hours]
     chosen = max(eligible) if eligible else None
     rows: list[tuple[str, str, str, str, str]] = []
     if chosen != newest:
@@ -585,9 +555,7 @@ def latest_uv_build(
     return (str(chosen) if chosen else None), rows
 
 
-def bump_dockerfile_uv(
-    version: str, *, dry_run: bool
-) -> tuple[list[tuple[str, str, str, str, str]], bool]:
+def bump_dockerfile_uv(version: str, *, dry_run: bool) -> tuple[list[tuple[str, str, str, str, str]], bool]:
     """Raise `FROM ghcr.io/astral-sh/uv:X` lines to version.
 
     Returns (rows, blocked). The digest is dropped because it belongs to the old
@@ -646,9 +614,7 @@ def sync_uv_build(
     return _write_uv_build_floor(version, dry_run, raise_only=image is None), notes
 
 
-def _write_uv_build_floor(
-    version: str, dry_run: bool, *, raise_only: bool
-) -> list[tuple[str, str, str]]:
+def _write_uv_build_floor(version: str, dry_run: bool, *, raise_only: bool) -> list[tuple[str, str, str]]:
     text = PYPROJECT.read_text(encoding="utf-8")
     header = re.search(r"^\[build-system\][ \t]*$", text, re.MULTILINE)
     if header is None:
@@ -668,12 +634,8 @@ def _write_uv_build_floor(
     if len(floors) != 1:
         console.print(f"[yellow]python: {spec!r} has no single >= floor, skipped[/]")
         return []
-    if Version(version) not in SpecifierSet(
-        ",".join(str(c) for c in requirement.specifier if c.operator != ">=")
-    ):
-        console.print(
-            f"[yellow]python: uv {version} is outside the bounds of {spec!r}, skipped[/]"
-        )
+    if Version(version) not in SpecifierSet(",".join(str(c) for c in requirement.specifier if c.operator != ">=")):
+        console.print(f"[yellow]python: uv {version} is outside the bounds of {spec!r}, skipped[/]")
         return []
     if raise_only and Version(version) <= Version(floors[0].version):
         return []
@@ -697,9 +659,7 @@ FROM_RE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 STAGE_RE = re.compile(r"\bAS[ \t]+(\S+)", re.IGNORECASE)
-VERSION_IN_COMMENT_RE = re.compile(
-    r"(?<![\w.])(?:v\d+(?:\.\d+){0,2}|\d+\.\d+(?:\.\d+)?)\b", re.IGNORECASE
-)
+VERSION_IN_COMMENT_RE = re.compile(r"(?<![\w.])(?:v\d+(?:\.\d+){0,2}|\d+\.\d+(?:\.\d+)?)\b", re.IGNORECASE)
 
 SKIP_DIRS = {".git", ".venv", "venv", "node_modules", ".tox", "__pycache__"}
 COMMENT_STARTS = ("#", "//", ";", "--", "/*", "*", "<!--", "%", "'", "REM ")
@@ -733,9 +693,7 @@ def find_files(match) -> list[Path]:
 
 def is_dockerfile(name: str) -> bool:
     lower = name.lower()
-    return lower.startswith(("dockerfile", "containerfile")) or lower.endswith(
-        ".dockerfile"
-    )
+    return lower.startswith(("dockerfile", "containerfile")) or lower.endswith(".dockerfile")
 
 
 def find_dockerfiles() -> list[Path]:
@@ -793,9 +751,7 @@ def age_hours(stamp: str) -> float | None:
     return (datetime.now(UTC) - when).total_seconds() / 3600
 
 
-def freshness(
-    when: str | None, *, archived: bool, status: str = ""
-) -> tuple[str, str, str] | None:
+def freshness(when: str | None, *, archived: bool, status: str = "") -> tuple[str, str, str] | None:
     """Red-row fields for an archived project or one quiet for STALE_DAYS."""
     days = age_days(when) if when else None
     age = f"{days}d" if days is not None else "unknown"
@@ -871,13 +827,8 @@ def pypi_freshness(name: str) -> tuple[str, str, str] | None:
         stamp = item.get("upload_time_iso_8601") or item.get("upload_time")
         if isinstance(stamp, str) and (when is None or stamp > when):
             when = stamp
-    classifiers = (
-        info.get("classifiers") if isinstance(info.get("classifiers"), list) else []
-    )
-    inactive = any(
-        isinstance(item, str) and item.startswith("Development Status :: 7")
-        for item in classifiers
-    )
+    classifiers = info.get("classifiers") if isinstance(info.get("classifiers"), list) else []
+    inactive = any(isinstance(item, str) and item.startswith("Development Status :: 7") for item in classifiers)
     status = "yanked" if yanked else "inactive" if inactive else ""
     return freshness(when, archived=bool(status), status=status)
 
@@ -959,9 +910,7 @@ def update_actions(
                 allow_not_found=missing_ok,
             )
             if result.returncode != 0:
-                console.print(
-                    f"[yellow]actions: no commit for {repo}@{ref}, skipped[/]"
-                )
+                console.print(f"[yellow]actions: no commit for {repo}@{ref}, skipped[/]")
                 commits[(repo, ref)] = None
             else:
                 commits[(repo, ref)] = json.loads(result.stdout)["sha"]
@@ -999,9 +948,7 @@ def update_actions(
                 best, best_version = name, version
         return best or tag
 
-    def note_cooldown(
-        repo: str, latest: str, used: str | None, hours: float | None
-    ) -> None:
+    def note_cooldown(repo: str, latest: str, used: str | None, hours: float | None) -> None:
         if repo in cooldown_repos:
             return
         cooldown_repos.add(repo)
@@ -1048,13 +995,9 @@ def update_actions(
 
         if not candidates:
             # Fall back for repos that only ship floating or non-semver tags.
-            latest = run(
-                ["gh", "api", f"repos/{repo}/releases/latest"], allow_not_found=True
-            )
+            latest = run(["gh", "api", f"repos/{repo}/releases/latest"], allow_not_found=True)
             if latest.returncode != 0:
-                console.print(
-                    f"[yellow]actions: no latest release for {repo}, skipped[/]"
-                )
+                console.print(f"[yellow]actions: no latest release for {repo}, skipped[/]")
                 latest_tags[repo] = None
                 return None
             payload = json.loads(latest.stdout)
@@ -1080,9 +1023,7 @@ def update_actions(
             return absolute_tag
 
         eligible = [
-            tag
-            for tag, (_ver, _pub, hours) in candidates.items()
-            if hours is not None and hours >= min_age_hours
+            tag for tag, (_ver, _pub, hours) in candidates.items() if hours is not None and hours >= min_age_hours
         ]
         if not eligible:
             note_cooldown(repo, absolute_tag, None, absolute_age)
@@ -1138,9 +1079,7 @@ def update_actions(
                     note_maintenance(action, repo, rel, "replaced")
                     watch_name, watch_repo = new_action, replacement
                     updated = f"{match['prefix']}{new_action}@{sha}{action_comment(match['comment'], tag)}"
-                    rows.append(
-                        ("pin", new_action, ref, tag, f"{rel} replaces {action}")
-                    )
+                    rows.append(("pin", new_action, ref, tag, f"{rel} replaces {action}"))
                     return finish(updated)
             pinned = re.fullmatch(r"[0-9a-f]{40}", ref) is not None
             if pinned:
@@ -1242,9 +1181,7 @@ def image_digest(image: str, *, ecr_tokens: dict[str, str]) -> str:
                     "t": time.time_ns(),
                 }
             )
-            with urllib.request.urlopen(
-                f"https://public.ecr.aws/token/?{query}", timeout=30
-            ) as response:
+            with urllib.request.urlopen(f"https://public.ecr.aws/token/?{query}", timeout=30) as response:
                 ecr_tokens[repository] = json.load(response)["token"]
         request = urllib.request.Request(
             f"https://public.ecr.aws/v2/{repository}/manifests/{tag}",
@@ -1287,9 +1224,7 @@ def is_latest_image(image: str) -> bool:
     return image_tag(image).casefold() == "latest"
 
 
-def update_docker(
-    *, dry_run: bool = False, enable_latest: bool = False
-) -> list[tuple[str, str, str, str, str]]:
+def update_docker(*, dry_run: bool = False, enable_latest: bool = False) -> list[tuple[str, str, str, str, str]]:
     """Pin or refresh image digests. Return rows (kind, image, old, new, dockerfile)."""
     rows: list[tuple[str, str, str, str, str]] = []
     digests: dict[str, str] = {}
@@ -1347,9 +1282,7 @@ def update_docker(
     return rows
 
 
-HOOK_UPDATE_RE = re.compile(
-    r"Updating\s+(?P<repo>\S+).*?\bupdating\s+(?P<old>\S+)\s+->\s+(?P<new>\S+)"
-)
+HOOK_UPDATE_RE = re.compile(r"Updating\s+(?P<repo>\S+).*?\bupdating\s+(?P<old>\S+)\s+->\s+(?P<new>\S+)")
 HOOK_REPO_RE = re.compile(r"(?m)^[ \t]*-[ \t]*repo:[ \t]*(?P<repo>\S+)[ \t]*$")
 HOOK_REV_RE = re.compile(r"(?m)^[ \t]*rev:[ \t]*(?P<rev>\S+)")
 
@@ -1392,9 +1325,7 @@ def protected_hook_revs(text: str) -> dict[str, str]:
     """
     protected: dict[str, str] = {}
     for start, end, repo in precommit_repo_spans(text):
-        if not any(
-            has_NO_AUTO_UPDATE(text, pos) for pos in _line_starts(text, start, end)
-        ):
+        if not any(has_NO_AUTO_UPDATE(text, pos) for pos in _line_starts(text, start, end)):
             continue
         rev = HOOK_REV_RE.search(text, start, end)
         if rev:
@@ -1411,9 +1342,7 @@ def restore_protected_hook_revs(original: str, updated: str) -> str:
         rev = HOOK_REV_RE.search(updated, start, end)
         if not rev or rev["rev"] == protected[repo]:
             continue
-        updated = (
-            updated[: rev.start("rev")] + protected[repo] + updated[rev.end("rev") :]
-        )
+        updated = updated[: rev.start("rev")] + protected[repo] + updated[rev.end("rev") :]
     return updated
 
 
@@ -1482,16 +1411,10 @@ def print_python(
             continue
         rows.append(("spec", package, old, new, "pyproject"))
     rows.extend(maintenance)
-    hidden = sum(
-        1 for name, _old, _new in changes["patch"] if name not in python_direct
-    )
+    hidden = sum(1 for name, _old, _new in changes["patch"] if name not in python_direct)
     extra = ""
     if hidden:
-        extra = (
-            f"{hidden} transitive patch"
-            if hidden == 1
-            else f"{hidden} transitive patches"
-        )
+        extra = f"{hidden} transitive patch" if hidden == 1 else f"{hidden} transitive patches"
     emit_section("python", rows, extra=extra)
 
 
@@ -1505,9 +1428,7 @@ def print_docker(rows: list[tuple[str, str, str, str, str]]) -> None:
 
 def print_NO_AUTO_UPDATE() -> None:
     for path, name, ref in NO_AUTO_UPDATE_SKIPS:
-        console.print(
-            f"[bold yellow]NO_AUTO_UPDATE[/]  {name}@{short_rev(ref)} left as-is [dim]({path})[/]"
-        )
+        console.print(f"[bold yellow]NO_AUTO_UPDATE[/]  {name}@{short_rev(ref)} left as-is [dim]({path})[/]")
 
 
 def print_docker_latest_skips() -> None:
@@ -1635,9 +1556,7 @@ def prompt_tui(args: argparse.Namespace) -> argparse.Namespace:
         style,
         "Ecosystems to update",
         choices=eco_choices,
-        validate=lambda picked: (
-            True if picked else "Select at least one available ecosystem"
-        ),
+        validate=lambda picked: True if picked else "Select at least one available ecosystem",
     ).ask()
     if selected is None:
         _tui_cancelled()
@@ -1712,11 +1631,7 @@ def prompt_tui(args: argparse.Namespace) -> argparse.Namespace:
 
 def resolve_ecosystems(args: argparse.Namespace, *, only_mode: bool) -> set[str]:
     """Return ecosystems that will run; print skips for unavailable selections."""
-    selected = (
-        list(args.ecosystems)
-        if getattr(args, "ecosystems", None) is not None
-        else default_ecosystems(args)
-    )
+    selected = list(args.ecosystems) if getattr(args, "ecosystems", None) is not None else default_ecosystems(args)
     ecosystems: set[str] = set()
     for ecosystem in selected:
         reason = skip_reason(ecosystem)
@@ -1730,9 +1645,7 @@ def resolve_ecosystems(args: argparse.Namespace, *, only_mode: bool) -> set[str]
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -1753,9 +1666,7 @@ def main() -> None:
         "--no-major-version-updates",
         action="store_false",
         dest="allow_major",
-        help=(
-            "Hold major upgrades: pin actions in place and keep Python upper bounds."
-        ),
+        help=("Hold major upgrades: pin actions in place and keep Python upper bounds."),
     )
     parser.add_argument(
         "--min-age",
@@ -1775,10 +1686,7 @@ def main() -> None:
     parser.add_argument(
         "--enable-docker-latest-to-sha-updates",
         action="store_true",
-        help=(
-            "Pin or refresh digests for images tagged latest (including untagged "
-            "FROM lines). Skipped by default."
-        ),
+        help=("Pin or refresh digests for images tagged latest (including untagged FROM lines). Skipped by default."),
     )
     parser.add_argument(
         "--add-python-latest-version",
@@ -1791,10 +1699,7 @@ def main() -> None:
     parser.add_argument(
         "--tui",
         action="store_true",
-        help=(
-            "Interactive prompts to pick ecosystems and options. Other flags "
-            "seed the defaults. Requires a TTY."
-        ),
+        help=("Interactive prompts to pick ecosystems and options. Other flags seed the defaults. Requires a TTY."),
     )
     args = parser.parse_args()
     if args.min_age < 0:
