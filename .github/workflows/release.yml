@@ -110,7 +110,7 @@ jobs:
           echo "Dry-run: packaging this branch and building the multi-arch image without publishing."
 
       - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -336,7 +336,7 @@ jobs:
 
       - name: Log in to ICR
         if: ${{ !inputs.dry-run }}
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: icr.io
           username: iamapikey
@@ -797,7 +797,7 @@ jobs:
       id-token: write
     steps:
       - name: Log in to ICR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: icr.io
           username: iamapikey
