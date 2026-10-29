@@ -119,14 +119,11 @@ about intent.
 {{- end }}
 
 {{/*
-Directory the extracted PEM trust bundle is written to. /etc/pki/tls/cert.pem --
-OpenSSL's default CA file in this image, and therefore what both the Kubecost
-`httpx` client and FastMCP's `httpx2` client verify against -- resolves to
-tls-ca-bundle.pem inside it. Mounting only this directory rather than the whole
-`extracted` tree leaves the image's java/, openssl/ and edk2/ bundles in place.
+Where the init container writes the merged CA bundle; SSL_CERT_FILE points at it.
+Not under /etc/pki: a mount there hides the symlinks the image's OpenSSL reads CAs from.
 */}}
 {{- define "mcp-kubecost.caTrustExtractedDir" -}}
-/etc/pki/ca-trust/extracted/pem
+/etc/mcp-kubecost/ca-trust
 {{- end }}
 
 {{/*

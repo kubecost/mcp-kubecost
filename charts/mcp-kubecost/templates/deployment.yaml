@@ -67,16 +67,12 @@ spec:
       {{- $ca := ((.Values.global).updateCaTrust) }}
       {{- $extracted := include "mcp-kubecost.caTrustExtractedDir" . }}
       initContainers:
-        # Merge the mounted anchors with the image's public anchors into the shared
-        # emptyDir below, which becomes OpenSSL's default trust store for the main
-        # container. `trust extract` rather than the parent chart's
-        # `update-ca-trust extract`: the latter needs root, because p11-kit chmods
-        # extracted/pem/directory-hash to 0555 mid-run and then fails to symlink
-        # into it. This form writes one file and runs happily as the pod's
-        # non-root UID.
+        # Merge the mounted CAs with ubi-minimal's public roots into the emptyDir below
+        # (the app image has no shell or p11-kit). Unlike the parent chart's
+        # `update-ca-trust extract`, `trust extract` runs as the pod's non-root UID.
         - name: update-ca-trust
-          image: {{ include "mcp-kubecost.image" . | quote }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          image: {{ printf "%s/%s:%s" $ca.initImage.registry $ca.initImage.repository $ca.initImage.tag | quote }}
+          imagePullPolicy: {{ $ca.initImage.pullPolicy }}
           command: ["/bin/sh", "-c"]
           args:
             - >-
