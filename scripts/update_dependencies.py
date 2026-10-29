@@ -2,9 +2,9 @@
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
-#     "packaging>=24.3.0",
-#     "questionary>=2.1.0",
-#     "rich>=14.0.0",
+#     "packaging>=26.3",
+#     "questionary>=2.1.1",
+#     "rich>=15.0.0",
 # ]
 # ///
 
