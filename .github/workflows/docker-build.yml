@@ -75,7 +75,7 @@ jobs:
 
       - name: Log in to ICR
         if: env.PUBLISH == 'true'
-        uses: docker/login-action@v4.6.0
+        uses: docker/login-action@v4.7.0
         with:
           registry: icr.io
           username: iamapikey
