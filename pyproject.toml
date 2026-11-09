@@ -17,8 +17,9 @@ dependencies = [
 # Tracing is opt-in: the Docker image installs this extra, plain installs do not.
 # The 0.x "b0" versions are not a maturity signal — OpenTelemetry Python versions
 # every instrumentation package on a permanent prerelease track (see its
-# RELEASING.md), and stable opentelemetry-sdk itself pins
-# opentelemetry-semantic-conventions==0.65b0. There is no non-beta alternative.
+# RELEASING.md), and stable opentelemetry-sdk itself pins an exact 0.x beta of
+# opentelemetry-semantic-conventions (0.66b2 with the sdk locked here). There is
+# no non-beta alternative.
 otel = [
   "opentelemetry-distro[otlp]>=0.66b2",
   "opentelemetry-instrumentation-httpx>=0.66b2",

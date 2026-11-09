@@ -12,6 +12,7 @@ Package, Helm chart, and git tags currently use **0.17.0** (`v0.17.0`). That is 
 ### Changed
 
 - Default container image tag is now the git/ICR tag with a leading `v` (`icr.io/kubecost/mcp-kubecost:vX.Y.Z`). Helm chart `version` is still unprefixed SemVer. The unprefixed image tag is no longer published on new releases.
+- Dependency security updates: minimum versions raised to `cryptography` 50.0.2, `fastmcp` 3.4.11, `py-key-value-aio` 0.4.6 and `python-dotenv` 1.2.4, and the optional OpenTelemetry extra to 0.66b2. `uv.lock` is refreshed to match.
 
 ## [0.17.0] - 2026-09-16
 
