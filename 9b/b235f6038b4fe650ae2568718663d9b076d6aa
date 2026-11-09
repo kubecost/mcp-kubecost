@@ -1,0 +1,26 @@
+.github/workflows/auto-fix-formatting.yml
+  h_cca6aa2712613d 21
+.github/workflows/backport.yml
+  h_cca6aa2712613d 118
+.github/workflows/ci.yml
+  h_cca6aa2712613d 21,59
+.github/workflows/docker-build.yml
+  h_cca6aa2712613d 78
+.github/workflows/release.yml
+  h_cca6aa2712613d 113,339,800
+pyproject.toml
+  h_cca6aa2712613d 10,29-36
+uv.lock
+  h_cca6aa2712613d 34,40,42,65,71,73,87,89,91,370,372,374,388-494,562,570,572,586,588,590,629,634,636,641,652,654,696,698,700,726,731-772,880,885,887,1011,1016,1018-1022,1024,1026,1054,1056,1058,1328,1330,1332,1408,1416,1418,1428,1433-1532,1584,1586,1588-1598,1619,1625,1627,1659,1664,1666,1680,1682,1684,1917-1937,1942,1948,1950,1986,1991,1993,1998,2000,2002,2029,2038,2040,2093-2223
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9bb235f6038b4fe650ae2568718663d9b076d6aa",
+  "prompts": {},
+  "humans": {
+    "h_cca6aa2712613d": {
+      "author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
