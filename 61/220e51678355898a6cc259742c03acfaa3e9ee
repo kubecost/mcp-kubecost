@@ -1,0 +1,19 @@
+CHANGELOG.md
+  s_9b0b617feb0328::t_68ae59670b8cd4 8,12-15,20-27,40-42
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "61220e51678355898a6cc259742c03acfaa3e9ee",
+  "prompts": {},
+  "sessions": {
+    "s_9b0b617feb0328": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b794a62-22fb-456d-a7ad-a88edbc5f0de",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
