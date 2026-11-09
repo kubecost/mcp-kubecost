@@ -52,6 +52,7 @@ Also confirm the ruleset allows the release bot / `DEPLOY_KEY` to push to `relea
 
 ## Pitfalls
 
+- Releases are immutable once published, so every asset (including the SBOMs) must be passed to the single `gh release create` in `build`. Uploading to a published release fails with `HTTP 422: Cannot upload assets to an immutable release`; `sbom.yml` is therefore called with `skip_publish: true` ahead of `build`, which stages its artifacts into `dist/`. An existing release cannot be repaired after the fact.
 - Never dispatch a minor/major from `release/*`; the pipeline refuses.
 - Behaviour that is breaking on `main` (such as `image.registry` precedence) is still breaking when backported: say so in the patch's changelog entry.
 - Backports are opt-in per PR. Nothing is backported automatically.
