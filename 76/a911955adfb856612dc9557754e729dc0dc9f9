@@ -1,0 +1,25 @@
+.github/workflows/ci.yml
+  s_9b0b617feb0328::t_44edc300adfb36 7-8,10-11,20-21,25,44,58-59,63
+.github/workflows/integrations-ci-cd-kicker.yaml
+  s_9b0b617feb0328::t_929fd05ffca3d8 7-17,26,35-36,38-40
+.github/workflows/release.yml
+  s_9b0b617feb0328::t_7cae1c891dd0ec 7,29-33,38-43,45-94,96,102,113,126-127,133-144,224,251,264-265,274-289,292,296,301,304,310,318,320,330,335,339,347,351,356-357,379,387,394,434-442,449,458,466,477,536-543,775-882
+.github/workflows/sbom.yml
+  s_9b0b617feb0328::t_31c61aea4d9b6a 13-21,32-33,35,50-55,57-63,73,75,81,90,92,98,110,115,138-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "76a911955adfb856612dc9557754e729dc0dc9f9",
+  "prompts": {},
+  "sessions": {
+    "s_9b0b617feb0328": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8b794a62-22fb-456d-a7ad-a88edbc5f0de",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
