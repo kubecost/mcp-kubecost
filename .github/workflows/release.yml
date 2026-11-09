@@ -247,6 +247,29 @@ jobs:
             echo "No ./install.sh yet — skipping."
           fi
 
+      # Releases are immutable once published, so the SBOMs must be in dist/
+      # before `gh release create` and ship in that same call; uploading to the
+      # release afterwards fails with HTTP 422. They are scanned here, after the
+      # bump commit, so the root package carries the version being released
+      # (sbom.yml scans the dispatched commit, which is still the previous
+      # version). .venv and dist are skipped so only the source tree is scanned.
+      # A scan failure blocks the release.
+      - name: Generate SBOM (SPDX)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: 'fs'
+          format: 'spdx-json'
+          output: 'dist/mcp-kubecost-source-sbom.spdx.json'
+          skip-dirs: '.venv,dist'
+
+      - name: Generate SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: 'fs'
+          format: 'cyclonedx'
+          output: 'dist/mcp-kubecost-source-sbom.cyclonedx.json'
+          skip-dirs: '.venv,dist'
+
       - name: Upload workflow artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -852,23 +875,10 @@ jobs:
 
   # The v* tag is created by `gh release create` with GITHUB_TOKEN, and events
   # caused by GITHUB_TOKEN do not start new workflow runs. The `push: tags`
-  # triggers in sbom.yml and integrations-ci-cd-kicker.yaml therefore never fire
-  # for a pipeline release, so call both explicitly. Neither is in the needs of
-  # update-helm-index or publish-public-ecr: a failure here turns the run red
-  # without changing what gets published.
+  # trigger in integrations-ci-cd-kicker.yaml therefore never fires for a
+  # pipeline release, so call it explicitly. (sbom.yml's trigger never fires
+  # either; the pipeline's SBOMs are generated inside `build`.)
   #
-  # The SBOM is a source (filesystem) scan, not an image scan, so it only needs
-  # the GitHub Release that build creates.
-  sbom:
-    needs: build
-    if: ${{ !inputs.dry-run }}
-    uses: ./.github/workflows/sbom.yml
-    permissions:
-      contents: write   # publish-sbom uploads to the release
-      actions: read     # sbom.yml declares it at workflow level
-    with:
-      release_version: ${{ needs.build.outputs.release_tag }}
-
   # Tell integration-ci-cd once the versioned image is in ICR.
   notify-integration-ci-cd:
     needs: [build, check-release-ref, publish-image]

@@ -40,18 +40,19 @@ Only cut `release/X.Y` when the line will actually receive patches. Once it exis
 git fetch --tags origin
 git switch -c release/X.Y vX.Y.Z               # the last release of that line
 git checkout main -- .github/workflows/release.yml .github/workflows/ci.yml \
-  .github/workflows/sbom.yml .github/workflows/integrations-ci-cd-kicker.yaml
+  .github/workflows/integrations-ci-cd-kicker.yaml
 git commit -m "ci: carry release workflow onto release/X.Y"
 git push -u origin release/X.Y
 gh label create vX.Y --description "Also ship on the X.Y line (backport to release/X.Y)" --color 0e8a16
 ```
 
-`release.yml` calls `sbom.yml` and `integrations-ci-cd-kicker.yaml` as reusable workflows, so all four files must exist on the branch; the v0.17.x tags predate their `workflow_call` triggers.
+`release.yml` calls `ci.yml` and `integrations-ci-cd-kicker.yaml` as reusable workflows, so all three files must exist on the branch; the v0.17.x tags predate their `workflow_call` triggers. `sbom.yml` is not part of the release pipeline and need not be carried over.
 
 Also confirm the ruleset allows the release bot / `DEPLOY_KEY` to push to `release/*` (the version bump commit is pushed to the dispatched branch).
 
 ## Pitfalls
 
+- Releases are immutable once published, so every asset (including the SBOMs) must be passed to the single `gh release create` in `build`. Uploading to a published release fails with `HTTP 422: Cannot upload assets to an immutable release`; `build` therefore runs the two Trivy SBOM scans itself, after the version-bump commit (so the root package carries the released version) and before `gh release create`, writing into `dist/`. An existing release cannot be repaired after the fact.
 - Never dispatch a minor/major from `release/*`; the pipeline refuses.
 - Behaviour that is breaking on `main` (such as `image.registry` precedence) is still breaking when backported: say so in the patch's changelog entry.
 - Backports are opt-in per PR. Nothing is backported automatically.
