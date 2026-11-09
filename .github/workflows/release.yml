@@ -92,23 +92,8 @@ jobs:
     permissions:
       contents: read
 
-  # Releases are immutable once published (repo setting), so the SBOMs must
-  # exist before `gh release create` and ship in that same call. sbom.yml with
-  # skip_publish only scans and uploads the `sbom-spdx` / `sbom-cyclonedx`
-  # workflow artifacts; build copies them into dist/. The scan is of the
-  # dispatched commit, i.e. before the version-bump commit, which changes no
-  # dependency. Unlike before, a scan failure blocks the release.
-  sbom:
-    needs: check-release-ref
-    uses: ./.github/workflows/sbom.yml
-    permissions:
-      contents: write   # sbom.yml declares it at workflow level; unused with skip_publish
-      actions: read
-    with:
-      skip_publish: true
-
   build:
-    needs: [check-release-ref, test, sbom]
+    needs: [check-release-ref, test]
     runs-on: ubuntu-latest
     outputs:
       chart_version: ${{ steps.id.outputs.py_version }}
@@ -262,14 +247,28 @@ jobs:
             echo "No ./install.sh yet — skipping."
           fi
 
-      # Must land in dist/ before `gh release create`: the release is immutable
-      # once published, so nothing can be attached to it afterwards.
-      - name: Stage SBOMs
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      # Releases are immutable once published, so the SBOMs must be in dist/
+      # before `gh release create` and ship in that same call; uploading to the
+      # release afterwards fails with HTTP 422. They are scanned here, after the
+      # bump commit, so the root package carries the version being released
+      # (sbom.yml scans the dispatched commit, which is still the previous
+      # version). .venv and dist are skipped so only the source tree is scanned.
+      # A scan failure blocks the release.
+      - name: Generate SBOM (SPDX)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          pattern: sbom-*
-          path: dist
-          merge-multiple: true
+          scan-type: 'fs'
+          format: 'spdx-json'
+          output: 'dist/mcp-kubecost-source-sbom.spdx.json'
+          skip-dirs: '.venv,dist'
+
+      - name: Generate SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: 'fs'
+          format: 'cyclonedx'
+          output: 'dist/mcp-kubecost-source-sbom.cyclonedx.json'
+          skip-dirs: '.venv,dist'
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -877,8 +876,8 @@ jobs:
   # The v* tag is created by `gh release create` with GITHUB_TOKEN, and events
   # caused by GITHUB_TOKEN do not start new workflow runs. The `push: tags`
   # trigger in integrations-ci-cd-kicker.yaml therefore never fires for a
-  # pipeline release, so call it explicitly. (The SBOM is handled by the `sbom`
-  # job above, ahead of build.)
+  # pipeline release, so call it explicitly. (sbom.yml's trigger never fires
+  # either; the pipeline's SBOMs are generated inside `build`.)
   #
   # Tell integration-ci-cd once the versioned image is in ICR.
   notify-integration-ci-cd:

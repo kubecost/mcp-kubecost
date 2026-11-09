@@ -10,21 +10,6 @@ on:
         description: 'Release version (e.g., v1.0.0 or 1.0.0)'
         required: false
         type: string
-  # release.yml calls this BEFORE it creates the release and bundles the two
-  # scan artifacts into the `gh release create` call with skip_publish=true.
-  # Releases are immutable once published, so attaching afterwards fails with
-  # HTTP 422. github.event_name is the caller's (workflow_dispatch) when called.
-  workflow_call:
-    inputs:
-      release_version:
-        description: 'Release version (e.g., v1.0.0 or 1.0.0)'
-        required: false
-        type: string
-      skip_publish:
-        description: 'Only scan and upload artifacts; the caller attaches them to the release'
-        required: false
-        type: boolean
-        default: false
   pull_request:
     types: [opened, synchronize]
     branches:
@@ -35,8 +20,13 @@ on:
       - 'Dockerfile'
       - 'config/fastmcp-http.json'
 
-# Include the requested version so a manual dispatch on main cannot cancel the
-# SBOM run that release.yml calls (both have github.ref == refs/heads/main).
+# NOT part of the release pipeline. release.yml scans the bumped tree itself and
+# attaches the SBOMs in the `gh release create` call, because releases are
+# immutable once published and this workflow's upload would fail with HTTP 422.
+# This one covers PR previews, manually pushed tags and manual dispatch.
+#
+# Include the requested version so concurrent manual dispatches for different
+# versions on the same ref do not cancel each other.
 concurrency:
   group: sbom-${{ github.ref }}-${{ inputs.release_version }}
   cancel-in-progress: true
@@ -107,9 +97,6 @@ jobs:
           path: mcp-kubecost-source-sbom.cyclonedx.json
 
   publish-sbom:
-    # `!= true` rather than `== false`: the input is empty on push/pull_request,
-    # and an empty string coerces equal to false.
-    if: inputs.skip_publish != true
     runs-on: ubuntu-latest
     needs: [determine-version, scan-spdx, scan-cyclonedx]
     env:
