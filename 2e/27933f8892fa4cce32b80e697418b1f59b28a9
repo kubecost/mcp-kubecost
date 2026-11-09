@@ -1,0 +1,29 @@
+pyproject.toml
+  s_cb07973bbf80ef::t_4e0eab6e73394d 21-23
+docs/development/README.md
+  s_cb07973bbf80ef::t_f783e05a0686be 111
+  s_cb07973bbf80ef::t_b9d00cb52437d8 114
+AGENTS.md
+  s_cb07973bbf80ef::t_f57deb7653200e 341
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2e27933f8892fa4cce32b80e697418b1f59b28a9",
+  "prompts": {},
+  "humans": {
+    "h_cca6aa2712613d": {
+      "author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_cb07973bbf80ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "77f12b60-49e1-4d54-97fa-07984603698e",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
