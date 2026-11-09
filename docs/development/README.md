@@ -108,10 +108,10 @@ OpenTelemetry is an optional extra (`uv sync --extra otel`). The Docker image in
 
 ### On the "beta" version numbers
 
-`opentelemetry-distro` and the instrumentation packages are versioned `0.65b0` and classified beta. That is a versioning policy, not a maturity signal, and there is no non-beta alternative:
+`opentelemetry-distro` and the instrumentation packages are versioned `0.66b2` (as locked) and classified beta. That is a versioning policy, not a maturity signal, and there is no non-beta alternative:
 
 - OpenTelemetry Python runs two permanent tracks. Its `RELEASING.md`: _"The version number for unstable components in the `main` branch is always `0.Yb0`."_ Every instrumentation package sits on that track.
-- Stable `opentelemetry-sdk` 1.44.0 itself hard-pins `opentelemetry-semantic-conventions==0.65b0`, so no OTel Python setup avoids a 0.x package.
+- Stable `opentelemetry-sdk` (1.45.2 as locked) itself hard-pins an exact 0.x beta of `opentelemetry-semantic-conventions` (0.66b2 as locked), so no OTel Python setup avoids a 0.x package.
 - FastMCP already depends on `opentelemetry-api` (stable 1.x) and emits its own MCP spans through it.
 
 Dropping the distro would forfeit automatic httpx spans on every Kubecost API call — the most useful signal this server produces — without escaping the 0.x track.
