@@ -1,0 +1,32 @@
+docs/development/release.md
+  s_cb07973bbf80ef::t_4c6e7372f27ee1 49
+  s_cb07973bbf80ef::t_fb98585e3d18db 43
+  s_cb07973bbf80ef::t_ff7e16330c6eb1 55
+.github/workflows/sbom.yml
+  s_cb07973bbf80ef::t_7d18be6a564fe9 23-29
+.github/workflows/release.yml
+  s_cb07973bbf80ef::t_a3bf2da1660dee 96
+  s_cb07973bbf80ef::t_71f12804e2ceea 250-266,268-271
+  s_cb07973bbf80ef::t_49d4b9988418eb 879-880
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fc75bd18196d0e3167bdd91cd1da67aeac94d828",
+  "prompts": {},
+  "humans": {
+    "h_cca6aa2712613d": {
+      "author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  },
+  "sessions": {
+    "s_cb07973bbf80ef": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "77f12b60-49e1-4d54-97fa-07984603698e",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
