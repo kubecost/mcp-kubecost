@@ -1,0 +1,14 @@
+uv.lock
+  h_cca6aa2712613d 387-493,561,569,571,693,695,697,969,974,976,1642,1648,1650,1949-1969,2034,2036,2038
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "246705a27551d5eae6e196fdf8628cd950f06cf8",
+  "prompts": {},
+  "humans": {
+    "h_cca6aa2712613d": {
+      "author": "jesse goodier <31039225+jessegoodier@users.noreply.github.com>"
+    }
+  }
+}
